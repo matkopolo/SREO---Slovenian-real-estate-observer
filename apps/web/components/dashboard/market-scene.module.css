@@ -16,3 +16,4 @@
 .section th, .section td { padding: 10px; border-bottom: 1px solid var(--border); }
 .section th:first-child { text-align: left; }
 @media (max-width: 760px) { .section { padding: 16px; } .section header { align-items: start; flex-direction: column; gap: 8px; } .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .scene { height: 240px; } }
+.section .hint { margin: 6px 0 0; font-size: 12px; }
