@@ -17,6 +17,7 @@ from threading import Event, Thread, current_thread, main_thread
 
 import psycopg
 
+from .context import sync_context
 from .geography import sync_geographies
 from .models import RefreshSummary
 from .pipeline import refresh_all_national
@@ -544,6 +545,8 @@ def _refresh_system_unlocked(
         )
         _update_release_source(connection, database_url, release_id)
         geography_counts = _sync_geographies_or_keep_existing(connection)
+        # Official affordability context (SURS/BS/ECB); failures keep stored values.
+        sync_context(connection)
         _release_status(database_url, release_id, "analytics")
         bootstrap_required = connection.execute(
             """

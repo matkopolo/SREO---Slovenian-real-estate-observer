@@ -166,6 +166,7 @@ def test_system_refresh_skips_models_after_first_install(
     with (
         patch("real_estate_etl.operations.refresh_all_national", return_value=archives),
         patch("real_estate_etl.operations.sync_geographies", return_value={"country": 1}),
+        patch("real_estate_etl.operations.sync_context", return_value={}),
         patch("real_estate_etl.operations.refresh_analytics", return_value={"facts": 3}),
         patch("real_estate_etl.operations._start_release", return_value=MagicMock()),
         patch("real_estate_etl.operations._update_release_source"),
@@ -202,6 +203,7 @@ def test_system_refresh_trains_models_for_bootstrap_or_new_archive(
     with (
         patch("real_estate_etl.operations.refresh_all_national", return_value=archives),
         patch("real_estate_etl.operations.sync_geographies", return_value={"country": 1}),
+        patch("real_estate_etl.operations.sync_context", return_value={}),
         patch("real_estate_etl.operations.refresh_analytics", return_value={"facts": 3}),
         patch("real_estate_etl.operations._start_release", return_value=MagicMock()),
         patch("real_estate_etl.operations._update_release_source"),
