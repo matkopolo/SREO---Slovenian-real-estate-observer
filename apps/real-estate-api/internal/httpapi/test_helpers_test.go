@@ -286,6 +286,14 @@ func (store fakeGeographies) Get(context.Context, int64) (geography.Unit, error)
 	return store.units[0], nil
 }
 
+func (store fakeGeographies) Boundaries(context.Context, string, float64) ([]geography.Boundary, error) {
+	boundaries := make([]geography.Boundary, 0, len(store.units))
+	for _, unit := range store.units {
+		boundaries = append(boundaries, geography.Boundary{Unit: unit, Geometry: []byte(`{"type":"Point","coordinates":[15,46]}`)})
+	}
+	return boundaries, store.err
+}
+
 func (store fakeGeographies) Children(context.Context, int64) ([]geography.Unit, error) {
 	return store.units, store.err
 }

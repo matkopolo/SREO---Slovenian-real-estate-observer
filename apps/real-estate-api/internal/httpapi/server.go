@@ -226,6 +226,33 @@ func (s *server) geographyBoundary(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// geographyBoundaries returns all statistical regions or municipalities in one response.
+func (s *server) geographyBoundaries(w http.ResponseWriter, r *http.Request) {
+	level := r.URL.Query().Get("level")
+	if level != "statistical_region" && level != "municipality" {
+		writeError(w, r, http.StatusBadRequest, "invalid_level", "level must be statistical_region or municipality")
+		return
+	}
+	tolerance, valid := boundaryTolerance(r.URL.Query().Get("detail"))
+	if !valid {
+		writeError(w, r, http.StatusBadRequest, "invalid_detail", "detail must be low, medium, or full")
+		return
+	}
+	boundaries, err := s.geographies.Boundaries(r.Context(), level, tolerance)
+	if err != nil {
+		s.logger.Error("list geography boundaries", "error", err, "level", level)
+		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not load geography boundaries")
+		return
+	}
+	features := make([]map[string]any, 0, len(boundaries))
+	for _, boundary := range boundaries {
+		features = append(features, map[string]any{
+			"type": "Feature", "id": boundary.Unit.ID, "properties": boundary.Unit, "geometry": boundary.Geometry,
+		})
+	}
+	writeGeoJSON(w, http.StatusOK, map[string]any{"type": "FeatureCollection", "features": features, "count": len(features)})
+}
+
 func geographyID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id < 1 {

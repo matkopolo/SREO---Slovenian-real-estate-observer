@@ -21,6 +21,7 @@ func (s *server) routes() *http.ServeMux {
 	router.HandleFunc("GET /api/v1/sales/statistics/resales", s.resaleSummary)
 	router.HandleFunc("GET /api/v1/sales/transactions/{id}/history", s.propertyHistory)
 	router.HandleFunc("GET /api/v1/geographies", s.listGeographies)
+	router.HandleFunc("GET /api/v1/geographies/boundaries", s.geographyBoundaries)
 	router.HandleFunc("GET /api/v1/geographies/{id}", s.getGeography)
 	router.HandleFunc("GET /api/v1/geographies/{id}/boundary", s.geographyBoundary)
 	router.HandleFunc("GET /api/v1/geographies/{id}/children", s.geographyChildren)

@@ -131,6 +131,34 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+  /api/v1/geographies/boundaries:
+    get:
+      operationId: listGeographyBoundaries
+      tags: [Geographies]
+      summary: All statistical regions or municipalities with simplified boundaries in one response
+      parameters:
+        - name: level
+          in: query
+          required: true
+          schema: { type: string, enum: [statistical_region, municipality] }
+        - name: detail
+          in: query
+          required: false
+          schema: { type: string, enum: [low, medium, full], default: medium }
+      responses:
+        "200":
+          description: GeoJSON FeatureCollection; properties are the geography units.
+          content:
+            application/geo+json:
+              schema:
+                type: object
+                required: [type, features, count]
+                properties:
+                  type: { type: string, enum: [FeatureCollection] }
+                  features: { type: array, items: { type: object } }
+                  count: { type: integer }
+        "400":
+          $ref: "#/components/responses/Error"
   /api/v1/geographies/{id}:
     get:
       operationId: getGeography

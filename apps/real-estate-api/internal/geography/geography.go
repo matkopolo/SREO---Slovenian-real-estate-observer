@@ -33,6 +33,7 @@ type Store interface {
 	Get(context.Context, int64) (Unit, error)
 	Children(context.Context, int64) ([]Unit, error)
 	Boundary(context.Context, int64, float64) (Boundary, error)
+	Boundaries(context.Context, string, float64) ([]Boundary, error)
 }
 
 type Repository struct {
@@ -113,6 +114,31 @@ func (r *Repository) Children(ctx context.Context, parentID int64) ([]Unit, erro
 		return nil, ErrNotFound
 	}
 	return r.List(ctx, Filter{ParentID: &parentID})
+}
+
+// Boundaries returns every unit of one level with its (simplified) WGS84 geometry.
+func (r *Repository) Boundaries(ctx context.Context, level string, tolerance float64) ([]Boundary, error) {
+	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
+		SELECT id, level, code, composite_code, name, parent_id, gurs_eid,
+		       ARRAY[ST_XMin(geometry_wgs84), ST_YMin(geometry_wgs84), ST_XMax(geometry_wgs84), ST_YMax(geometry_wgs84)]::float8[],
+		       ST_AsGeoJSON(CASE WHEN $2::float8 > 0 THEN ST_SimplifyPreserveTopology(geometry_wgs84, $2)
+		                         ELSE geometry_wgs84 END, 6)::jsonb
+		FROM %s WHERE level = $1 ORDER BY name, id LIMIT 300`, r.table), level, tolerance)
+	if err != nil {
+		return nil, fmt.Errorf("list geography boundaries: %w", err)
+	}
+	defer rows.Close()
+	var boundaries []Boundary
+	for rows.Next() {
+		var boundary Boundary
+		unit := &boundary.Unit
+		if err := rows.Scan(&unit.ID, &unit.Level, &unit.Code, &unit.CompositeCode, &unit.Name, &unit.ParentID,
+			&unit.GURSEID, &unit.Bounds, &boundary.Geometry); err != nil {
+			return nil, fmt.Errorf("scan geography boundary: %w", err)
+		}
+		boundaries = append(boundaries, boundary)
+	}
+	return boundaries, rows.Err()
 }
 
 func (r *Repository) Boundary(ctx context.Context, id int64, tolerance float64) (Boundary, error) {

@@ -122,6 +122,27 @@ func TestBoundaryReturnsGeoJSONFeature(t *testing.T) {
 	}
 }
 
+func TestBoundariesReturnAllUnitsOfALevelAndRouteBeforeID(t *testing.T) {
+	store := fakeGeographies{units: []geography.Unit{{ID: 7, Level: "municipality", Name: "Maribor"}, {ID: 8, Level: "municipality", Name: "Ptuj"}}}
+	response := httptest.NewRecorder()
+	newTestHandler(nil, store).ServeHTTP(response,
+		httptest.NewRequest(http.MethodGet, "/api/v1/geographies/boundaries?level=municipality&detail=low", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, `"type":"FeatureCollection"`) || !strings.Contains(body, `"count":2`) || !strings.Contains(body, "Ptuj") {
+		t.Fatalf("body = %s", body)
+	}
+	for _, query := range []string{"level=settlement", "level=municipality&detail=huge"} {
+		response := httptest.NewRecorder()
+		newTestHandler(nil, store).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/geographies/boundaries?"+query, nil))
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400", query, response.Code)
+		}
+	}
+}
+
 func TestStatisticsOverview(t *testing.T) {
 	response := httptest.NewRecorder()
 	newTestHandler(nil, fakeGeographies{}).ServeHTTP(

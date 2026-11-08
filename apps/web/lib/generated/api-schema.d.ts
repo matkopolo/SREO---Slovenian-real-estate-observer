@@ -133,6 +133,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/geographies/boundaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** All statistical regions or municipalities with simplified boundaries in one response */
+        get: operations["listGeographyBoundaries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/geographies/{id}": {
         parameters: {
             query?: never;
@@ -1916,6 +1933,35 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    listGeographyBoundaries: {
+        parameters: {
+            query: {
+                level: "statistical_region" | "municipality";
+                detail?: "low" | "medium" | "full";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description GeoJSON FeatureCollection; properties are the geography units. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/geo+json": {
+                        /** @enum {string} */
+                        type: "FeatureCollection";
+                        features: Record<string, never>[];
+                        count: number;
+                    };
+                };
+            };
+            400: components["responses"]["Error"];
         };
     };
     getGeography: {
