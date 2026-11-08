@@ -104,8 +104,11 @@ pipeline-lint:
 
 test: pipeline-test api-test web-test
 
+# Integration tests commit to analytics publication tables, so they never default
+# to the development database: pass a disposable, migrated database explicitly,
+# e.g. make pipeline-test TEST_DATABASE_URL=postgresql://.../real_estate_test
 pipeline-test:
-	cd $(PIPELINE_DIR) && TEST_DATABASE_URL=$(DATABASE_URL) ../../$(PYTEST) -q
+	cd $(PIPELINE_DIR) && TEST_DATABASE_URL=$(TEST_DATABASE_URL) ../../$(PYTEST) -q
 
 test-unit:
 	cd $(PIPELINE_DIR) && ../../$(PYTEST) -q -m "not integration"
