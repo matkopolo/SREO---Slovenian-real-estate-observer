@@ -1,5 +1,5 @@
-import { MarketDashboard } from "@/components/dashboard/market-dashboard";
+import { MarketDashboardClient } from "@/components/dashboard/market-dashboard-client";
 
 export default function HomePage() {
-  return <MarketDashboard />;
+  return <MarketDashboardClient />;
 }
