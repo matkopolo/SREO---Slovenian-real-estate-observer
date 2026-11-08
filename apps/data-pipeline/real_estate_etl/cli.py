@@ -10,6 +10,7 @@ from pathlib import Path
 
 import psycopg
 
+from .construction import sync_construction
 from .context import sync_context
 from .geography import sync_geographies
 from .importer import import_zip
@@ -41,6 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("sync-reference-data")
     commands.add_parser("sync-geographies", help="Import current GURS RPE boundaries into the analytics schema")
     commands.add_parser("sync-context", help="Import SURS wages, Banka Slovenije housing-loan rates and ECB EURIBOR")
+    construction = commands.add_parser("sync-construction", help="Import GURS buildings, SURS permits and TED public works")
+    construction.add_argument("--output-dir", type=Path, default=Path("/data/raw"))
 
     models = commands.add_parser(
         "refresh-models",
@@ -202,6 +205,8 @@ def run(args: argparse.Namespace) -> None:
             sync_geographies(connection)
         elif args.command == "sync-context":
             sync_context(connection)
+        elif args.command == "sync-construction":
+            sync_construction(connection, args.output_dir)
         elif args.command == "refresh-models":
             from .model_reporting import format_model_report
             from .modeling import refresh_models
