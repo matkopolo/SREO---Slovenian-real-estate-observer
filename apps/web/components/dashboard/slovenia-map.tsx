@@ -1,7 +1,8 @@
 "use client";
 
 import { Layers3, LocateFixed, Mountain, Search, X } from "lucide-react";
-import maplibregl, { type GeoJSONSource, type LngLatBoundsLike } from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
+import type { GeoJSONSource, LngLatBoundsLike } from "maplibre-gl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { loadMapFeatures, loadRegionBoundaries, loadTransaction, mapGeographyLevel, searchBuildings } from "@/lib/api";
 import { focusAreaContext } from "@/lib/map-context-navigation";
