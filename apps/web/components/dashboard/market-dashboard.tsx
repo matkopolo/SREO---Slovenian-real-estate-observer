@@ -25,6 +25,7 @@ import { MarketSnapshot } from "./market-snapshot";
 import { TrendChart } from "./trend-chart";
 import { DataPublicationStatus } from "./data-publication-status";
 import { MarketScene } from "./market-scene";
+import { AffordabilityPanel } from "./affordability-panel";
 
 const EMPTY_DATA: DashboardData = {
   overview: {
@@ -395,6 +396,8 @@ export function MarketDashboard() {
             />
           </div>
         </div>
+        {mode === "sale" && (propertyGroup === "apartment" || propertyGroup === "house") &&
+          <AffordabilityPanel geographyId={geographyId} areaName={selectedName} propertyGroup={propertyGroup}/>}
         <MarketScene points={data.timeSeries} mode={mode} name={selectedName}/>
         <div className="chart-grid" id="trends">
           <TrendChart mode={mode} points={data.timeSeries} years={years}

@@ -6,6 +6,7 @@ const { loadDashboardMock } = vi.hoisted(() => ({ loadDashboardMock: vi.fn() }))
 vi.mock("@/lib/api", async () => {
   return {
     loadDashboard: loadDashboardMock,
+    loadAffordability: vi.fn(async () => { throw new Error("official context not synchronised"); }),
     loadDataStatus: vi.fn(async () => ({
       status: "current",
       activeRelease: {

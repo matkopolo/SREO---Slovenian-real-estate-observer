@@ -1,4 +1,5 @@
 import type {
+  Affordability,
   BoundaryFeature,
   BoundaryFeatureCollection,
   BuildingSearchResult,
@@ -241,6 +242,16 @@ export function loadInflation(
   return getJSON<{ items: InflationPoint[]; source: string }>(
     `/api/v1/economy/inflation?${query}`, signal,
   );
+}
+
+export function loadAffordability(
+  geographyId: number | undefined,
+  propertyGroup: "apartment" | "house",
+  signal: AbortSignal,
+) {
+  const query = new URLSearchParams({ propertyGroup });
+  if (geographyId) query.set("geographyId", String(geographyId));
+  return getJSON<Affordability>(`/api/v1/affordability?${query}`, signal);
 }
 
 export function loadStatisticalOutliers(

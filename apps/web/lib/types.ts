@@ -3,6 +3,10 @@ import type { components } from "@/lib/generated/api-schema";
 
 type ApiSchemas = components["schemas"];
 
+/** Illustrative borrowing capacity per net-income band (SURS, Banka Slovenije, GURS ETN). */
+export type Affordability = ApiSchemas["Affordability"];
+export type AffordabilityRow = ApiSchemas["AffordabilityRow"];
+
 export type MarketMode = ApiSchemas["Metadata"]["transactionKinds"][number];
 export type PropertyGroup = Exclude<ApiSchemas["PropertyGroup"], "mixed" | "unknown">;
 export type GeographyLevel = ApiSchemas["GeographyLevel"];

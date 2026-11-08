@@ -373,6 +373,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/affordability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Illustrative borrowing capacity per net-income band
+         * @description Combines SURS net wage percentiles for the area's municipality (Slovenia when unavailable), Banka Slovenije average rates on new housing loans, the dated Banka Slovenije DSTI and minimum-remaining-income limits, and the area's GURS ETN median EUR/m2 of the latest complete year. A statistical illustration, not a credit offer or a personal assessment.
+         */
+        get: operations["getAffordability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sales/transactions/{id}": {
         parameters: {
             query?: never;
@@ -933,6 +953,66 @@ export interface components {
             id: number;
             level: components["schemas"]["GeographyLevel"];
             name: string;
+        };
+        ContextObservation: {
+            series: string;
+            period: string;
+            value: number;
+            sourceTable: string;
+        };
+        LendingRule: {
+            /** Format: date */
+            validFrom: string;
+            dstiMax: number;
+            minRemainingIncome: number;
+            recommendedLtv: number;
+            sourceUrl: string;
+            note: string;
+        };
+        AffordabilityRow: {
+            band: {
+                /** @enum {string} */
+                id: "p10" | "q1" | "p50" | "mean" | "q3" | "p90";
+                netMonthlyIncome: number;
+            };
+            maxInstalment: number;
+            /** @description True when the minimum remaining income */
+            floorBinding: boolean;
+            loan20Years: number;
+            loan30Years: number;
+            loan30YearsVariable: number;
+            loan30YearsStress: number;
+            priceAtRecommendedLtv: number;
+            downPayment: number;
+            affordableSqm: number | null;
+            twoEarnersLoan30Years: number;
+        };
+        Affordability: {
+            wageGeography: {
+                key: string;
+                name: string;
+                nationalFallback: boolean;
+            };
+            wagePeriod: string;
+            wageSource: string;
+            rule: components["schemas"]["LendingRule"];
+            rates: {
+                fixedOver10Years: components["schemas"]["ContextObservation"];
+                variable: components["schemas"]["ContextObservation"];
+                aprc: components["schemas"]["ContextObservation"] | null;
+                euribor6m: components["schemas"]["ContextObservation"] | null;
+            };
+            stressMarginPoints: number;
+            market: {
+                propertyGroup: string;
+                year: number;
+                medianPricePerSqm: number | null;
+                /** Format: int64 */
+                sampleSize: number;
+                isPublishable: boolean;
+            };
+            rows: components["schemas"]["AffordabilityRow"][];
+            disclaimer: string;
         };
         InflationFactor: {
             /** Format: date */
@@ -2166,6 +2246,32 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    getAffordability: {
+        parameters: {
+            query?: {
+                geographyId?: number;
+                propertyGroup?: "apartment" | "house";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Inputs with their periods and sources, and one row per income band. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Affordability"];
+                };
+            };
+            400: components["responses"]["Error"];
+            404: components["responses"]["Error"];
             503: components["responses"]["Error"];
         };
     };
