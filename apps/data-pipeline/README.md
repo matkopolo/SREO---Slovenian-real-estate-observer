@@ -1,8 +1,8 @@
 # Data pipeline worker
 
-Production deployment uses [K3s/CloudNativePG](../../docs/k3s-deployment.md).
+Run the worker through Docker Compose; no local Python environment is required.
 `MODEL_REFRESH_POLICY=manual` disables automatic model training during scheduled
-refresh and initial import; use an explicit `refresh-models` Job. The default
+refresh and initial import; use an explicit `docker compose run --rm pipeline-worker refresh-models` command. The default
 `auto` preserves Compose's initial/new-archive training behavior. Manual analytics
 and model commands share the scheduler's PostgreSQL advisory lock.
 

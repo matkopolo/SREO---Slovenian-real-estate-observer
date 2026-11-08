@@ -15,11 +15,10 @@ No backfill, analytical refresh or model retraining is required: categories are
 derived from the existing distinct ETN codes and unknown-parcel count at query
 time. Published analytical releases therefore remain the source of truth.
 
-Production uses CloudNativePG on K3s, not the local Compose database lifecycle.
-See [deployment and privileged migration Jobs](k3s-deployment.md) and
-[backup/PITR](backup-and-recovery.md). Authoritative schema SQL remains here;
-production additionally records per-file checksums and applies the versioned
-production privilege policy. The API never performs production migrations.
+Docker Compose owns the local database lifecycle. SQL files are bundled into the
+PostGIS image for first-volume initialization and into the migration client image
+for subsequent upgrades. Named volumes retain data. The API uses its separate
+least-privilege role and never performs migrations.
 
 ## Purpose and ownership
 

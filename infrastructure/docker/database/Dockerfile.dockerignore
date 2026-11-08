@@ -1,0 +1,8 @@
+**
+!database
+!database/migrations
+!database/migrations/**
+!infrastructure
+!infrastructure/docker
+!infrastructure/docker/database
+!infrastructure/docker/database/Dockerfile

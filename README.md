@@ -22,22 +22,22 @@ This project downloads national yearly ZIP archives from GURS JGP, preserves the
 - `docs/data-licensing-privacy.md`: source attribution, privacy minimization, and use limitations
 - `docs/development-guidelines.md`: Go/Python conventions and test-layout policy
 - `infrastructure/docker/`: service-specific Docker assets
-- `infrastructure/kubernetes/`: phased K3s/CNPG production deployment (single-node and HA)
 - `data/raw/`: local downloaded archives, excluded from Git
 - `Makefile`: root commands shared by all developers
 
 ## Run the complete system
 
-This section is the **local Docker Compose** workflow. For physical-server
-production, use [K3s deployment](docs/k3s-deployment.md),
-[operations](docs/kubernetes-operations.md) and
-[backup/recovery](docs/backup-and-recovery.md). The production architecture uses
-CloudNativePG from day one and supports a later three-node HA overlay.
-Production model training is deliberately manual; Compose retains automatic
-first-install/new-archive training.
+Docker Compose is the supported deployment workflow. No Kubernetes tools or
+host Python, Go, Node.js or Make installation is needed to run the application.
 
-Docker Desktop (or Docker Engine with Compose) is the only requirement for the
-normal workflow on Windows, macOS, and Linux:
+Use Docker Desktop with Linux containers (Windows/macOS), or Docker Engine with
+Compose v2 on Linux. Use a current Compose release supporting `pull_policy: build`.
+AMD64 and ARM64 are supported by the base images. Allocate at least 8 GB RAM to
+Docker (12 GB recommended for training), and allow substantial disk space for
+archives, the database and image builds. Internet access to GURS is required.
+The first import/training can take a long time; this is not an instant demo.
+
+From the repository root, in PowerShell or a terminal:
 
 ```bash
 docker compose up -d --build --wait
@@ -164,7 +164,7 @@ make db-up
 
 The default connection is `postgresql://real_estate:real_estate@localhost:5432/real_estate`. Copy `.env.example` to `.env` or export `DATABASE_URL` if you change it.
 
-The database image is built from the official multi-architecture PostgreSQL 16 image with its matching PostGIS package, so it runs natively on Intel/AMD64 and Apple Silicon/ARM64 machines. On a full `docker compose up`, the one-shot `database-migrations` service waits for first-volume initialization to finish, applies unapplied incremental migrations, records them in `public.schema_migrations`, and exits before `pipeline-worker` starts. This also upgrades preserved database volumes; PostgreSQL's `/docker-entrypoint-initdb.d` directory runs automatically only when a volume is first created. `make db-up` performs the equivalent migration step explicitly. The named Docker volume is preserved when the container image changes, so existing imported data does not need to be downloaded again.
+The database image is built from the official multi-architecture PostgreSQL 16 image with its matching PostGIS package, so it runs natively on Intel/AMD64 and Apple Silicon/ARM64 machines. On a full `docker compose up`, the one-shot `database-migrations` service waits for first-volume initialization to finish, applies unapplied incremental migrations, records them in `public.schema_migrations`, and exits before `pipeline-worker` starts. This also upgrades preserved database volumes; PostgreSQL's image-bundled `/docker-entrypoint-initdb.d` scripts run automatically only when a volume is first created. Schema/script files are copied into images, not bind-mounted from the host. `make db-up` performs the equivalent migration step explicitly. The named Docker volume is preserved when the container image changes, so existing imported data does not need to be downloaded again.
 
 The `building_parts`, `land_parcels`, and `rental_building_parts` tables expose a generated `location geometry(Point,3794)` column backed by a GiST spatial index. It is automatically derived from the original `centroid_e` and `centroid_n` values; the importer does not need to populate it.
 
@@ -198,7 +198,8 @@ maximums, not reserved memory.
 Within the 4 GB database ceiling, Compose configures PostgreSQL with 1 GB
 `shared_buffers`, 64 MB per-node `work_mem`, 512 MB
 `maintenance_work_mem`, a 3 GB effective cache estimate, and up to four
-parallel workers per gather. These settings target the periodic offline
+parallel workers per gather. The container has 1 GB of shared memory for parallel
+PostgreSQL operations; this is included in, not added to, its memory ceiling. These settings target the periodic offline
 analytics rebuild; PostgreSQL/PostGIS still owns all durable data.
 
 Allocate 8–12 GB to Docker Desktop for a full model refresh alongside

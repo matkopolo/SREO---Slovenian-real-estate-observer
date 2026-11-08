@@ -1,4 +1,4 @@
--- Passwords and LOGIN are reconciled by CNPG managed roles, never this file.
+-- Passwords and LOGIN are reconciled by the database administrator, never this file.
 REVOKE CREATE ON DATABASE real_estate FROM PUBLIC, real_estate_api, real_estate_pipeline;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC, real_estate_api, real_estate_pipeline;
 REVOKE CREATE ON SCHEMA analytics FROM PUBLIC, real_estate_api, real_estate_pipeline;

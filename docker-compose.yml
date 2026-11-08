@@ -26,9 +26,9 @@ services:
     ports:
       - "5432:5432"
     mem_limit: 4g
+    shm_size: 1g
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./database/migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U real_estate -d real_estate"]
       interval: 5s
@@ -36,13 +36,12 @@ services:
       retries: 10
 
   database-migrations:
-    # This one-shot client only needs psql and bash. Using the official image
-    # avoids pulling the locally built PostGIS image on a fresh checkout.
-    image: postgres:16-bookworm
-    entrypoint: ["/bin/bash", "/run-migrations.sh"]
-    volumes:
-      - ./database/migrations:/migrations:ro
-      - ./database/run-migrations.sh:/run-migrations.sh:ro
+    # Official PostgreSQL client base; no host shell or bind mounts required.
+    build:
+      context: .
+      dockerfile: infrastructure/docker/migrations/compose.Dockerfile
+    image: real-estate-compose-migrations:16
+    pull_policy: build
     depends_on:
       db:
         condition: service_healthy
@@ -127,11 +126,11 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:8080
+        NEXT_PUBLIC_API_URL: ""
     image: real-estate-web:development
     pull_policy: build
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8080
+      NEXT_PUBLIC_API_URL: ""
     ports:
       - "3000:3000"
     mem_limit: 768m

@@ -1,10 +1,8 @@
 # Real-estate API service
 
-Production deployment is documented in [K3s deployment](k3s-deployment.md) and
-[operations](kubernetes-operations.md). API pods use the CNPG stable RW Service
-with a separate least-privilege identity; /health/live is independent of the
-database, while /health/ready verifies connectivity. Redis remains optional and
-unintegrated; see infrastructure/kubernetes/cache for the future cache contract.
+The supported runtime is Docker Compose. The API uses a separate least-privilege
+database identity; /health/live is independent of the database while /health/ready
+verifies connectivity. Redis remains optional and unintegrated.
 
 ## Responsibility
 

@@ -55,7 +55,7 @@ def migrate(connection, root):
             latest = max((name for name in applied if name.startswith(directory)), default="")
             if any(name.startswith(directory) and name not in applied and name < latest for name in names):
                 raise RuntimeError(f"Out-of-order migration in {directory}")
-        # CNPG normally manages these roles before bootstrap. Missing roles are
+        # Standalone operators manage these roles before bootstrap. Missing roles are
         # NOLOGIN, preventing migration 013's development-password fallback.
         connection.execute("""
             DO $$ BEGIN
