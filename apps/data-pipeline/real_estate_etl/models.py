@@ -12,6 +12,7 @@ class ImportStats:
     codebook_rows: int = 0
     codebook_skipped: bool = False
     unchanged: bool = False
+    superseded_transactions: int = 0
 
 
 @dataclass

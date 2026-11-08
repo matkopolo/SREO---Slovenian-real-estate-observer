@@ -110,6 +110,25 @@ RENT_TABLES = {
     }, ["transaction_id"]),
 }
 
+def supersede_other_years(cur, table: str, ids: set[int], year: int) -> list[int]:
+    """Drop transactions that the archive for `year` now contains but that are stored
+    under another dataset year.
+
+    GURS occasionally republishes an agreement in a different yearly archive. The
+    transaction id is the primary key, so the newest archive being imported wins;
+    child rows (building parts, parcels, rented spaces, derived facts) cascade and are
+    reloaded from this archive.
+    """
+    if not ids:
+        return []
+    cur.execute(
+        sql.SQL("DELETE FROM {} WHERE transaction_id = ANY(%s) AND dataset_year <> %s "
+                "RETURNING transaction_id").format(sql.Identifier(table)),
+        (sorted(ids), year),
+    )
+    return sorted(int(row[0]) for row in cur.fetchall())
+
+
 def copy_rows(
     cur, table: str, mapping: dict[str, str], rows, source_file_id: int,
     *, archive_name: str = "<unknown archive>", member: str = "<unknown member>",
@@ -284,6 +303,21 @@ def import_zip(connection, path: Path, verbose: bool = False) -> ImportStats:
                            ON CONFLICT(code) DO UPDATE SET name=excluded.name""",
                         historical_cadastral,
                     )
+                if "_POSLI_" in member and (dataset_scope == "national" or dataset_type == "rent"):
+                    text, rows = _reader(archive, member)
+                    try:
+                        ids = {int(row["ID_POSLA"]) for row in rows if (row.get("ID_POSLA") or "").strip()}
+                    finally:
+                        text.close()
+                    superseded = supersede_other_years(cur, table, ids, year)
+                    if superseded:
+                        stats.superseded_transactions += len(superseded)
+                        logger.warning(
+                            "%s: %s transaction(s) moved here from another dataset year; "
+                            "replacing the older copy (ids %s%s).",
+                            path.name, len(superseded), ", ".join(map(str, superseded[:10])),
+                            " …" if len(superseded) > 10 else "",
+                        )
                 text, rows = _reader(archive, member)
                 try:
                     unknown = set(rows.fieldnames or ()) - set(mapping) - IGNORED_SOURCE_COLUMNS

@@ -51,3 +51,19 @@ def test_conversion_error_contains_source_context(field, raw):
     assert error.destination_field == field
     assert error.raw_value == raw
     assert "row 17" in str(error)
+
+
+def test_supersede_other_years_deletes_only_other_years():
+    from real_estate_etl.importer import supersede_other_years
+
+    class Cursor:
+        def execute(self, statement, params):
+            self.params = params
+
+        def fetchall(self):
+            return [(967543,)]
+
+    cursor = Cursor()
+    assert supersede_other_years(cursor, "rental_transactions", {967543, 5}, 2026) == [967543]
+    assert cursor.params == ([5, 967543], 2026)
+    assert supersede_other_years(cursor, "rental_transactions", set(), 2026) == []

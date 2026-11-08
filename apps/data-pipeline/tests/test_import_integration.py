@@ -214,3 +214,35 @@ def test_import_streams_zip_members_without_zipfile_read(
     monkeypatch.setattr(zipfile.ZipFile, "read", forbid_materializing_member)
     stats = import_zip(database_connection, archive)
     assert stats.rows == 3
+
+
+def create_rent_archive_for_year(path: Path, year: int, rent: str):
+    transaction_mapping = RENT_TABLES["POSLI"][1]
+    building_mapping = RENT_TABLES["DELISTAVB"][1]
+    transaction = {source: "" for source in transaction_mapping}
+    transaction.update({"ID_POSLA": "800", "LETO": str(year), "POGODBENA_NAJEMNINA": rent})
+    building = {source: "" for source in building_mapping}
+    building.update({
+        "ID_POSLA": "800", "OBCINA": "TEST TOWN", "LETO": str(year),
+        "POVRSINA_ODDANIH_PROSTOROV": "44.5", "GOSTINSKI_VRT": "0",
+    })
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(f"ETN_SLO_{year}_NP_NP_POSLI_test.csv", csv_bytes(transaction_mapping, [transaction]))
+        archive.writestr(f"ETN_SLO_{year}_NP_NP_DELISTAVB_test.csv", csv_bytes(building_mapping, [building]))
+
+
+def test_transaction_republished_in_a_later_year_replaces_the_older_copy(database_connection, tmp_path):
+    connection = database_connection
+    older = tmp_path / "ETN_SLO_2013_NP_test.zip"
+    newer = tmp_path / "ETN_SLO_2014_NP_test.zip"
+    create_rent_archive_for_year(older, 2013, "500")
+    create_rent_archive_for_year(newer, 2014, "520")
+    import_zip(connection, older)
+
+    stats = import_zip(connection, newer)
+
+    assert stats.superseded_transactions == 1
+    assert connection.execute(
+        "SELECT dataset_year, contract_rent FROM rental_transactions WHERE transaction_id=800"
+    ).fetchall() == [(2014, 520)]
+    assert connection.execute("SELECT count(*) FROM rental_building_parts").fetchone()[0] == 1
