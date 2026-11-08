@@ -307,6 +307,7 @@ export function MarketDashboard() {
           <a href="#trends">Gibanje</a>
           <a href="#distribution">Porazdelitev</a>
           <a href="#detailed-analytics">Podrobna analiza</a>
+          <a href="/gradbeni-projekti">Gradbeni projekti</a>
         </nav>
         <div className="updated">
           <RefreshCw size={14} className={loading ? "spin" : ""} />

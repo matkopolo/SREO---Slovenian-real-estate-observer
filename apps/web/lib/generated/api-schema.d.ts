@@ -393,6 +393,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/construction/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Registered buildings by year built, SURS permits and TED public works for an area
+         * @description Registered GURS buildings are completed or measurable buildings, not construction in progress. SURS permits are counts per municipality and year. TED notices are public works above the EU threshold with region-level location only.
+         */
+        get: operations["getConstructionSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/construction/map": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Municipality aggregates (zoom < 12) or registered building points (zoom ≥ 12) */
+        get: operations["getConstructionMap"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/construction/buildings/{eid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getConstructionBuilding"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/construction/public-works": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listConstructionPublicWorks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sales/transactions/{id}": {
         parameters: {
             query?: never;
@@ -1013,6 +1082,112 @@ export interface components {
             };
             rows: components["schemas"]["AffordabilityRow"][];
             disclaimer: string;
+        };
+        ConstructionSummaryResponse: {
+            filter: {
+                fromYear: number;
+                toYear: number;
+                withDwellings: boolean;
+            };
+            summary: {
+                /** Format: date */
+                sourceDate: string | null;
+                buildingsByYear: {
+                    year: number;
+                    /** Format: int64 */
+                    buildings: number;
+                    /** Format: int64 */
+                    dwellings: number;
+                    grossFloorArea: number;
+                }[];
+                permits: {
+                    year: string;
+                    buildings: number | null;
+                    dwellings: number | null;
+                    floorArea: number | null;
+                }[];
+                /** @enum {string} */
+                permitsScope: "slovenia" | "municipalities";
+                /** Format: int64 */
+                publicWorksLast12Months: number;
+                /** Format: int64 */
+                publicWorksAwardsLast12Months: number;
+                /** @enum {string} */
+                publicWorksScope: "slovenia" | "region";
+            };
+            sources: {
+                name: string;
+                licence: string;
+                note: string;
+            }[];
+        };
+        ConstructionMapFeature: {
+            /** @enum {string} */
+            kind: "area" | "building";
+            id: string;
+            name: string;
+            longitude: number;
+            latitude: number;
+            /** Format: int64 */
+            buildings: number;
+            /** Format: int64 */
+            dwellings: number;
+            yearBuilt?: number;
+            /** Format: int64 */
+            geographyId?: number;
+        };
+        ConstructionMapResponse: {
+            /** @enum {string} */
+            level: "municipality" | "building";
+            items: components["schemas"]["ConstructionMapFeature"][];
+            count: number;
+            truncated: boolean;
+        };
+        ConstructionBuilding: {
+            eid: string;
+            cadastralCode: number;
+            buildingNumber: number;
+            yearBuilt: number | null;
+            floors: number | null;
+            dwellings: number | null;
+            businessUnits: number | null;
+            buildingType: string | null;
+            loadBearingStructure: string | null;
+            registrationStatus: string | null;
+            grossFloorArea: number | null;
+            /** Format: date */
+            recordChangedOn: string | null;
+            municipality: string | null;
+            /** Format: int64 */
+            municipalityId: number | null;
+            longitude: number | null;
+            latitude: number | null;
+            /** Format: int64 */
+            saleTransactions: number;
+            /** Format: int64 */
+            rentalTransactions: number;
+            /** Format: date */
+            sourceDate: string;
+        };
+        PublicWorksNotice: {
+            publicationNumber: string;
+            noticeType: string;
+            /** Format: date */
+            publicationDate: string;
+            title: string;
+            buyer: string | null;
+            winners: string[];
+            regions: string[];
+            value: number | null;
+            currency: string | null;
+            url: string;
+        };
+        PublicWorksResponse: {
+            items: components["schemas"]["PublicWorksNotice"][];
+            /** Format: int64 */
+            total: number;
+            limit: number;
+            offset: number;
         };
         InflationFactor: {
             /** Format: date */
@@ -2273,6 +2448,113 @@ export interface operations {
             400: components["responses"]["Error"];
             404: components["responses"]["Error"];
             503: components["responses"]["Error"];
+        };
+    };
+    getConstructionSummary: {
+        parameters: {
+            query?: {
+                geographyId?: number;
+                fromYear?: number;
+                toYear?: number;
+                withDwellings?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Summary with its sources. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConstructionSummaryResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    getConstructionMap: {
+        parameters: {
+            query: {
+                geographyId?: number;
+                fromYear?: number;
+                toYear?: number;
+                withDwellings?: boolean;
+                bbox: string;
+                zoom: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description At most 300 municipalities or 3000 buildings; `truncated` marks a cut list. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConstructionMapResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+        };
+    };
+    getConstructionBuilding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                eid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cadastre attributes with labels and the number of ETN sale/rental agreements in the building. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConstructionBuilding"];
+                };
+            };
+            400: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listConstructionPublicWorks: {
+        parameters: {
+            query?: {
+                geographyId?: number;
+                fromYear?: number;
+                toYear?: number;
+                withDwellings?: boolean;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description TED construction-works notices, newest first, filtered to the area's statistical region. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicWorksResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
         };
     };
     getSaleTransaction: {
