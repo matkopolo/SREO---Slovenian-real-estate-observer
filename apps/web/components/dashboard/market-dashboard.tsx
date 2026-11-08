@@ -24,6 +24,7 @@ import { SloveniaMap } from "./slovenia-map";
 import { MarketSnapshot } from "./market-snapshot";
 import { TrendChart } from "./trend-chart";
 import { DataPublicationStatus } from "./data-publication-status";
+import { MarketScene } from "./market-scene";
 
 const EMPTY_DATA: DashboardData = {
   overview: {
@@ -393,6 +394,7 @@ export function MarketDashboard() {
             />
           </div>
         </div>
+        <MarketScene points={data.timeSeries} mode={mode} name={selectedName}/>
         <div className="chart-grid" id="trends">
           <TrendChart mode={mode} points={data.timeSeries} years={years}
             propertyGroup={propertyGroup} geographyId={geographyId} area={area} />
