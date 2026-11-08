@@ -500,6 +500,26 @@ def reset_and_repopulate(
         connection.commit()
 
 
+def _sync_geographies_or_keep_existing(connection) -> dict[str, int]:
+    """Refresh RPE boundaries, but never let a boundary-service outage block new GURS data.
+
+    sync_geographies is atomic (rolls back and records a failed run), so on error the
+    previously synchronised boundaries are intact. A first install has none and must fail.
+    """
+    try:
+        return sync_geographies(connection)
+    except Exception as error:
+        connection.rollback()
+        existing = connection.execute("SELECT count(*) FROM analytics.geographic_units").fetchone()[0]
+        if not existing:
+            raise
+        logger.warning(
+            "Geographic boundary sync failed (%s); keeping %s previously synchronised "
+            "boundaries for this release.", error, existing,
+        )
+        return {}
+
+
 def _refresh_system_unlocked(
     connection,
     *,
@@ -523,7 +543,7 @@ def _refresh_system_unlocked(
             refresh_current_year=True,
         )
         _update_release_source(connection, database_url, release_id)
-        geography_counts = sync_geographies(connection)
+        geography_counts = _sync_geographies_or_keep_existing(connection)
         _release_status(database_url, release_id, "analytics")
         bootstrap_required = connection.execute(
             """

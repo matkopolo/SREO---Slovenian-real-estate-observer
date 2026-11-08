@@ -300,3 +300,24 @@ def test_scheduler_reruns_after_the_interval_and_stops_cleanly(tmp_path: Path):
 
     assert len(calls) == 2
 
+
+def test_boundary_outage_keeps_existing_boundaries(caplog):
+    from real_estate_etl.operations import _sync_geographies_or_keep_existing
+
+    connection = MagicMock()
+    connection.execute.return_value.fetchone.return_value = (6250,)
+    with patch("real_estate_etl.operations.sync_geographies", side_effect=RuntimeError("HTTP 403")):
+        assert _sync_geographies_or_keep_existing(connection) == {}
+    assert "keeping 6250 previously synchronised boundaries" in caplog.text
+
+
+def test_boundary_outage_on_first_install_still_fails():
+    from real_estate_etl.operations import _sync_geographies_or_keep_existing
+
+    connection = MagicMock()
+    connection.execute.return_value.fetchone.return_value = (0,)
+    with (
+        patch("real_estate_etl.operations.sync_geographies", side_effect=RuntimeError("HTTP 403")),
+        pytest.raises(RuntimeError),
+    ):
+        _sync_geographies_or_keep_existing(connection)
