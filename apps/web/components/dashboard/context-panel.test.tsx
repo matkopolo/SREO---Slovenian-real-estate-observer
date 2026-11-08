@@ -110,8 +110,18 @@ vi.mock("@/lib/api", () => ({
     }],
     rentalTransactions: [],
   })),
-  loadGeography: vi.fn(),
-  loadGeographyChildren: vi.fn(),
+  loadGeography: vi.fn(async () => ({ id: 77, level: "municipality", name: "Ruše", bounds: [15, 46, 16, 47] })),
+  loadGeographyChildren: vi.fn(async () => ({ items: [
+    { id: 1, level: "settlement", name: "Bezena" },
+    { id: 2, level: "settlement", name: "Ruše" },
+    { id: 3, level: "settlement", name: "Bistrica ob Dravi" },
+    { id: 4, level: "settlement", name: "Lobnica" },
+  ] })),
+  loadGeographyComparisons: vi.fn(async () => [
+    { id: 3, name: "Bistrica ob Dravi", level: "settlement", transactionCount: 40, representativeCount: 38, medianAmountPerSqm: 1800 },
+    { id: 2, name: "Ruše", level: "settlement", transactionCount: 1250, representativeCount: 1200, medianAmountPerSqm: 2100 },
+    { id: 1, name: "Bezena", level: "settlement", transactionCount: 40, representativeCount: 39, medianAmountPerSqm: 1700 },
+  ]),
   loadMarketIndices: vi.fn(async () => ({ items: [] })),
   loadFullValuation: vi.fn(async () => {
     throw new Error("no model");
@@ -181,5 +191,13 @@ describe("ContextPanel", () => {
     expect(sale).toHaveTextContent("Odpri analizo posla");
     fireEvent.click(sale);
     expect(onChange).toHaveBeenCalledWith({ kind: "transaction", mode: "sale", id: 501 });
+  });
+  it("ranks child areas from most to least transactions under the active filter", async () => {
+    render(<ContextPanel context={{ kind: "geography", id: 77, level: "municipality", name: "Ruše" }} mode="sale"
+      propertyGroup="apartment" years={{ from: 2024, to: 2025 }}
+      overview={{ transactionCount: 0, eligibleCount: 0, includedSampleSize: 0, excludedOutlierCount: 0 }} onChange={vi.fn()}/>);
+    await screen.findByText(/Razvrščeno po številu poslov/);
+    const chips = [...document.querySelectorAll(".context-children button")].map((button) => button.getAttribute("aria-label"));
+    expect(chips).toEqual(["Ruše, 1250 poslov", "Bezena, 40 poslov", "Bistrica ob Dravi, 40 poslov", "Lobnica, 0 poslov"]);
   });
 });

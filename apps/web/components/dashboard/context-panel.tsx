@@ -52,11 +52,18 @@ function GeographyInspector({ loaded, mode, propertyGroup, years, onChange }: {
 }) {
   const [showAllChildren, setShowAllChildren] = useState(false);
   const [showAllComparisons, setShowAllComparisons] = useState(false);
-  const visibleChildren = showAllChildren ? loaded.children : loaded.children.slice(0, 10);
+  // Most to least transactions under the active filters; areas without matching transactions last.
+  const counts = new Map(loaded.comparisons.map((item) => [item.id, item.transactionCount]));
+  const hasCounts = counts.size > 0;
+  const sortedChildren = [...loaded.children].sort((a, b) =>
+    (counts.get(b.id) ?? 0) - (counts.get(a.id) ?? 0) || a.name.localeCompare(b.name, "sl"));
+  const visibleChildren = showAllChildren ? sortedChildren : sortedChildren.slice(0, 10);
   const visibleComparisons = showAllComparisons ? loaded.comparisons : loaded.comparisons.slice(0, 10);
   return <div className="geography-inspector"><div className="context-breadcrumbs"><button type="button" onClick={() => onChange({ kind: "country" })}>Slovenija</button><ChevronRight aria-hidden="true"/><span>{loaded.geography.name}</span></div>
     <p>Prikazane statistike, grafi in zemljevid uporabljajo isti filter: {propertyGroupLabel(propertyGroup)}, {years.from}–{years.to}.</p>
-    <section className="context-section"><h3>Podrejena območja <small>({loaded.children.length})</small></h3>{loaded.children.length === 0 ? <p>Ni podrejenih območij.</p> : <><div className="context-children">{visibleChildren.map((child) => <button type="button" key={child.id} onClick={() => onChange({ kind: "geography", ...child })}>{child.name}</button>)}</div>{loaded.children.length > 10 && <button type="button" className="context-list-toggle" aria-expanded={showAllChildren} onClick={() => setShowAllChildren((value) => !value)}>{showAllChildren ? "Prikaži manj" : `Prikaži vseh ${loaded.children.length} območij`}</button>}</>}</section>
+    <section className="context-section"><h3>Podrejena območja <small>({loaded.children.length})</small></h3>{hasCounts && <p className="context-children-note">Razvrščeno po številu poslov za izbrani filter, od največ do najmanj.</p>}{loaded.children.length === 0 ? <p>Ni podrejenih območij.</p> : <><div className="context-children">{visibleChildren.map((child) => <button type="button" key={child.id} onClick={() => onChange({ kind: "geography", ...child })}
+      aria-label={hasCounts ? `${child.name}, ${(counts.get(child.id) ?? 0).toLocaleString("sl-SI")} poslov` : child.name}>
+      {child.name}{hasCounts && <span className="context-child-count">{(counts.get(child.id) ?? 0).toLocaleString("sl-SI")}</span>}</button>)}</div>{loaded.children.length > 10 && <button type="button" className="context-list-toggle" aria-expanded={showAllChildren} onClick={() => setShowAllChildren((value) => !value)}>{showAllChildren ? "Prikaži manj" : `Prikaži vseh ${loaded.children.length} območij`}</button>}</>}</section>
     {loaded.comparisons.length > 0 && <section className="context-section"><h3>Primerjava podrejenih območij</h3>{visibleComparisons.map((item) => <button className="context-transaction" type="button" key={item.id} onClick={() => onChange({ kind: "geography", id: item.id, level: item.level, name: item.name })}><span>{item.name}<small>{item.transactionCount.toLocaleString("sl-SI")} vseh · {item.representativeCount.toLocaleString("sl-SI")} reprezentativnih</small></span><strong>{(mode === "rent" ? item.medianAmount : item.medianAmountPerSqm) == null ? "Mediana ni objavljena" : mode === "rent" ? `${euro.format(item.medianAmount!)} / mesec` : `${decimal.format(item.medianAmountPerSqm!)} €/m²`}</strong></button>)}{loaded.comparisons.length > 10 && <button type="button" className="context-list-toggle" aria-expanded={showAllComparisons} onClick={() => setShowAllComparisons((value) => !value)}>{showAllComparisons ? "Prikaži manj" : `Prikaži vseh ${loaded.comparisons.length} primerjav`}</button>}</section>}
   </div>;
 }
