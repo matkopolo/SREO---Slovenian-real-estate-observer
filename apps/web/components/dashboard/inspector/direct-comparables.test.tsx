@@ -16,7 +16,8 @@ describe("DirectComparables", () => {
     const onChange = vi.fn();
     render(<DirectComparables items={[item, { ...item, transactionId: 13, amountPerSqm: 4000 }]}
       selectedAmountPerSqm={2000} mode="sale" onChange={onChange}/>);
-    const card = screen.getByRole("button", { name: "Odpri primerljivi posel #12" });
+    const card = screen.getByRole("button", { name: /^Odpri primerljivi posel #12:/ });
+    expect(card.getAttribute("aria-label")?.replace(/\u00a0/g, " ")).toContain("180.000 €, 3000 €/m², površina 60 m², razlika €/m² +50 %, reprezentativen posel");
     for (const value of ["2025-03-14", "180.000 €", "3000 €/m²", "60 m²", "+10 %", "+50 %", "Reprezentativen posel", "Ista stavba · isto leto · površina ±15 %"]) {
       expect(card).toHaveTextContent(value);
     }

@@ -28,7 +28,11 @@ export function DirectComparables({ items, selectedAmountPerSqm, mode, onChange 
     {!items.length ? <p className="empty-state">V isti stavbi v izbranem ali sosednjih letih ni primerljivega posla.</p>
       : <div className="comparable-list">{items.map((item) => <button
         className={`direct-comparable-card ${styles.comparable}`} type="button" key={item.transactionId}
-        aria-label={`Odpri primerljivi posel #${item.transactionId}`}
+        aria-label={`Odpri primerljivi posel #${item.transactionId}: ${tierLabel(item.matchTier)}, ${item.contractDate}, `
+          + `${euro.format(item.amount)}, ${decimal.format(item.amountPerSqm)} €/m²${mode === "rent" ? " na mesec" : ""}, `
+          + `površina ${decimal.format(item.area)} m², razlika €/m² ${item.amountPerSqmDifferencePercent > 0 ? "+" : ""}`
+          + `${decimal.format(item.amountPerSqmDifferencePercent)} %, `
+          + `${item.isRepresentative ? "reprezentativen posel" : anomalyStatusLabel(item.outlierStatus)}`}
         onClick={() => onChange({ kind: "transaction", mode, id: item.transactionId })}>
         <span className="comparable-tier">{tierLabel(item.matchTier)}</span>
         <div><span>{item.contractDate}<small>Posel #{item.transactionId}</small></span>

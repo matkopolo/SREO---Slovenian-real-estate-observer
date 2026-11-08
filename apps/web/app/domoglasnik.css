@@ -52,7 +52,8 @@
 .recent-list { margin-top: 8px; }
 .recent-pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .recent-pager button { min-height: 40px; display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--brand); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
-.recent-pager button:disabled { color: var(--text-subtle); cursor: default; opacity: .6; }
+/* aria-disabled, not disabled: the focused button keeps focus at the first/last page. */
+.recent-pager button[aria-disabled=true] { color: var(--text-subtle); cursor: default; opacity: .6; }
 
 /* Trend plot keeps readable labels on phones by scrolling inside its own container. */
 .trend-plot { overflow-x: auto; }

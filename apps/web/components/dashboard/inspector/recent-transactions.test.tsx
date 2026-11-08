@@ -53,8 +53,13 @@ it("shows one ranking at a time, five rows per page", async () => {
   expect(screen.getAllByRole("button", { name: /Odpri prodajo/ })).toHaveLength(5);
   expect(screen.queryByRole("button", { name: "Odpri prodajo #200" })).not.toBeInTheDocument();
   expect(screen.getByText("1–5 od 7")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Prejšnjih 5 poslov" })).toBeDisabled();
-  fireEvent.click(screen.getByRole("button", { name: "Naslednjih 5 poslov" }));
+  expect(screen.getByRole("button", { name: "Prejšnjih 5 poslov" })).toHaveAttribute("aria-disabled", "true");
+  const next = screen.getByRole("button", { name: "Naslednjih 5 poslov" });
+  next.focus();
+  fireEvent.click(next);
+  expect(next).toHaveFocus();
+  expect(next).toHaveAttribute("aria-disabled", "true");
+  fireEvent.click(next);
   expect(screen.getAllByRole("button", { name: /Odpri prodajo/ })).toHaveLength(2);
   expect(screen.getByText("6–7 od 7")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /Najnižje prodaje/ }));

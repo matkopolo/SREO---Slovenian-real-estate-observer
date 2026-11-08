@@ -62,10 +62,10 @@ export function RecentTransactions({ mode, propertyGroup, geographyId, name, yea
                 </button>)}
               </div>}
               {pages > 1 && <nav className="recent-pager" aria-label="Strani seznama">
-                <button type="button" disabled={current === 0} onClick={() => setPage(current - 1)}
+                <button type="button" aria-disabled={current === 0} onClick={() => { if (current > 0) setPage(current - 1); }}
                   aria-label={`Prejšnjih ${PAGE_SIZE} poslov`}><ChevronLeft aria-hidden="true" size={16}/> Prejšnji</button>
                 <span aria-live="polite">{first}–{first + visible.length - 1} od {rows.length}</span>
-                <button type="button" disabled={current >= pages - 1} onClick={() => setPage(current + 1)}
+                <button type="button" aria-disabled={current >= pages - 1} onClick={() => { if (current < pages - 1) setPage(current + 1); }}
                   aria-label={`Naslednjih ${PAGE_SIZE} poslov`}>Naslednji <ChevronRight aria-hidden="true" size={16}/></button>
               </nav>}
             </>;
