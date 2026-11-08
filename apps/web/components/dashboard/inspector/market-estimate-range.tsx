@@ -2,11 +2,12 @@ import type { CurrentMarketEstimate, MarketMode } from "@/lib/types";
 import { decimal, euro } from "@/lib/display-values";
 import { ConfidenceBadge } from "@/components/ui/confidence-badge";
 import { ProvenanceBadge } from "@/components/ui/provenance-badge";
+import styles from "./property-report.module.css";
 
 export function MarketEstimateRange({ estimate, mode }: { estimate: CurrentMarketEstimate; mode: MarketMode }) {
   const radius = estimate.maximumRadiusMeters >= 1000
     ? `${decimal.format(estimate.maximumRadiusMeters / 1000)} km` : `${estimate.maximumRadiusMeters} m`;
-  return <section className="market-estimate" aria-labelledby="market-estimate-title">
+  return <section className={`market-estimate ${styles.estimate}`} aria-labelledby="market-estimate-title">
     <header><div><ProvenanceBadge kind="calculated" />
       <h3 id="market-estimate-title">{mode === "sale" ? "Ocena trenutne tržne vrednosti" : "Ocena trenutne mesečne najemnine"}</h3>
       <p>Ocena temelji na najnovejših razpoložljivih primerljivih poslih, ne na letu izbranega posla.</p></div>
@@ -18,11 +19,17 @@ export function MarketEstimateRange({ estimate, mode }: { estimate: CurrentMarke
       <i /><i /><i />
     </div>
     <div className="estimate-range-labels"><span>P25</span><strong>Mediana</strong><span>P75</span></div>
+    <div className={styles.unitRange} aria-label="Razpon primerljivih poslov na kvadratni meter">
+      <span>{decimal.format(estimate.unadjustedLowerAmountPerSqm)} €/m²</span>
+      <span>{decimal.format(estimate.unadjustedCentralAmountPerSqm)} €/m²</span>
+      <span>{decimal.format(estimate.unadjustedUpperAmountPerSqm)} €/m²</span>
+    </div>
     <strong className="estimate-unit-value">{decimal.format(estimate.unadjustedCentralAmountPerSqm)} €/m²{mode === "rent" ? " na mesec" : ""}</strong>
     {estimate.locationAdjustmentApplied && <div className="adjusted-estimate-range">
       <span>Po lokalni prilagoditvi ×{decimal.format(estimate.locationAdjustmentFactor)}</span>
       <strong>{euro.format(estimate.centralTotal)}</strong>
       <small>{euro.format(estimate.lowerTotal)}–{euro.format(estimate.upperTotal)} · {decimal.format(estimate.centralAmountPerSqm)} €/m²</small>
+      <small>Razpon na m²: {decimal.format(estimate.lowerAmountPerSqm)}–{decimal.format(estimate.upperAmountPerSqm)} €/m²{mode === "rent" ? " / mesec" : ""}</small>
     </div>}
     <p className="estimate-explanation">P25–P75 je srednjih 50 % tehtane porazdelitve primerljivih poslov; ni formalni interval zaupanja ali certificirana cenitev.</p>
     <dl className="estimate-method">

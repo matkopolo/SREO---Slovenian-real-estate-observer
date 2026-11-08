@@ -10,6 +10,41 @@ status, transaction composition, quality evidence, and geography come from
 
 ## User workflow
 
+### Visual consistency and property reports
+
+The warm map-centric layout remains in place; no dashboard template or new UI
+dependency is used. `app/tokens.css` owns the palette, spacing, radius, typography
+and header-height tokens, including compatibility aliases for legacy styles.
+`globals.css` retains base/map/chart rules, `redesign.css` shared controls/evidence,
+`atlas.css` workspace composition, and `domoglasnik.css` product/land-filter rules.
+These layout files are not fully merged: this pass centralizes tokens without a
+large, risky rewrite of map and responsive behavior. New report presentation is
+scoped in `inspector/property-report.module.css`.
+
+The overview promotes address, reported amount, €/m², contract date, reference
+area and construction year. A multi-part building's first-part construction year
+is labelled explicitly; package prices retain a warning and all source components
+remain available in Details. Inspector tabs wrap instead of concealing the last
+tabs beyond a horizontal scroll area. Market figures remain readable during
+property selection rather than being faded.
+
+Direct comparable cards preserve the matching tier, date, total, unit amount,
+area, backend-calculated deltas and representative/outlier state. A pair of bars
+compares the selected agreement with each comparable on one shared zero-based
+€/m² scale across the list. These are historical recorded amounts, **not** current
+valuations or inflation-adjusted prices. Rental values are labelled monthly.
+Missing/invalid selected unit amounts do not produce a fabricated bar. The whole
+card remains keyboard/click actionable. The current-market range additionally
+exposes its lower/median/upper unit amounts and locally adjusted unit bounds;
+P25–P75 semantics and all warnings/tolerances remain unchanged. History highlights
+the selected sale with text and `aria-current`, not color alone.
+
+The regression suite covers address-search focus, filtering/URL state, stale
+requests, return-to-municipality behavior, comparable navigation, keyboard tabs,
+history navigation and retained analytical evidence. Live browser review for the
+September 2026 consistency pass was blocked during browser-tool initialization;
+automated DOM tests do not substitute for visual QA at desktop/mobile widths.
+
 ### Recent local price rankings and map navigation
 
 The selection inspector shows up to ten highest and ten lowest **total amounts**

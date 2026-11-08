@@ -136,7 +136,13 @@ describe("ContextPanel", () => {
     expect(screen.getByRole("heading", { name: "Nedavni posli · Ruše" })).toBeInTheDocument();
     expect(screen.getByText("Možen podvojen zapis")).toBeInTheDocument();
     expect(screen.getByText("14 €/m²")).toBeInTheDocument();
+    expect(screen.getByText("50 m²")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Hmeljarska ulica, 8, Ruše" })).toBeInTheDocument();
+    expect(screen.getByText("2001")).toBeInTheDocument();
     expect(screen.getByText("157.000 €")).toBeInTheDocument();
+    expect(screen.getByText("3077 €/m²")).toBeInTheDocument();
+    expect(screen.getByText("3481 €/m²")).toBeInTheDocument();
+    expect(screen.getByText(/Razpon na m²: 2885–3173/)).toBeInTheDocument();
     expect(screen.getAllByText("primerljivih poslov", { exact: false }).length).toBeGreaterThan(0);
     expect(screen.getByText(/P25–P75 je srednjih 50 %/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Primerljivi posli" }));

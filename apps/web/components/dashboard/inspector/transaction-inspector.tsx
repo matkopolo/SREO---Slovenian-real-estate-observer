@@ -7,7 +7,7 @@ import { ProvenanceBadge } from "@/components/ui/provenance-badge";
 import { QualityBadge } from "@/components/ui/quality-badge";
 import { Tabs } from "@/components/ui/tabs";
 import {
-  anomalyStatusLabel, decimal, euro, meaningfulPosition, meaningfulText,
+  anomalyStatusLabel, decimal, euro, meaningfulNumber, meaningfulPosition, meaningfulText,
   qualityReasonLabel, reliabilityLabel, visibleFields,
 } from "@/lib/display-values";
 import type {
@@ -17,6 +17,8 @@ import type {
 import { MarketEstimateRange } from "./market-estimate-range";
 import { LocationLink } from "./location-link";
 import { PropertyHistory } from "./property-history";
+import { DirectComparables } from "./direct-comparables";
+import styles from "./property-report.module.css";
 
 type Detail = SaleTransactionDetail | RentalTransactionDetail;
 type InspectorTab = "overview" | "comparables" | "details" | "quality" | "history";
@@ -25,13 +27,6 @@ function FieldList({ fields }: { fields: Array<{ label: string; value: string | 
   const visible = visibleFields(fields);
   if (!visible.length) return null;
   return <dl className="context-fields">{visible.map((field) => <div key={field.label}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl>;
-}
-
-function tierLabel(tier: TransactionContextResponse["directComparables"][number]["matchTier"]) {
-  if (tier === "same_building_same_year_area_15") return "Ista stavba · isto leto · površina ±15 %";
-  if (tier === "same_building_adjacent_year_area_15") return "Ista stavba · sosednje leto · površina ±15 %";
-  if (tier === "same_building_same_year") return "Ista stavba · isto leto · širša površina";
-  return "Ista stavba · drug primerljiv posel";
 }
 
 function benchmarkProfile(benchmark: ContextBenchmark) {
@@ -54,6 +49,8 @@ export function TransactionInspector({ detail, context, model, onChange }: {
   const address = [part?.street ?? space?.street, part?.houseNumber ?? space?.houseNumber, part?.settlement ?? space?.settlement].filter(meaningfulText).join(", ");
   const amount = sale?.price ?? rental?.monthlyRentExVat;
   const amountPerSqm = sale?.pricePerSqm ?? rental?.monthlyRentPerSqm;
+  const constructionYear = meaningfulNumber(part?.constructionYear ?? space?.constructionYear);
+  const multipleParts = (sale?.buildingParts.length ?? rental?.spaces.length ?? 0) > 1;
   const anomalyFlags = context.quality.anomalyFlags ?? [];
   const possibleDuplicate = anomalyFlags.some((flag) =>
     flag === "possible_duplicate" || flag === "possible_near_duplicate"
@@ -101,7 +98,7 @@ export function TransactionInspector({ detail, context, model, onChange }: {
     ]}/></article>)}
   </>;
 
-  return <div className="transaction-inspector">
+  return <div className={`transaction-inspector ${styles.report}`}>
     <nav className="context-breadcrumbs" aria-label="Lokacija"><button type="button" onClick={() => onChange({ kind: "country" })}>Slovenija</button>
       {detail.geographies.map((geography) => <span key={geography.id}><ChevronRight aria-hidden="true" /><button type="button" onClick={() => onChange({ kind: "geography", ...geography })}>{geography.name}</button></span>)}</nav>
     <LocationLink latitude={detail.latitude} longitude={detail.longitude}/>
@@ -112,9 +109,15 @@ export function TransactionInspector({ detail, context, model, onChange }: {
     ]}>
       {tab === "history" && sale && <PropertyHistory key={sale.transactionId} transactionId={sale.transactionId} onChange={onChange}/>}
       {tab === "overview" && <div className="inspector-tab-content">
-        <section className="transaction-identity"><ProvenanceBadge kind="source" /><span>{sale ? "Prodaja" : "Najem"} #{detail.transactionId}</span>
-          <div className="transaction-amount"><strong>{amount == null ? "Cena ni objavljena" : euro.format(amount)}</strong>{amountPerSqm != null && <b>{decimal.format(amountPerSqm)} €/m²</b>}</div>
-          <p>{detail.contractDate ?? "Datum ni objavljen"}{address ? ` · ${address}` : ""}</p>
+        <section className={`transaction-identity ${styles.identity}`}><ProvenanceBadge kind="source" /><span>{sale ? "Prodaja" : "Najem"} #{detail.transactionId}</span>
+          <h3>{address || "Naslov ni objavljen"}</h3>
+          <div className="transaction-amount"><strong>{amount == null ? "Cena ni objavljena" : euro.format(amount)}</strong>{rental && <span>/ mesec</span>}{amountPerSqm != null && <b>{decimal.format(amountPerSqm)} €/m²</b>}</div>
+          <dl className={styles.facts}>
+            <div><dt>Datum pogodbe</dt><dd>{detail.contractDate ?? "Ni objavljen"}</dd></div>
+            <div><dt>Referenčna površina</dt><dd>{detail.area == null ? "Ni objavljena" : `${decimal.format(detail.area)} m²`}</dd></div>
+            <div><dt>Leto gradnje{multipleParts ? " · prvi del" : ""}</dt><dd>{constructionYear ?? "Ni objavljeno"}</dd></div>
+          </dl>
+          {sale && sale.buildingParts.length + sale.landParcels.length > 1 && <p className={styles.packageNote}>Cena zajema pogodbeni paket, ne nujno samo stanovanja. Sestavine in njihove cene so v zavihku Podrobnosti.</p>}
           {possibleDuplicate && <p className="context-warning"><CircleAlert aria-hidden="true"/> Možen podvojen zapis</p>}
           <QualityBadge representative={context.quality.isRepresentative}/></section>
         {context.currentMarketEstimate && <><div className="historical-current-divider">
@@ -125,11 +128,7 @@ export function TransactionInspector({ detail, context, model, onChange }: {
         <section className="evidence-ladder"><h3>Dokazi za primerjavo</h3><ol>{evidence.map((item) => <li key={item.label}><span>{item.label}</span><small>{item.detail}</small></li>)}</ol></section>
       </div>}
       {tab === "comparables" && <div className="inspector-tab-content"><section className="context-section"><span className="section-eyebrow">Neposredni dokazi</span><h3>Posli v isti stavbi</h3>
-        <p>Prednost imajo isto leto in najbolj podobna površina.</p>
-        {context.directComparables.length === 0 ? <p className="empty-state">V isti stavbi v izbranem ali sosednjih letih ni primerljivega posla.</p> : <div className="comparable-list">{context.directComparables.map((item) => <button className="direct-comparable-card" type="button" key={item.transactionId} onClick={() => onChange({ kind: "transaction", mode: context.transactionKind, id: item.transactionId })}>
-          <span className="comparable-tier">{tierLabel(item.matchTier)}</span><div><span>{item.contractDate}<small>Posel #{item.transactionId}</small></span><strong>{euro.format(item.amount)}<small>{decimal.format(item.amountPerSqm)} €/m²</small></strong></div>
-          <dl><div><dt>Površina</dt><dd>{decimal.format(item.area)} m²</dd></div><div><dt>Razlika površine</dt><dd>{item.areaDifferencePercent > 0 ? "+" : ""}{decimal.format(item.areaDifferencePercent)} %</dd></div><div><dt>Razlika €/m²</dt><dd>{item.amountPerSqmDifferencePercent > 0 ? "+" : ""}{decimal.format(item.amountPerSqmDifferencePercent)} %</dd></div></dl>
-          <QualityBadge representative={item.isRepresentative} label={item.isRepresentative ? "Reprezentativen posel" : anomalyStatusLabel(item.outlierStatus)}/></button>)}</div>}
+        <DirectComparables items={context.directComparables} selectedAmountPerSqm={amountPerSqm} mode={context.transactionKind} onChange={onChange}/>
       </section><section className="context-section"><span className="section-eyebrow">Širši tržni kontekst</span><h3>Primerjava z okolico</h3>
         {context.incompletePeriod && <p className="context-warning"><CircleAlert aria-hidden="true"/> Leto še ni zaključeno.</p>}
         {context.benchmarks.length === 0 ? <p className="empty-state">Za enako vrsto nepremičnine in isto leto ni dovolj primerljivih poslov.</p> : context.benchmarks.map((item) => <article className="benchmark-card" key={`${item.scope}-${item.geographyId ?? item.radiusMeters ?? 0}`}><div><strong>{item.label}</strong><span>{item.period} · n={item.sampleSize}</span></div><b className="direction-neutral">{item.differencePercent > 0 ? "+" : ""}{decimal.format(item.differencePercent)} % {item.differencePercent >= 0 ? "nad" : "pod"} mediano</b><small>mediana {decimal.format(item.medianAmountPerSqm)} €/m² · zanesljivost {reliabilityLabel(item.reliability)}</small><small>izbor: {benchmarkProfile(item)}</small></article>)}

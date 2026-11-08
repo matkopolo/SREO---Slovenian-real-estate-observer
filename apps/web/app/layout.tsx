@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "maplibre-gl/dist/maplibre-gl.css";
+import "./tokens.css";
 import "./globals.css";
 import "./redesign.css";
 import "./atlas.css";

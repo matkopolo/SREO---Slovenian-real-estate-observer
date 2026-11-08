@@ -1,0 +1,55 @@
+/* Shared visual contract. Component styles consume these; themes do not redefine them. */
+:root {
+  --canvas: #f4f2ec;
+  --surface: #fff;
+  --surface-raised: #fff;
+  --surface-subtle: #f8f7f3;
+  --text: #18201c;
+  --text-muted: #59645e;
+  --text-subtle: #667169;
+  --border: #d8d8d0;
+  --border-strong: #b9beb7;
+  --brand: #143f32;
+  --brand-hover: #176047;
+  --brand-subtle: #e7eee9;
+  --source: #4d5f6f;
+  --calculated: #167266;
+  --model: #70558c;
+  --success: #26744e;
+  --warning: #966711;
+  --danger: #a43e36;
+  --chart-price: #167266;
+  --chart-volume: #55799e;
+  --chart-inflation: #76618d;
+  --shadow-sm: 0 1px 4px rgba(24, 32, 28, .05);
+  --shadow-md: 0 12px 28px rgba(24, 32, 28, .10);
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 9px;
+  --font-caption: 12px;
+  --font-body: 14px;
+  --font-title: 18px;
+  --font-value: 24px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --header-height: 62px;
+  /* Compatibility aliases for existing map/chart styles. */
+  --ink: var(--text);
+  --muted: var(--text-muted);
+  --line: var(--border);
+  --green: var(--brand);
+  --green-dark: var(--brand-hover);
+  --surface-soft: var(--surface-subtle);
+  --shadow: var(--shadow-md);
+  --radius: var(--radius-md);
+  --sage: #dce8dc;
+  --orange: #b85635;
+  --orange-soft: #f6e5df;
+}
+
+@media (max-width: 760px) {
+  :root { --header-height: 58px; }
+}

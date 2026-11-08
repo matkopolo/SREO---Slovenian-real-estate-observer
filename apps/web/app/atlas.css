@@ -1,27 +1,4 @@
 /* Property Intelligence Atlas: composition and cartographic visual language. */
-:root {
-  --canvas: #f4f2ec;
-  --surface-subtle: #f8f7f3;
-  --text: #18201c;
-  --text-muted: #59645e;
-  --text-subtle: #778079;
-  --border: #d8d8d0;
-  --border-strong: #b9beb7;
-  --brand: #143f32;
-  --brand-hover: #176047;
-  --brand-subtle: #e7eee9;
-  --chart-price: #167266;
-  --chart-volume: #55799e;
-  --chart-inflation: #76618d;
-  --calculated: #167266;
-  --model: #70558c;
-  --radius-sm: 5px;
-  --radius-md: 7px;
-  --radius-lg: 9px;
-  --shadow-sm: 0 1px 4px rgba(24, 32, 28, .05);
-  --shadow-md: 0 12px 28px rgba(24, 32, 28, .10);
-}
-
 body {
   background-color: var(--canvas);
   background-image: linear-gradient(rgba(20, 63, 50, .018) 1px, transparent 1px),
@@ -31,7 +8,11 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-.topbar { height: 62px; border-color: rgba(20, 63, 50, .15); background: rgba(250, 249, 245, .94); }
+.topbar { height: var(--header-height); border-color: #294b3e; background: #102e25; color: #f4f2ec; }
+.topbar .brand-wordmark strong { color: #f4f2ec; }
+.topbar .brand-wordmark > span { color: #b4c9bc; }
+.topbar nav a, .topbar nav a.active, .topbar .updated, .topbar .mobile-menu { color: #e1eae3; }
+.topbar nav a.active::after { background: #d0ac72; }
 .brand { letter-spacing: -.015em; }
 .brand-mark { border-radius: 5px; box-shadow: none; }
 .topbar nav a { font-size: 13px; }
@@ -40,10 +21,10 @@ main { padding-top: 0; }
 
 .page-intro {
   position: relative;
-  min-height: 178px;
+  min-height: 144px;
   align-items: center;
   margin: 0 -24px;
-  padding: 30px 24px 27px;
+  padding: 24px;
   overflow: hidden;
   border-bottom: 1px solid rgba(20, 63, 50, .15);
 }
@@ -57,13 +38,13 @@ main { padding-top: 0; }
     linear-gradient(156deg, transparent 44%, var(--brand) 45%, transparent 46%) 22px 8px / 118px 84px;
   clip-path: polygon(4% 20%, 34% 3%, 58% 24%, 94% 8%, 99% 69%, 70% 92%, 38% 73%, 8% 96%);
 }
-.page-intro h1 { max-width: 760px; font-size: clamp(32px, 3.3vw, 44px); line-height: 1.06; letter-spacing: -.045em; }
-.page-intro p { margin-top: 10px; max-width: 680px; font-size: 16px; }
+.page-intro h1 { max-width: 760px; font-size: clamp(28px, 2.5vw, 36px); line-height: 1.15; letter-spacing: -.035em; }
+.page-intro p { margin-top: 8px; max-width: 680px; font-size: var(--font-body); }
 .page-eyebrow { font-size: 11px; letter-spacing: .12em; }
 .primary-action { border-radius: 5px; box-shadow: none; }
 
 .market-context-bar {
-  top: 62px;
+  top: var(--header-height);
   margin: 0 -24px 24px;
   padding: 10px 24px;
   border-bottom: 1px solid var(--border);
@@ -79,47 +60,47 @@ main { padding-top: 0; }
 .primary-grid, .primary-grid.selection-active {
   display: grid;
   grid-template-columns: minmax(390px, 42fr) minmax(0, 58fr);
-  grid-template-areas: "snapshot map" "inspector map";
+  grid-template-areas: "snapshot snapshot" "inspector map";
   gap: 0;
   align-items: start;
-  margin-bottom: 54px;
+  margin-bottom: 36px;
   border-block: 1px solid var(--border-strong);
   background: var(--surface);
 }
 .primary-grid > .market-snapshot { grid-area: snapshot; }
 .primary-grid > .map-panel { grid-area: map; }
 .primary-grid > .context-column { grid-area: inspector; }
-.primary-grid > .market-snapshot,
 .primary-grid > .context-column { border-right: 1px solid var(--border-strong); }
 
 .market-snapshot {
   margin: 0;
-  padding: 28px 30px 24px;
+  padding: 20px 24px 16px;
   border: 0;
   border-radius: 0;
   background: var(--surface);
   box-shadow: none;
+  border-bottom: 1px solid var(--border);
 }
-.snapshot-heading { align-items: start; padding-bottom: 8px; }
+.snapshot-heading { flex-wrap: wrap; align-items: start; gap: 10px; padding-bottom: 10px; border-bottom: 0; }
 .snapshot-heading h2 {
   max-width: 100%;
   margin: 3px 0 2px;
   overflow-wrap: anywhere;
   color: var(--brand);
-  font-size: clamp(25px, 2vw, 31px);
-  line-height: 1.08;
-  letter-spacing: -.035em;
-  text-transform: uppercase;
+  font-size: var(--font-value);
+  line-height: 1.2;
+  letter-spacing: -.025em;
+  text-transform: none;
 }
 .snapshot-heading p { margin: 7px 0 2px; color: var(--text); font-size: 13px; font-weight: 700; }
 .snapshot-heading small { color: var(--text-muted); font-size: 12px; }
-.snapshot-provenance { padding-top: 3px; }
-.snapshot-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 8px; }
+.snapshot-provenance { padding-top: 0; flex-wrap: wrap; }
+.snapshot-metrics { grid-template-columns: 1.3fr repeat(3, minmax(0, 1fr)); margin-top: 8px; align-items: start; }
 .snapshot-metrics > div { min-height: 66px; padding: 9px 12px 7px; border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
-.snapshot-metrics > div:nth-child(2) { padding-left: 0; border-left: 0; }
-.snapshot-metrics span { font-size: 10px; letter-spacing: .05em; text-transform: uppercase; }
+.snapshot-metrics > div:nth-child(2) { padding-left: 12px; }
+.snapshot-metrics span { font-size: var(--font-caption); letter-spacing: 0; text-transform: none; }
 .snapshot-metrics strong, .snapshot-primary strong { font-size: clamp(15px, 1.25vw, 19px); line-height: 1.12; }
-.snapshot-primary { grid-column: 1 / -1; }
+.snapshot-primary { grid-column: auto; }
 .snapshot-primary { min-height: 58px !important; padding: 7px 0 6px !important; border-top: 0 !important; border-left: 0 !important; }
 .snapshot-primary strong { color: var(--brand); font-size: clamp(20px, 1.55vw, 24px); }
 .snapshot-secondary { margin: 5px 0 0; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; line-height: 1.55; }
@@ -127,14 +108,14 @@ main { padding-top: 0; }
 .primary-grid > .map-panel {
   position: sticky;
   top: 126px;
-  min-height: 720px;
+  min-height: 600px;
   height: calc(100vh - 146px);
   max-height: 880px;
   border: 0;
   border-radius: 0;
   box-shadow: none;
 }
-.primary-grid .maplibre-canvas { min-height: 720px; }
+.primary-grid .maplibre-canvas { min-height: 600px; }
 .map-heading { left: 18px; right: 18px; top: 16px; border: 1px solid rgba(20, 63, 50, .13); border-radius: 5px; box-shadow: var(--shadow-sm); }
 .map-heading h2 { font-size: 15px; }
 .building-search { top: 84px; left: 18px; }
@@ -209,11 +190,11 @@ main { padding-top: 0; }
 
 .context-column { min-width: 0; }
 .context-panel { min-height: 0; border: 0; border-radius: 0; box-shadow: none; }
-.context-panel > header { padding: 22px 30px 14px; border-top: 1px solid var(--border); }
-.context-panel > header h2 { color: var(--brand); font-size: clamp(19px, 1.65vw, 24px); letter-spacing: -.025em; }
-.context-panel > :not(header) { margin-right: 30px; margin-left: 30px; }
+.context-panel > header { padding: 16px 24px 12px; border-top: 1px solid var(--border); }
+.context-panel > header h2 { color: var(--brand); font-size: var(--font-title); line-height: 1.35; letter-spacing: -.015em; overflow-wrap: anywhere; }
+.context-panel > :not(header) { margin-right: 24px; margin-left: 24px; }
 .selection-active .market-snapshot { background: var(--surface-subtle); }
-.selection-active .market-snapshot .snapshot-metrics { opacity: .72; }
+.selection-active .market-snapshot .snapshot-metrics { opacity: 1; }
 .selection-active .context-panel > header { border-top-color: var(--brand); }
 .tab-list { gap: 18px; border-bottom-color: var(--border-strong); }
 .tab-list button { padding: 0 1px; border-bottom-width: 2px; }
@@ -285,7 +266,7 @@ main { padding-top: 0; }
 .suppressed-statistic, .model-evidence { padding: 16px; }
 .direct-comparable-card, .component-detail-card { padding: 12px; }
 .benchmark-card { padding-block: 12px; }
-.estimate-method div, .building-market-kpis div { padding: 9px; }
+.estimate-method div, .building-market-kpis div { padding: 8px 0; border-radius: 0; border-top: 1px solid var(--border); background: transparent; }
 .legal-footer { margin-top: 48px; border-top: 1px solid var(--border-strong); border-radius: 0; background: transparent; }
 
 @media (max-width: 1100px) {
@@ -309,17 +290,20 @@ main { padding-top: 0; }
   .context-panel > header { border-top: 0; }
   .selection-active .market-snapshot .snapshot-metrics { opacity: 1; }
   .chart-grid { gap: 32px; }
+  .snapshot-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 760px) {
   .topbar { height: 58px; }
+  .topbar nav.open { background: #102e25; }
   main { width: min(100% - 24px, 1480px); }
   .page-intro { min-height: 0; margin-inline: -12px; padding: 20px 12px 16px; }
   .page-intro::after { left: 40%; }
   .page-intro h1 { font-size: 30px; }
   .market-context-bar { top: 58px; margin-inline: -12px; padding-inline: 12px; }
-  .market-snapshot { padding: 22px 16px; }
-  .snapshot-heading h2 { font-size: 25px; }
+  .market-snapshot { padding: 16px; }
+  .snapshot-heading { gap: 8px; }
+  .snapshot-heading h2 { font-size: 22px; }
   .snapshot-provenance { justify-content: flex-start; }
   .snapshot-primary strong { font-size: 21px; }
   .primary-grid > .map-panel { height: 440px; min-height: 440px; }

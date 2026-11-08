@@ -1,41 +1,5 @@
-:root {
-  --canvas: #f5f4ef;
-  --surface: #fff;
-  --surface-raised: #fff;
-  --surface-subtle: #f0f3ef;
-  --text: #15211b;
-  --text-muted: #5e6962;
-  --text-subtle: #7a837d;
-  --border: #d9dfda;
-  --border-strong: #b9c4bc;
-  --brand: #0b5138;
-  --brand-hover: #073e2c;
-  --brand-subtle: #e5f0e9;
-  --source: #4d5f6f;
-  --calculated: #08736a;
-  --model: #6d4b91;
-  --success: #26744e;
-  --warning: #966711;
-  --danger: #a43e36;
-  --chart-price: #08736a;
-  --chart-volume: #416e9c;
-  --chart-inflation: #75529b;
-  --shadow-sm: 0 2px 8px rgba(24, 43, 32, .06);
-  --shadow-md: 0 15px 35px rgba(24, 43, 32, .09);
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 15px;
-  --ink: var(--text);
-  --muted: var(--text-muted);
-  --line: var(--border);
-  --green: var(--brand);
-  --green-dark: var(--brand-hover);
-  --surface-soft: var(--surface-subtle);
-  --shadow: var(--shadow-md);
-  --radius: var(--radius-md);
-}
-
-body { font-size: 15px; line-height: 1.45; }
+/* Shared controls and evidence components; palette lives in tokens.css. */
+body { font-size: var(--font-body); line-height: 1.5; }
 button, input, select { font: inherit; }
 button { min-height: 40px; }
 strong, .snapshot-metrics, .transaction-amount, .estimate-range-values,

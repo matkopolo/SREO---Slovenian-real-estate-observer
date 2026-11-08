@@ -58,7 +58,9 @@ function PropertyHistoryContent({ transactionId, onChange }: { transactionId: nu
         <summary>{asset.kind === "parcel" ? "Parcela" : "Del stavbe"} · k. o. {asset.cadastralCode} · {asset.number}{asset.partNumber ? ` / del ${asset.partNumber}` : ""} · {asset.events.length} zapisov</summary>
         {asset.truncated && <p className={styles.warning}>Prvih 200 zapisov; časovnica je skrajšana in primerjave niso izračunane.</p>}
         {hasPossibleDevelopment(asset) && <p className={styles.warning}>Možna poznejša pozidava: po evidentirani prodaji zemljišča obstaja hišni posel z isto geolokacijsko parcelno referenco in poznejšim letom gradnje. Povezava ni dokaz gradnje ali lastništva parcele.</p>}
-        <ol className={styles.timeline}>{asset.events.map((event) => <li key={`${event.transactionId}:${event.evidence}:${event.componentId}`}>
+        <ol className={styles.timeline}>{asset.events.map((event) => <li key={`${event.transactionId}:${event.evidence}:${event.componentId}`}
+          aria-current={event.transactionId === transactionId ? "true" : undefined}>
+          {event.transactionId === transactionId && <span className={styles.current}>Izbrani posel</span>}
           <button type="button" onClick={() => onChange({ kind: "transaction", mode: "sale", id: event.transactionId })}>
             {event.contractDate ?? "Datum ni znan"} · Posel #{event.transactionId} →</button>
           <p>{event.evidence === "exact_identity" ? "Enak katastrski identifikator" : "Samo geolokacijska referenca stavbe"} · {propertyGroupLabel(event.propertyGroup)}</p>

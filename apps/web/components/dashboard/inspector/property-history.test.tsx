@@ -27,6 +27,13 @@ it("does not accept stale results after selecting another transaction", async ()
   await act(async () => resolve(history));
   expect(screen.queryByRole("button", { name: /Posel #123/ })).not.toBeInTheDocument();
 });
+it("marks the selected sale in the history without removing other evidence", async () => {
+  vi.mocked(loadPropertyHistory).mockResolvedValue(history);
+  render(<PropertyHistory transactionId={123} onChange={vi.fn()}/>);
+  const selected = await screen.findByText("Izbrani posel");
+  expect(selected.closest("li")).toHaveAttribute("aria-current", "true");
+  expect(screen.getByText("1/2")).toBeInTheDocument();
+});
 it("keeps an error distinct from missing identities", async () => {
   vi.mocked(loadPropertyHistory).mockRejectedValue(new Error("offline"));
   render(<PropertyHistory transactionId={1} onChange={vi.fn()}/>);
