@@ -315,10 +315,9 @@ export function MarketDashboard() {
         </div>
       </header>
       <main id="overview">
-        <div className="page-intro">
-          <div><span className="page-eyebrow">Dejansko sklenjeni posli · GURS ETN</span>
-            <h1>Je cena nepremičnine realna?</h1>
-            <p>Preverite dejansko stanje trga, poiščite stavbo in primerjajte prodaje ali najeme.</p>
+        <div className="page-intro compact">
+          <div><h1 className="sr-only">DOMOGLASNIK · dejansko sklenjeni nepremičninski posli</h1>
+            <span className="page-eyebrow">Dejansko sklenjeni posli · GURS ETN</span>
           </div>
           <button type="button" className="primary-action" onClick={() => {
             document.querySelector<HTMLElement>(".map-panel")?.scrollIntoView({

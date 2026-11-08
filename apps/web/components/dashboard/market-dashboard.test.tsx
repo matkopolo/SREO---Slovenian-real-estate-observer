@@ -84,7 +84,7 @@ describe("MarketDashboard", () => {
 
   it("renders the map-first market overview", async () => {
     render(<MarketDashboard />);
-    expect(screen.getByRole("heading", { name: "Je cena nepremičnine realna?" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "DOMOGLASNIK · dejansko sklenjeni nepremičninski posli" })).toBeInTheDocument();
     expect(screen.getByRole("application", { name: "Interaktivni zemljevid nepremičninskih poslov v Sloveniji" })).toBeInTheDocument();
     const metrics = await screen.findAllByText("Mediana cene / m²");
     expect(metrics.length).toBeGreaterThan(0);
