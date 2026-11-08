@@ -239,6 +239,10 @@ export function SloveniaMap({
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
+    // MapLibre 6 cannot infer its worker location inside the Next.js bundle (it
+    // resolves to an empty URL, so tiles and boundaries never render). Point it
+    // at the bundler-emitted worker asset explicitly.
+    maplibregl.setWorkerUrl(new URL("maplibre-gl/dist/maplibre-gl-worker.mjs", import.meta.url).href);
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: mapStyle("street"),
