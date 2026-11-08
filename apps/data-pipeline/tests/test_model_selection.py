@@ -213,3 +213,15 @@ def test_shared_fold_preprocessing_matches_full_candidate_pipelines():
         actual = estimator.predict(transformed_validation)
 
         assert np.allclose(actual, expected)
+
+
+def test_too_small_final_holdout_falls_back_instead_of_raising(monkeypatch):
+    features, target, dates, groups = population()
+
+    def too_small(*_args, **_kwargs):
+        raise ValueError("insufficient_holdout_rows:4<30")
+
+    monkeypatch.setattr(model_selection, "final_holdout_split", too_small)
+    result = optimize_model(features, target, dates, groups, settings(), configs())
+    assert result["status"] == "insufficient_final_holdout"
+    assert result["reason"] == "insufficient_holdout_rows:4<30"

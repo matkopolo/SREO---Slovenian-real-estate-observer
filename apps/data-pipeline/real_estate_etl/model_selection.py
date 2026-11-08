@@ -253,11 +253,19 @@ def optimize_model(
     )
     selected = select_configuration(evaluated)
     progress(f"selected: {_configuration_label(selected['configuration'])}")
-    training, calibration, holdout = final_holdout_split(
-        dates, holdout_year, min_training_rows=settings.min_training_rows,
-        min_calibration_rows=settings.min_calibration_rows,
-        min_holdout_rows=settings.min_validation_rows,
-    )
+    try:
+        training, calibration, holdout = final_holdout_split(
+            dates, holdout_year, min_training_rows=settings.min_training_rows,
+            min_calibration_rows=settings.min_calibration_rows,
+            min_holdout_rows=settings.min_validation_rows,
+        )
+    except ValueError as error:
+        # Valid folds do not guarantee a large enough final calibration/holdout year.
+        # Return a status so the caller uses its sparse-group fallback instead of
+        # aborting the whole model refresh for every property group.
+        progress(f"selection unavailable: {error}")
+        return {"status": "insufficient_final_holdout", "reason": str(error),
+                "skipped_folds": skipped, "final_holdout_year": holdout_year}
     final_model = build_pipeline(selected["configuration"], settings.random_seed)
     progress(f"final holdout: fitting pre-{holdout_year} training population")
     holdout_prediction, training_seconds, prediction_seconds = _timed_fit_predict(
