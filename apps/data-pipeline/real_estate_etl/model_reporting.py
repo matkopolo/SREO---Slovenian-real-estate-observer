@@ -90,8 +90,9 @@ def _warnings(metrics: Mapping[str, Any]) -> list[str]:
         for group, raw in groups.items():
             if not isinstance(raw, Mapping):
                 continue
-            temporal = raw.get("temporal", {})
-            spatial = raw.get("spatial", {})
+            # Same keys as the report body: current metrics, then the legacy names.
+            temporal = raw.get("final_holdout", raw.get("temporal", {}))
+            spatial = raw.get("grouped_robustness", raw.get("spatial", {}))
             if isinstance(temporal, Mapping) and (_as_float(temporal.get("r2_log")) or 0) < 0:
                 weak.append(f"{group} temporal")
             if isinstance(spatial, Mapping) and "r2_log" in spatial and (

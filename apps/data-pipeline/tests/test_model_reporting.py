@@ -68,3 +68,23 @@ def test_model_report_warns_about_negative_r_squared_and_low_coverage():
 
     assert "coverage is more than 3 percentage points below nominal" in report
     assert "apartment temporal, apartment spatial" in report
+
+
+def test_negative_r2_warning_reads_current_metric_keys():
+    result = SimpleNamespace(
+        transaction_kind="sale",
+        rows=100,
+        model_version="sale-v3",
+        elapsed_seconds=1,
+        metrics={
+            "rows": 20,
+            "property_groups": {
+                "house": {
+                    "final_holdout": {"rows": 10, "r2_log": -0.007},
+                    "grouped_robustness": {"r2_log": 0.28, "held_out_group_count": 5},
+                }
+            },
+        },
+    )
+
+    assert "negative log R² (worse than a mean baseline): house temporal" in format_model_report(result)
