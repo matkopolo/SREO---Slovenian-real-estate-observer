@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/affordability"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/analytics"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/config"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
@@ -63,6 +64,7 @@ func run() error {
 		Releases:         statisticsRepository,
 		Maps:             statisticsRepository,
 		Economics:        inflationClient,
+		Affordability:    affordability.NewRepository(pool),
 		AllowedOrigins:   cfg.AllowedOrigins,
 		Environment:      cfg.Environment,
 		ApplicationName:  cfg.ApplicationName,

@@ -524,6 +524,39 @@ paths:
           $ref: "#/components/responses/Error"
         "503":
           $ref: "#/components/responses/Error"
+  /api/v1/affordability:
+    get:
+      operationId: getAffordability
+      tags: [Economy]
+      summary: Illustrative borrowing capacity per net-income band
+      description: >-
+        Combines SURS net wage percentiles for the area's municipality (Slovenia when
+        unavailable), Banka Slovenije average rates on new housing loans, the dated
+        Banka Slovenije DSTI and minimum-remaining-income limits, and the area's GURS ETN
+        median EUR/m2 of the latest complete year. A statistical illustration, not a credit
+        offer or a personal assessment.
+      parameters:
+        - name: geographyId
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: propertyGroup
+          in: query
+          required: false
+          schema: { type: string, enum: [apartment, house], default: apartment }
+      responses:
+        "200":
+          description: Inputs with their periods and sources, and one row per income band.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Affordability"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
   /api/v1/sales/transactions/{id}:
     get:
       operationId: getSaleTransaction
@@ -1480,6 +1513,84 @@ components:
         level:
           $ref: "#/components/schemas/GeographyLevel"
         name: {type: string}
+    ContextObservation:
+      type: object
+      required: [series, period, value, sourceTable]
+      properties:
+        series: { type: string }
+        period: { type: string }
+        value: { type: number }
+        sourceTable: { type: string }
+    LendingRule:
+      type: object
+      required: [validFrom, dstiMax, minRemainingIncome, recommendedLtv, sourceUrl, note]
+      properties:
+        validFrom: { type: string, format: date }
+        dstiMax: { type: number }
+        minRemainingIncome: { type: number }
+        recommendedLtv: { type: number }
+        sourceUrl: { type: string }
+        note: { type: string }
+    AffordabilityRow:
+      type: object
+      required: [band, maxInstalment, floorBinding, loan20Years, loan30Years, loan30YearsVariable, loan30YearsStress, priceAtRecommendedLtv, downPayment, affordableSqm, twoEarnersLoan30Years]
+      properties:
+        band:
+          type: object
+          required: [id, netMonthlyIncome]
+          properties:
+            id: { type: string, enum: [p10, q1, p50, mean, q3, p90] }
+            netMonthlyIncome: { type: number }
+        maxInstalment: { type: number }
+        floorBinding: { type: boolean, description: True when the minimum remaining income, not the DSTI ratio, limits the instalment. }
+        loan20Years: { type: number }
+        loan30Years: { type: number }
+        loan30YearsVariable: { type: number }
+        loan30YearsStress: { type: number }
+        priceAtRecommendedLtv: { type: number }
+        downPayment: { type: number }
+        affordableSqm: { type: number, nullable: true }
+        twoEarnersLoan30Years: { type: number }
+    Affordability:
+      type: object
+      required: [wageGeography, wagePeriod, wageSource, rule, rates, stressMarginPoints, market, rows, disclaimer]
+      properties:
+        wageGeography:
+          type: object
+          required: [key, name, nationalFallback]
+          properties:
+            key: { type: string }
+            name: { type: string }
+            nationalFallback: { type: boolean }
+        wagePeriod: { type: string }
+        wageSource: { type: string }
+        rule: { $ref: "#/components/schemas/LendingRule" }
+        rates:
+          type: object
+          required: [fixedOver10Years, variable, aprc, euribor6m]
+          properties:
+            fixedOver10Years: { $ref: "#/components/schemas/ContextObservation" }
+            variable: { $ref: "#/components/schemas/ContextObservation" }
+            aprc:
+              allOf: [{ $ref: "#/components/schemas/ContextObservation" }]
+              nullable: true
+            euribor6m:
+              allOf: [{ $ref: "#/components/schemas/ContextObservation" }]
+              nullable: true
+        stressMarginPoints: { type: number }
+        market:
+          type: object
+          required: [propertyGroup, year, medianPricePerSqm, sampleSize, isPublishable]
+          properties:
+            propertyGroup: { type: string }
+            year: { type: integer }
+            medianPricePerSqm: { type: number, nullable: true }
+            sampleSize: { type: integer, format: int64 }
+            isPublishable: { type: boolean }
+        rows:
+          type: array
+          items: { $ref: "#/components/schemas/AffordabilityRow" }
+        disclaimer: { type: string }
     InflationFactor:
       type: object
       required: [from, to, factor, months, source]

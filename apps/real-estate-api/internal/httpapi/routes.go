@@ -13,6 +13,7 @@ func (s *server) routes() *http.ServeMux {
 	router.HandleFunc("GET /api/v1/data-status", s.dataStatus)
 	router.HandleFunc("GET /api/v1/economy/inflation", s.inflation)
 	router.HandleFunc("GET /api/v1/economy/inflation-factor", s.inflationFactor)
+	router.HandleFunc("GET /api/v1/affordability", s.affordability)
 	router.HandleFunc("GET /api/v1/sales/statistics/resales", s.resaleSummary)
 	router.HandleFunc("GET /api/v1/sales/transactions/{id}/history", s.propertyHistory)
 	router.HandleFunc("GET /api/v1/geographies", s.listGeographies)

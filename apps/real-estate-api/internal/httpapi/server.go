@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/affordability"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/analytics"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/economics"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/geography"
@@ -35,6 +36,7 @@ type Dependencies struct {
 	Releases         analytics.ReleaseStore
 	Maps             analytics.MapStore
 	Economics        economics.Store
+	Affordability    affordability.Store
 	AllowedOrigins   []string
 	Environment      string
 	ApplicationName  string
@@ -42,46 +44,48 @@ type Dependencies struct {
 }
 
 type server struct {
-	logger           *slog.Logger
-	database         databasePinger
-	geographies      geography.Store
-	statistics       analytics.StatisticsStore
-	rentals          analytics.RentalStatisticsStore
-	transactions     analytics.TransactionDetailStore
-	histories        analytics.HistoryStore
-	distributions    analytics.DistributionStore
-	buildings        analytics.BuildingStore
-	anomaliesStore   analytics.AnomalyStore
-	identities       identity.Store
-	models           analytics.ModelStore
-	releases         analytics.ReleaseStore
-	maps             analytics.MapStore
-	economics        economics.Store
-	environment      string
-	applicationName  string
-	applicationBuild string
+	logger             *slog.Logger
+	database           databasePinger
+	geographies        geography.Store
+	statistics         analytics.StatisticsStore
+	rentals            analytics.RentalStatisticsStore
+	transactions       analytics.TransactionDetailStore
+	histories          analytics.HistoryStore
+	distributions      analytics.DistributionStore
+	buildings          analytics.BuildingStore
+	anomaliesStore     analytics.AnomalyStore
+	identities         identity.Store
+	models             analytics.ModelStore
+	releases           analytics.ReleaseStore
+	maps               analytics.MapStore
+	economics          economics.Store
+	affordabilityStore affordability.Store
+	environment        string
+	applicationName    string
+	applicationBuild   string
 }
 
 func New(dependencies Dependencies) http.Handler {
 	s := &server{
-		logger:           dependencies.Logger,
-		database:         dependencies.Database,
-		geographies:      dependencies.Geographies,
-		statistics:       dependencies.Statistics,
-		rentals:          dependencies.Rentals,
-		transactions:     dependencies.Transactions,
-		histories:        dependencies.Histories,
-		distributions:    dependencies.Distributions,
-		buildings:        dependencies.Buildings,
-		anomaliesStore:   dependencies.Anomalies,
-		identities:       dependencies.Identities,
-		models:           dependencies.Models,
-		releases:         dependencies.Releases,
-		maps:             dependencies.Maps,
-		economics:        dependencies.Economics,
-		environment:      dependencies.Environment,
-		applicationName:  dependencies.ApplicationName,
-		applicationBuild: dependencies.ApplicationBuild,
+		logger:             dependencies.Logger,
+		database:           dependencies.Database,
+		geographies:        dependencies.Geographies,
+		statistics:         dependencies.Statistics,
+		rentals:            dependencies.Rentals,
+		transactions:       dependencies.Transactions,
+		histories:          dependencies.Histories,
+		distributions:      dependencies.Distributions,
+		buildings:          dependencies.Buildings,
+		anomaliesStore:     dependencies.Anomalies,
+		identities:         dependencies.Identities,
+		models:             dependencies.Models,
+		releases:           dependencies.Releases,
+		maps:               dependencies.Maps,
+		economics:          dependencies.Economics,
+		affordabilityStore: dependencies.Affordability,
+		environment:        dependencies.Environment,
+		applicationName:    dependencies.ApplicationName,
+		applicationBuild:   dependencies.ApplicationBuild,
 	}
 
 	router := s.routes()
