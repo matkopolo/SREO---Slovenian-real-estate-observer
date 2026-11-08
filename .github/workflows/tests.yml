@@ -81,6 +81,14 @@ jobs:
         working-directory: apps/web
       - run: npm run build
         working-directory: apps/web
+      - name: Atlas install, contract, typecheck, tests and build
+        working-directory: apps/atlas
+        run: |
+          npm ci
+          npm run generate:api-types && git diff --exit-code -- src/generated/api-schema.d.ts
+          npm run typecheck
+          npm test
+          npm run build
       - name: Test production migrations on disposable databases
         run: MIGRATION_TEST_DATABASE_URL="$TEST_DATABASE_URL" pytest -q database/tests
       - name: Build production images (same-origin web)

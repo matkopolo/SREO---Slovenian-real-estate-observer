@@ -144,6 +144,20 @@ services:
       retries: 5
       start_period: 10s
 
+  atlas:
+    # DOMOGLASNIK Atlas: separate three.js/WebGL site on the same API (http://localhost:3100).
+    build:
+      context: ./apps/atlas
+      dockerfile: Dockerfile
+    image: real-estate-atlas:development
+    pull_policy: build
+    ports:
+      - "3100:80"
+    mem_limit: 128m
+    depends_on:
+      real-estate-api:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   pipeline_data:
