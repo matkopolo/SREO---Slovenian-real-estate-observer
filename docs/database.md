@@ -180,3 +180,53 @@ Default local connection: `postgresql://real_estate:real_estate@localhost:5432/r
 The complete source-column reference remains in
 `database/documentation/data-dictionary.md`; statistical population and
 quality definitions are in `docs/statistical-methodology.md`.
+
+## Local database operations
+
+```bash
+make db-up
+```
+
+The default connection is `postgresql://real_estate:real_estate@localhost:5432/real_estate`. Copy `.env.example` to `.env` or export `DATABASE_URL` if you change it.
+
+The database image is built from the official multi-architecture PostgreSQL 16 image with its matching PostGIS package, so it runs natively on Intel/AMD64 and Apple Silicon/ARM64 machines. On a full `docker compose up`, the one-shot `database-migrations` service waits for first-volume initialization to finish, applies unapplied incremental migrations, records them in `public.schema_migrations`, and exits before `pipeline-worker` starts. This also upgrades preserved database volumes; PostgreSQL's image-bundled `/docker-entrypoint-initdb.d` scripts run automatically only when a volume is first created. Schema/script files are copied into images, not bind-mounted from the host. `make db-up` performs the equivalent migration step explicitly. The named Docker volume is preserved when the container image changes, so existing imported data does not need to be downloaded again.
+
+The `building_parts`, `land_parcels`, and `rental_building_parts` tables expose a generated `location geometry(Point,3794)` column backed by a GiST spatial index. It is automatically derived from the original `centroid_e` and `centroid_n` values; the importer does not need to populate it.
+
+To apply only the spatial migration to an already-running PostGIS container:
+
+```bash
+make db-migrate
+```
+
+Return longitude and latitude for a web map with:
+
+```sql
+SELECT
+    id,
+    ST_X(ST_Transform(location, 4326)) AS longitude,
+    ST_Y(ST_Transform(location, 4326)) AS latitude
+FROM building_parts
+WHERE location IS NOT NULL;
+```
+
+The point is the source property's centroid, not necessarily an entrance or postal-address coordinate. A transaction can also reference multiple property rows and therefore multiple map points.
+
+### Development memory budget
+
+PostgreSQL/PostGIS remains the source of truth and analytical engine; the
+dataset is never copied wholesale into Go memory. Docker Compose applies
+development ceilings of 4 GB for PostgreSQL, 3 GB for the offline pipeline
+worker, 512 MB for the Go API, and 768 MB for the web application. These are
+maximums, not reserved memory.
+
+Within the 4 GB database ceiling, Compose configures PostgreSQL with 1 GB
+`shared_buffers`, 64 MB per-node `work_mem`, 512 MB
+`maintenance_work_mem`, a 3 GB effective cache estimate, and up to four
+parallel workers per gather. The container has 1 GB of shared memory for parallel
+PostgreSQL operations; this is included in, not added to, its memory ceiling. These settings target the periodic offline
+analytics rebuild; PostgreSQL/PostGIS still owns all durable data.
+
+Allocate 8–12 GB to Docker Desktop for a full model refresh alongside
+PostgreSQL and image builds. The API uses bounded SQL queries, pagination, map
+bounding boxes, and precomputed database aggregates.

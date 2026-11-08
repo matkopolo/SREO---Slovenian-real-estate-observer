@@ -97,3 +97,23 @@ into a separate root folder would make imports and access needlessly awkward.
 Pytest supports either layout; this project keeps Python tests outside the
 package because it has functional and PostgreSQL integration tests and because
 that layout tests the installed package boundary.
+
+## Visual Studio Code
+
+Open [real-estate.code-workspace](../real-estate.code-workspace) in VS Code instead of opening an individual application folder:
+
+```bash
+code real-estate.code-workspace
+```
+
+The workspace keeps the complete monorepo visible as one project and recommends the Python/Pylance/Ruff, Go, ESLint/Prettier, Container Tools, PostgreSQL, Makefile, and YAML extensions. Select **Install Workspace Recommended Extensions** when prompted.
+
+Shared configuration in `.vscode/` provides:
+
+- automatic Python environment discovery from `.venv` and pytest discovery from `apps/data-pipeline/tests`;
+- Ruff formatting for Python, Go formatting/import organization, and Prettier for JavaScript/TypeScript/React;
+- ignored generated folders for cleaner search and file watching without hiding the source `data` directory;
+- tasks for starting/stopping the database, linting, testing, and running the verbose import;
+- a **Python: ETL CLI** debugger configuration that can be edited to target another CLI command.
+
+Run a task with **Terminal → Run Task**, run tests from VS Code's Testing panel, or press **F5** to debug the Go API or Python pipeline. The task list also starts, tests, lints, and tails logs for the web dashboard.

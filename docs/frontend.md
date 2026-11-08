@@ -41,9 +41,10 @@ the selected sale with text and `aria-current`, not color alone.
 
 The regression suite covers address-search focus, filtering/URL state, stale
 requests, return-to-municipality behavior, comparable navigation, keyboard tabs,
-history navigation and retained analytical evidence. Live browser review for the
-September 2026 consistency pass was blocked during browser-tool initialization;
-automated DOM tests do not substitute for visual QA at desktop/mobile widths.
+history navigation and retained analytical evidence. Automated DOM tests do not
+render the map or WebGL: the November 2026 review used headless Chromium at
+1440 px and 390 px, which is how the MapLibre 6 empty-worker regression (blank
+base map) was found. Repeat a real-browser pass after map, chart or layout changes.
 
 ### Recent local price rankings and map navigation
 
@@ -174,8 +175,10 @@ commercial deployment.
 
 ## API and failure behavior
 
-`NEXT_PUBLIC_API_URL` selects the backend (default local value
-`http://localhost:8080`). Requests use abort signals to prevent stale filter
+In Docker Compose the web image is built with an empty `NEXT_PUBLIC_API_URL`, so
+the browser calls same-origin `/api/*` and the Next.js server proxies it to the
+`real-estate-api` service. Outside Compose the variable is unset and requests go
+directly to `http://localhost:8080`. Requests use abort signals to prevent stale filter
 responses from overwriting a newer selection. API errors and unavailable
 statistics produce visible states. The frontend never replaces unavailable
 live statistics with demo values.

@@ -8,8 +8,10 @@ transactions in a recent period. Selecting a building/transaction uses its known
 municipality; selecting an area uses that area. See [frontend behavior](../../docs/frontend.md)
 for date expansion, land filters and map navigation.
 
-Next.js frontend for the Slovenian real-estate analytics platform. It consumes
-the Go API from `NEXT_PUBLIC_API_URL`. If that API is unavailable, the
+Next.js frontend for the Slovenian real-estate analytics platform. In Docker
+Compose the browser calls same-origin `/api/*`, which the Next.js server proxies
+to the `real-estate-api` service (`next.config.ts`); the image is built with an
+empty `NEXT_PUBLIC_API_URL`. If that API is unavailable, the
 dashboard shows an explicit error state; it does not substitute generated or
 demo market values.
 
@@ -26,8 +28,9 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:3000>. The default API is <http://localhost:8080>;
-override it with:
+Open <http://localhost:3000>. Outside Compose, `NEXT_PUBLIC_API_URL` is unset
+and the browser calls the API directly at <http://localhost:8080> (the
+`real-estate-api` proxy host only resolves inside Compose); override it with:
 
 ```bash
 NEXT_PUBLIC_API_URL=https://api.example.si npm run dev
@@ -80,3 +83,15 @@ no API key. Their URLs and attribution live in `lib/map-styles.ts`, isolated
 from the map component so a licensed production provider can replace them
 later. Live clusters, property points, boundaries, and statistics come from
 the Go API.
+
+## Rebuild only the frontend
+
+For a frontend-only rebuild that must not restart the scheduled worker:
+
+```bash
+docker compose up -d --build --force-recreate --no-deps web
+```
+
+The checked-in MapLibre basemaps use public development tile services and need
+no local secret or API key. They are suitable for this repository's current
+local-use stage; choose a licensed tile service before public production use.
