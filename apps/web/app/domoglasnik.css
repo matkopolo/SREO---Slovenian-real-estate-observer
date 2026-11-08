@@ -40,3 +40,16 @@
   .land-filter-row { grid-template-columns: minmax(0, 1fr); margin-block: 12px; }
   .land-filter-row .land-scope-note { padding-block: 4px; }
 }
+
+/* Recent price rankings: one direction at a time, five rows per page. */
+.recent-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin-top: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.recent-switch button { min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px 10px; border: 0; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.recent-switch button + button { border-left: 1px solid var(--border); }
+.recent-switch button span { min-width: 22px; padding: 1px 7px; border-radius: 999px; background: var(--surface-subtle); color: var(--text-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.recent-switch button[aria-pressed=true] { background: var(--brand); color: #fff; }
+.recent-switch button[aria-pressed=true] span { background: rgba(255,255,255,.18); color: #fff; }
+.recent-switch button:focus-visible, .recent-pager button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.recent-list { margin-top: 8px; }
+.recent-pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.recent-pager button { min-height: 40px; display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--brand); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.recent-pager button:disabled { color: var(--text-subtle); cursor: default; opacity: .6; }

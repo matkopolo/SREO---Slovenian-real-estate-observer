@@ -41,3 +41,24 @@ it("distinguishes an API failure from an empty population", async () => {
   await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("ni bilo mogoče naložiti"));
   expect(screen.queryByText(/ni ustreznih reprezentativnih poslov/)).not.toBeInTheDocument();
 });
+
+it("shows one ranking at a time, five rows per page", async () => {
+  const many = (direction: "highest" | "lowest", offset: number) => Array.from({ length: 7 }, (_, index) => ({
+    transactionId: offset + index, direction, propertyGroup: "apartment" as const,
+    amount: 100000 + index, amountPerSqm: 2000, area: 50, contractDate: "2025-11-01",
+  }));
+  vi.mocked(loadRecentTransactions).mockResolvedValue({ ...result, items: [...many("highest", 100), ...many("lowest", 200)] });
+  render(<RecentTransactions {...base}/>);
+  await screen.findByRole("button", { name: "Odpri prodajo #100" });
+  expect(screen.getAllByRole("button", { name: /Odpri prodajo/ })).toHaveLength(5);
+  expect(screen.queryByRole("button", { name: "Odpri prodajo #200" })).not.toBeInTheDocument();
+  expect(screen.getByText("1–5 od 7")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Prejšnjih 5 poslov" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Naslednjih 5 poslov" }));
+  expect(screen.getAllByRole("button", { name: /Odpri prodajo/ })).toHaveLength(2);
+  expect(screen.getByText("6–7 od 7")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /Najnižje prodaje/ }));
+  expect(screen.getByRole("button", { name: /Najnižje prodaje/ })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "Odpri prodajo #200" })).toBeInTheDocument();
+  expect(screen.getByText("1–5 od 7")).toBeInTheDocument();
+});
