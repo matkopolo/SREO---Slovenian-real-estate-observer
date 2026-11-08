@@ -11,9 +11,9 @@ import uuid
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Thread, current_thread, main_thread
 
 import psycopg
 
@@ -580,6 +580,27 @@ def _refresh_system_unlocked(
         raise
 
 
+#: Longest single sleep. The deadline is wall-clock time: Docker Desktop pauses
+#: its VM while the host sleeps and a monotonic wait does not advance then, so a
+#: single 14-day Event.wait() silently stretched into months.
+SCHEDULER_POLL_SECONDS = 300
+
+
+def wait_until(
+    deadline: datetime,
+    stop_event: Event,
+    *,
+    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    poll_seconds: float = SCHEDULER_POLL_SECONDS,
+) -> None:
+    """Sleep in short slices until a wall-clock deadline or a stop request."""
+    while not stop_event.is_set():
+        remaining = (deadline - now()).total_seconds()
+        if remaining <= 0:
+            return
+        stop_event.wait(min(remaining, poll_seconds))
+
+
 def scheduled_refresh_loop(
     database_url: str,
     *,
@@ -591,6 +612,8 @@ def scheduled_refresh_loop(
     health_file: Path | None = None,
     stop_event: Event | None = None,
     refresh: Callable[..., SystemRefreshResult] = refresh_system,
+    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    poll_seconds: float = SCHEDULER_POLL_SECONDS,
 ) -> None:
     """Run immediately, then every interval; retry failures without losing last-good health."""
     if interval_days < 1:
@@ -602,7 +625,9 @@ def scheduled_refresh_loop(
     def request_stop(_signal, _frame) -> None:
         stop_event.set()
 
-    if stop_event is not None and os.getpid() == 1:
+    # Compose runs the worker under tini (init: true), so it is not PID 1; install
+    # graceful-stop handlers whenever the loop owns the main thread.
+    if current_thread() is main_thread():
         signal.signal(signal.SIGTERM, request_stop)
         signal.signal(signal.SIGINT, request_stop)
 
@@ -621,14 +646,16 @@ def scheduled_refresh_loop(
             if health_file:
                 health_file.parent.mkdir(parents=True, exist_ok=True)
                 health_file.touch()
-            wait_seconds = interval_days * 24 * 60 * 60
+            wait = timedelta(days=interval_days)
             logger.info(
-                "Scheduled refresh succeeded; next run in %s days.", interval_days
+                "Scheduled refresh succeeded; next run in %s days (at %s).",
+                interval_days, (now() + wait).isoformat(timespec="minutes"),
             )
         except Exception as exc:
             logger.exception("Scheduled refresh failed: %s", exc)
-            wait_seconds = retry_hours * 60 * 60
+            wait = timedelta(hours=retry_hours)
             logger.warning(
-                "Retrying scheduled refresh in %s hour(s).", retry_hours
+                "Retrying scheduled refresh in %s hour(s) (at %s).",
+                retry_hours, (now() + wait).isoformat(timespec="minutes"),
             )
-        stop_event.wait(wait_seconds)
+        wait_until(now() + wait, stop_event, now=now, poll_seconds=poll_seconds)

@@ -18,6 +18,7 @@ from real_estate_etl.operations import (
     refresh_system,
     reset_market_data,
     scheduled_refresh_loop,
+    wait_until,
 )
 
 
@@ -247,3 +248,55 @@ def test_scheduled_refresh_runs_immediately_and_marks_health(tmp_path: Path):
         )
 
     assert health.is_file()
+
+
+def test_wait_until_uses_the_wall_clock_deadline():
+    """A paused VM does not advance monotonic waits; the wall-clock check must end the wait."""
+    from datetime import datetime, timedelta, timezone
+
+    start = datetime(2026, 9, 7, tzinfo=timezone.utc)
+    clock = {"now": start}
+    waits = []
+
+    class FakeEvent:
+        def is_set(self):
+            return False
+
+        def wait(self, seconds):
+            waits.append(seconds)
+            # Simulate the host sleeping: far more wall time passes than was waited.
+            clock["now"] += timedelta(days=20)
+
+    wait_until(start + timedelta(days=14), FakeEvent(), now=lambda: clock["now"], poll_seconds=300)
+
+    assert waits == [300]
+
+
+def test_scheduler_reruns_after_the_interval_and_stops_cleanly(tmp_path: Path):
+    from datetime import datetime, timedelta, timezone
+
+    clock = {"now": datetime(2026, 9, 7, tzinfo=timezone.utc)}
+    calls = []
+    stop = Event()
+    context = MagicMock()
+    context.__enter__.return_value = MagicMock()
+
+    def refresh(*_args, **_kwargs):
+        calls.append(clock["now"])
+        if len(calls) == 2:
+            stop.set()
+        clock["now"] += timedelta(days=15)  # the refresh plus a long host sleep
+        return SystemRefreshResult(RefreshSummary(0, 34, 0), {}, {})
+
+    def tick():
+        clock["now"] += timedelta(days=1)  # wall time keeps moving between checks
+        return clock["now"]
+
+    with patch("real_estate_etl.operations.psycopg.connect", return_value=context):
+        scheduled_refresh_loop(
+            "postgresql://example", output_dir=tmp_path, workers=1, verbose=False,
+            stop_event=stop, refresh=refresh, now=tick, poll_seconds=0.01,
+        )
+
+    assert len(calls) == 2
+
