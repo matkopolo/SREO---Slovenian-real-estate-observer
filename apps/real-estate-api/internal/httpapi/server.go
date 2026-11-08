@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/affordability"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/analytics"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/construction"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/economics"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/geography"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/identity"
@@ -37,6 +38,7 @@ type Dependencies struct {
 	Maps             analytics.MapStore
 	Economics        economics.Store
 	Affordability    affordability.Store
+	Construction     construction.Store
 	AllowedOrigins   []string
 	Environment      string
 	ApplicationName  string
@@ -60,6 +62,7 @@ type server struct {
 	maps               analytics.MapStore
 	economics          economics.Store
 	affordabilityStore affordability.Store
+	construction       construction.Store
 	environment        string
 	applicationName    string
 	applicationBuild   string
@@ -83,6 +86,7 @@ func New(dependencies Dependencies) http.Handler {
 		maps:               dependencies.Maps,
 		economics:          dependencies.Economics,
 		affordabilityStore: dependencies.Affordability,
+		construction:       dependencies.Construction,
 		environment:        dependencies.Environment,
 		applicationName:    dependencies.ApplicationName,
 		applicationBuild:   dependencies.ApplicationBuild,

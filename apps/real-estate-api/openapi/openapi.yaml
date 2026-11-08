@@ -557,6 +557,130 @@ paths:
           $ref: "#/components/responses/Error"
         "503":
           $ref: "#/components/responses/Error"
+  /api/v1/construction/summary:
+    get:
+      operationId: getConstructionSummary
+      tags: [Construction]
+      summary: Registered buildings by year built, SURS permits and TED public works for an area
+      description: >-
+        Registered GURS buildings are completed or measurable buildings, not construction in
+        progress. SURS permits are counts per municipality and year. TED notices are public
+        works above the EU threshold with region-level location only.
+      parameters:
+        - name: geographyId
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: fromYear
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1900 }
+        - name: toYear
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1900 }
+        - name: withDwellings
+          in: query
+          required: false
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Summary with its sources.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConstructionSummaryResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/construction/map:
+    get:
+      operationId: getConstructionMap
+      tags: [Construction]
+      summary: Municipality aggregates (zoom < 12) or registered building points (zoom ≥ 12)
+      parameters:
+        - name: geographyId
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: fromYear
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1900 }
+        - name: toYear
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1900 }
+        - name: withDwellings
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: bbox
+          in: query
+          required: true
+          schema: { type: string }
+        - name: zoom
+          in: query
+          required: true
+          schema: { type: number, minimum: 0, maximum: 22 }
+      responses:
+        "200":
+          description: At most 300 municipalities or 3000 buildings; `truncated` marks a cut list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConstructionMapResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/construction/buildings/{eid}:
+    get:
+      operationId: getConstructionBuilding
+      tags: [Construction]
+      parameters:
+        - name: eid
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[0-9]{1,40}$" }
+      responses:
+        "200":
+          description: Cadastre attributes with labels and the number of ETN sale/rental agreements in the building.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConstructionBuilding" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/construction/public-works:
+    get:
+      operationId: listConstructionPublicWorks
+      tags: [Construction]
+      parameters:
+        - name: geographyId
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: fromYear
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1900 }
+        - name: toYear
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1900 }
+        - name: withDwellings
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: TED construction-works notices, newest first, filtered to the area's statistical region.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicWorksResponse" }
+        "400": { $ref: "#/components/responses/Error" }
   /api/v1/sales/transactions/{id}:
     get:
       operationId: getSaleTransaction
@@ -1591,6 +1715,121 @@ components:
           type: array
           items: { $ref: "#/components/schemas/AffordabilityRow" }
         disclaimer: { type: string }
+    ConstructionSummaryResponse:
+      type: object
+      required: [filter, summary, sources]
+      properties:
+        filter:
+          type: object
+          required: [fromYear, toYear, withDwellings]
+          properties:
+            fromYear: { type: integer }
+            toYear: { type: integer }
+            withDwellings: { type: boolean }
+        summary:
+          type: object
+          required: [sourceDate, buildingsByYear, permits, permitsScope, publicWorksLast12Months, publicWorksAwardsLast12Months, publicWorksScope]
+          properties:
+            sourceDate: { type: string, format: date, nullable: true }
+            buildingsByYear:
+              type: array
+              items:
+                type: object
+                required: [year, buildings, dwellings, grossFloorArea]
+                properties:
+                  year: { type: integer }
+                  buildings: { type: integer, format: int64 }
+                  dwellings: { type: integer, format: int64 }
+                  grossFloorArea: { type: number }
+            permits:
+              type: array
+              items:
+                type: object
+                required: [year, buildings, dwellings, floorArea]
+                properties:
+                  year: { type: string }
+                  buildings: { type: number, nullable: true }
+                  dwellings: { type: number, nullable: true }
+                  floorArea: { type: number, nullable: true }
+            permitsScope: { type: string, enum: [slovenia, municipalities] }
+            publicWorksLast12Months: { type: integer, format: int64 }
+            publicWorksAwardsLast12Months: { type: integer, format: int64 }
+            publicWorksScope: { type: string, enum: [slovenia, region] }
+        sources:
+          type: array
+          items:
+            type: object
+            required: [name, licence, note]
+            properties:
+              name: { type: string }
+              licence: { type: string }
+              note: { type: string }
+    ConstructionMapFeature:
+      type: object
+      required: [kind, id, name, longitude, latitude, buildings, dwellings]
+      properties:
+        kind: { type: string, enum: [area, building] }
+        id: { type: string }
+        name: { type: string }
+        longitude: { type: number }
+        latitude: { type: number }
+        buildings: { type: integer, format: int64 }
+        dwellings: { type: integer, format: int64 }
+        yearBuilt: { type: integer }
+        geographyId: { type: integer, format: int64 }
+    ConstructionMapResponse:
+      type: object
+      required: [level, items, count, truncated]
+      properties:
+        level: { type: string, enum: [municipality, building] }
+        items: { type: array, items: { $ref: "#/components/schemas/ConstructionMapFeature" } }
+        count: { type: integer }
+        truncated: { type: boolean }
+    ConstructionBuilding:
+      type: object
+      required: [eid, cadastralCode, buildingNumber, yearBuilt, floors, dwellings, businessUnits, buildingType, loadBearingStructure, registrationStatus, grossFloorArea, recordChangedOn, municipality, municipalityId, longitude, latitude, saleTransactions, rentalTransactions, sourceDate]
+      properties:
+        eid: { type: string }
+        cadastralCode: { type: integer }
+        buildingNumber: { type: integer }
+        yearBuilt: { type: integer, nullable: true }
+        floors: { type: integer, nullable: true }
+        dwellings: { type: integer, nullable: true }
+        businessUnits: { type: integer, nullable: true }
+        buildingType: { type: string, nullable: true }
+        loadBearingStructure: { type: string, nullable: true }
+        registrationStatus: { type: string, nullable: true }
+        grossFloorArea: { type: number, nullable: true }
+        recordChangedOn: { type: string, format: date, nullable: true }
+        municipality: { type: string, nullable: true }
+        municipalityId: { type: integer, format: int64, nullable: true }
+        longitude: { type: number, nullable: true }
+        latitude: { type: number, nullable: true }
+        saleTransactions: { type: integer, format: int64 }
+        rentalTransactions: { type: integer, format: int64 }
+        sourceDate: { type: string, format: date }
+    PublicWorksNotice:
+      type: object
+      required: [publicationNumber, noticeType, publicationDate, title, buyer, winners, regions, value, currency, url]
+      properties:
+        publicationNumber: { type: string }
+        noticeType: { type: string }
+        publicationDate: { type: string, format: date }
+        title: { type: string }
+        buyer: { type: string, nullable: true }
+        winners: { type: array, items: { type: string } }
+        regions: { type: array, items: { type: string } }
+        value: { type: number, nullable: true }
+        currency: { type: string, nullable: true }
+        url: { type: string }
+    PublicWorksResponse:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/PublicWorksNotice" } }
+        total: { type: integer, format: int64 }
+        limit: { type: integer }
+        offset: { type: integer }
     InflationFactor:
       type: object
       required: [from, to, factor, months, source]

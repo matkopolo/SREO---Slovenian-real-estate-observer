@@ -12,6 +12,7 @@ import (
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/affordability"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/analytics"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/config"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/construction"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/economics"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/geography"
@@ -65,6 +66,7 @@ func run() error {
 		Maps:             statisticsRepository,
 		Economics:        inflationClient,
 		Affordability:    affordability.NewRepository(pool),
+		Construction:     construction.NewRepository(pool),
 		AllowedOrigins:   cfg.AllowedOrigins,
 		Environment:      cfg.Environment,
 		ApplicationName:  cfg.ApplicationName,
