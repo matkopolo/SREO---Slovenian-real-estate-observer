@@ -5,17 +5,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { loadDetailedTimeSeries, loadInflation } from "@/lib/api";
 import type { MarketConstraints, InflationPoint, MarketMode, PropertyGroup, TimePoint, YearRange } from "@/lib/types";
 import { Tabs } from "@/components/ui/tabs";
+import { periodLabel } from "@/lib/display-values";
 
 type Tab = "price" | "volume" | "inflation";
 type Interval = "month" | "quarter" | "year";
 const tabs = [{ id: "price" as const, label: "Cena" }, { id: "volume" as const, label: "Število poslov" }, { id: "inflation" as const, label: "Inflacija" }];
 
-function periodLabel(period: string, interval: Interval) {
-  const [year, month] = period.split("-");
-  if (interval === "year") return year;
-  if (interval === "quarter") return `${year} Q${Math.floor((Number(month) - 1) / 3) + 1}`;
-  return `${month}/${year.slice(2)}`;
-}
 
 export function TrendChart({ mode, points, years, propertyGroup, geographyId, area = {} }: {
   mode: MarketMode; points: TimePoint[]; years: YearRange; propertyGroup: PropertyGroup;

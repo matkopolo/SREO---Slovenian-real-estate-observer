@@ -117,3 +117,13 @@ const qualityReasons: Record<string, string> = {
 export function qualityReasonLabel(reason: string) {
   return qualityReasons[reason] ?? "Podatek ni izpolnil enega od pravil kakovosti";
 }
+
+export type PeriodInterval = "month" | "quarter" | "year";
+
+/** API periods are ISO dates ("2024-01-01"); show them at the interval's own precision. */
+export function periodLabel(period: string, interval: PeriodInterval) {
+  const [year, month] = period.split("-");
+  if (interval === "year" || !month) return year;
+  if (interval === "quarter") return `${year} Q${Math.floor((Number(month) - 1) / 3) + 1}`;
+  return `${month}/${year.slice(2)}`;
+}

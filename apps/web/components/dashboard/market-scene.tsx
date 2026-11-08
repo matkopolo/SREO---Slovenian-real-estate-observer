@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { MarketMode, TimePoint } from "@/lib/types";
-import { decimal } from "@/lib/display-values";
+import { decimal, periodLabel } from "@/lib/display-values";
 import styles from "./market-scene.module.css";
 
 export function MarketScene({ points, mode, name }: { points: TimePoint[]; mode: MarketMode; name: string }) {
@@ -15,7 +15,7 @@ export function MarketScene({ points, mode, name }: { points: TimePoint[]; mode:
   const price = (row: TimePoint) => row.isPublishable === false ? null :
     mode === "sale" ? row.medianPricePerSqm : row.medianMonthlyRent;
   const unit = mode === "sale" ? "€/m²" : "€ / mesec";
-  const label = (row: TimePoint) => `${row.period}${row.incomplete ? " *" : ""}`;
+  const label = (row: TimePoint) => `${periodLabel(row.period, "year")}${row.incomplete ? " *" : ""}`;
   useEffect(() => {
     if (!enabled || failed || !host.current || !points.length) return;
     let cancelled = false;

@@ -364,7 +364,9 @@ export function MarketDashboard() {
         />
         <div className={`primary-grid ${context.kind === "building" || context.kind === "transaction" ? "selection-active" : ""}`}>
           <MarketSnapshot title={selectedName} mode={mode} propertyGroup={propertyGroup}
-            overview={data.overview} series={data.timeSeries} years={years} loading={loading} />
+            overview={data.overview} series={data.timeSeries} years={years} loading={loading}
+            dataThrough={(mode === "sale" ? dataStatus?.activeRelease?.analyticsSaleThrough
+              : dataStatus?.activeRelease?.analyticsRentThrough) ?? undefined} />
           <SloveniaMap
             mode={mode}
             context={context}
