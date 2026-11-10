@@ -2841,6 +2841,9 @@ components:
         - confidence
         - warnings
         - methodologyVersion
+        - comparables
+        - subjectLongitude
+        - subjectLatitude
       properties:
         lowerTotal: {type: number}
         centralTotal: {type: number}
@@ -2869,6 +2872,29 @@ components:
           type: array
           items: {type: string}
         methodologyVersion: {type: string, x-internal: true}
+        comparables:
+          description: The agreements the estimate rests on, nearest first, with their place on the map.
+          type: array
+          items: {$ref: '#/components/schemas/MarketComparable'}
+        subjectLongitude: {type: number, description: The subject's position (WGS84), the centre of the search.}
+        subjectLatitude: {type: number}
+    MarketComparable:
+      type: object
+      required: [transactionId, contractDate, amountPerSqm, area, distanceMeters, longitude, latitude]
+      properties:
+        transactionId: {type: integer, format: int64}
+        contractDate: {type: string, format: date}
+        amountPerSqm: {type: number}
+        area: {type: number}
+        distanceMeters: {type: integer}
+        constructionYear: {type: integer, nullable: true}
+        longitude: {type: number}
+        latitude: {type: number}
+        settlement: {type: string, nullable: true}
+        street: {type: string, nullable: true}
+        houseNumber: {type: string, nullable: true}
+        cadastralMunicipalityCode: {type: integer, nullable: true}
+        buildingNumber: {type: string, nullable: true}
     ErrorResponse:
       type: object
       required: [error]
