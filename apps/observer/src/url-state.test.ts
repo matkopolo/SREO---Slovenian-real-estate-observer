@@ -4,7 +4,7 @@ import { DEFAULT_STATE, hasBadArea, hrefWith, pageOf, parseHash, toHash, transac
 describe("explorer address", () => {
   it("round-trips every part of the state", () => {
     const state: ExplorerState = { ...DEFAULT_STATE, g: 269, building: { ko: 1739, st: "1354" }, selected: { kind: "rent", id: 5 }, group: "land", landScope: "forest",
-      landChosen: true, street: "Celovška cesta", years: "2019-2021", layer: "rentPrice", extrude: true, value: true };
+      landChosen: true, street: "Celovška cesta", years: "2019-2021", layer: "rentPrice", value: true };
     expect(parseHash(toHash(state))).toEqual({ ...state, size: undefined });
     const flats: ExplorerState = { ...DEFAULT_STATE, group: "house", size: "100-150", years: 3 };
     expect(toHash(flats)).toBe("#?vrsta=hise&m2=100-150&obdobje=3");
@@ -14,6 +14,9 @@ describe("explorer address", () => {
     expect(toHash(DEFAULT_STATE)).toBe("#");
     expect(toHash(parseHash("#?obdobje=7&od=2021&do=2019&m2=45-70&vrsta=garaze&raba=gozdna"))).toBe("#?vrsta=garaze");
     expect(parseHash("#?sloj=nonsense").layer).toBe("salePrice");
+    // Links to the former 3D view keep opening their area; the flag is not part of the state and is not written back.
+    expect(parseHash("#?g=133&3d=1")).toEqual(parseHash("#?g=133"));
+    expect(toHash(parseHash("#?g=133&3d=1"))).toBe("#?g=133");
     expect(hasBadArea("#?g=abc")).toBe(true);
     expect(hasBadArea("#?g=133")).toBe(false);
   });
