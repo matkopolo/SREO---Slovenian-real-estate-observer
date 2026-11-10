@@ -103,7 +103,7 @@ it("shows unit details, the package note, quality, history with inflation and bu
   expect(details.queryByText(/k\. o\./)).not.toBeInTheDocument();
   expect(details.getByText(/velja za vse dele skupaj/)).toBeInTheDocument();
   expect(details.getByText("Garaža")).toBeInTheDocument();
-  expect(details.getByText(/cena tega dela/)).toHaveTextContent("9000");
+  expect(details.getByText(/cena tega dela/)).toHaveTextContent("9.000");
   expect(details.getByText("Zemljišče pod stavbo ali ob njej (dvorišče, vrt)")).toBeInTheDocument();   // plain words, no GURS paragraph
 
   const register = within(screen.getByText("Podatki iz registra").closest("details")!);
@@ -118,12 +118,12 @@ it("shows unit details, the package note, quality, history with inflation and bu
   expect(quality.getByText(/združuje različne vrste nepremičnin/)).toBeInTheDocument();
   expect(quality.getByText(/Cena izrazito odstopa od podobnih prodaj/)).toBeInTheDocument();
   const how = within(screen.getByText("Kako smo to izračunali").closest("details")!);
-  expect(how.getByText(/običajni razpon 0–2900 €\/m²/)).toBeInTheDocument();
+  expect(how.getByText(/običajni razpon 0–2\.900 €\/m²/)).toBeInTheDocument();
 
   const historySection = within(screen.getByRole("heading", { name: "Prejšnje prodaje te nepremičnine" }).closest("section")!);
   expect(historySection.getAllByRole("listitem").filter((item) => item.closest(".td-events"))).toHaveLength(2);
   expect(historySection.getByText("ta prodaja")).toBeInTheDocument();
-  expect(historySection.getByText(/1000 €\/m²/)).toBeInTheDocument();
+  expect(historySection.getByText(/1\.000 €\/m²/)).toBeInTheDocument();
   expect(historySection.getByText(/Nominalno: .*50\.000.*\(\+50\s%\)/)).toBeInTheDocument();
   expect(await historySection.findByText(/Po upoštevanju inflacije: .*30\.000.*\(\+25\s%\)/)).toBeInTheDocument();
   expect(historySection.getAllByText(/→/)).toHaveLength(2); // one deduplicated pair: dates and prices
@@ -170,7 +170,7 @@ it("gives one verdict from the narrowest area with enough sales, never against i
   const verdict = screen.getByRole("region", { name: "Primerjava cene" });
   // The 500 m circle is too small and Šiška holds only this sale; the settlement is the narrowest honest comparison, and the page says why.
   expect(verdict).toHaveTextContent(/Cena na m² je 4 % pod mediano podobnih stanovanj v naselju Ljubljana/);
-  expect(verdict).toHaveTextContent(/Mediana 4731\s€\/m² iz 295 drugih prodaj v letu 2026 \(do zdaj\)/);
+  expect(verdict).toHaveTextContent(/Mediana 4\.731\s€\/m² iz 295 drugih prodaj v letu 2026 \(do zdaj\)/);
   expect(verdict).toHaveTextContent(/V četrtni skupnosti Šiška je bilo v letu 2026 premalo podobnih prodaj \(1\)/);
   // No standalone value for this flat: the owner goes to the value check instead.
   expect(screen.queryByText(/286\.385/)).not.toBeInTheDocument();
@@ -179,7 +179,7 @@ it("gives one verdict from the narrowest area with enough sales, never against i
   const how = within(screen.getByText("Kako smo to izračunali").closest("details")!);
   expect(how.getByText(/primerjava le s to prodajo/)).toBeInTheDocument();
   expect(how.getByText(/premalo za zanesljivo primerjavo/)).toBeInTheDocument();
-  expect(how.getByText(/okoli/).textContent).toMatch(/4642\s€\/m²/);
+  expect(how.getByText(/okoli/).textContent).toMatch(/4\.642\s€\/m²/);
   expect(how.getByText(/Za oceno ni dovolj podobnih prodaj/)).toBeInTheDocument();   // the very-low-reliability model is hidden
   expect(document.body.textContent).not.toMatch(/P25|P75|hedonsk|\(izračun\)|reprezentativ|undefined|NaN/);
   // A bare "nadstropje" is no floor; the second construction year waits in the register with a note.
@@ -206,14 +206,14 @@ it("counts a building's sales once: header, heading, per-year bars, list and are
   expect(document.querySelector(".be-meta")).toHaveTextContent(`Zgrajena 2023 · 430 enot · zadnja prodaja 4/${year}`);
   const heading = () => document.querySelector(".be-count")!;
   // Whole calendar years: a sale in February five years ago is inside "2021–2026", and its bar is not 0.
-  expect(heading()).toHaveTextContent(new RegExp(`^3 prodaje stanovanj v letih ${year - 5}–${year} \\(velikost 45–70 m²\\), mediana 4000 €/m²\\.$`));
+  expect(heading()).toHaveTextContent(new RegExp(`^3 prodaje stanovanj v letih ${year - 5}–${year} \\(velikost 45–70 m²\\), mediana 4.000 €/m²\\.$`));
   expect(screen.getAllByRole("row")).toHaveLength(4);   // header + 3 sales
   const years = document.querySelector(".be-years")!;
   expect(within(years as HTMLElement).getByText(`${year - 5}: 1`)).toBeInTheDocument();
   expect(within(years as HTMLElement).getByText(`${year}: 1`)).toBeInTheDocument();
   expect(within(years as HTMLElement).getByText(`${year - 1}: 1`)).toBeInTheDocument();
   // One median: the bar uses the same three sales as the heading.
-  expect(document.querySelector(".be-area")).toHaveTextContent(/Srednja polovica poslov: 3500–4700 €\/m²; Ta stavba 4000.*Mediana stavbe je iz istih 3 prodaj kot zgoraj, srednja polovica iz prodaj v območju Bežigrad\./);
+  expect(document.querySelector(".be-area")).toHaveTextContent(/Srednja polovica poslov: 3\.500–4\.700 €\/m²; Ta stavba 4\.000.*Mediana stavbe je iz istih 3 prodaj kot zgoraj, srednja polovica iz prodaj v območju Bežigrad\./);
   fireEvent.click(screen.getByRole("button", { name: "Pokaži vse velikosti" }));
   expect(heading()).toHaveTextContent(new RegExp(`^4 prodaje stanovanj v letih ${year - 5}–${year}, mediana`));
   fireEvent.click(screen.getByRole("button", { name: /Pokaži vse, tudi starejše/ }));

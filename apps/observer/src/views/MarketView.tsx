@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { lastCompleteYear, loadDensity, loadMarket, loadMunicipalityList, loadRegions } from "../api";
+import { lastCompleteYear, loadAreaLists, loadDensity, loadMarket } from "../api";
 import { AreaSearch } from "../components/AreaSearch";
 import { DotMap, Histogram } from "../components/charts";
 import { LoadFailed } from "../components/LoadState";
@@ -8,23 +8,17 @@ import { date, euro, integer, upTo1 } from "../format";
 import { NOUNS } from "../nouns";
 import { count, NOUN_FORMS } from "../plural";
 import { Name, t, tx } from "../i18n";
-import { hashQuery, transactionHref } from "../url-state";
+import { parseHash, transactionHref } from "../url-state";
 
 const SPANS = [1, 3, 5] as const;
 const dateText = (value?: string | null) => value ? date(value) : "—";
 const decimal = { format: upTo1 };
 
-const initialArea = () => {
-  const id = Number(hashQuery().get("g"));
-  return Number.isInteger(id) && id > 0 ? id : undefined;
-};
+const initialArea = () => parseHash().g;
 
 /** Distributions and extremes of one area (any region or municipality), flats or houses. */
 export function MarketView({ cutoff }: { cutoff?: string }) {
-  const lists = useLoad("market-lists", async (signal) => {
-    const [regions, municipalities] = await Promise.all([loadRegions(signal), loadMunicipalityList(signal)]);
-    return { regions: regions.items, municipalities: municipalities.items };
-  });
+  const lists = useLoad("area-lists", (signal) => loadAreaLists(signal));
   const regions = lists.data?.regions ?? [], municipalities = lists.data?.municipalities ?? [];
   const [regionId, setRegionId] = useState<number | undefined>(initialArea);
   const [group, setGroup] = useState<"apartment" | "house">("apartment");

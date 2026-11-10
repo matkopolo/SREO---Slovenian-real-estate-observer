@@ -8,6 +8,7 @@ import { area } from "./en/area";
 import { value } from "./en/value";
 import { sale } from "./en/sale";
 import { pages } from "./en/pages";
+import { overview } from "./en/overview";
 
-export const EN: Record<string, string> = { ...common, ...explorer, ...area, ...value, ...sale, ...pages };
-export const EN_PARTS = { common, explorer, area, value, sale, pages };
+export const EN: Record<string, string> = { ...common, ...explorer, ...area, ...value, ...sale, ...pages, ...overview };
+export const EN_PARTS = { common, explorer, area, value, sale, pages, overview };

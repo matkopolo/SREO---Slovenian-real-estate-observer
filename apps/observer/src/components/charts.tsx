@@ -1,20 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Geometry, Position } from "geojson";
-import { decimal1, integer, upTo1 } from "../format";
+import { decimal1, integer, month, upTo1 } from "../format";
 import { t } from "../i18n";
 
 /** Rendered width of a chart, so the SVG viewBox matches CSS pixels and 11 px text stays 11 px. */
 function useWidth(fallback: number) {
-  const ref = useRef<HTMLElement>(null);
+  // A callback ref: the figure may mount after a "no data" first render, and the observer must follow it.
+  const [element, setElement] = useState<HTMLElement | null>(null);
   const [width, setWidth] = useState(fallback);
   useEffect(() => {
-    const element = ref.current;
     if (!element || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(([entry]) => { const next = Math.round(entry.contentRect.width); if (next > 0) setWidth(next); });
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
-  return [ref, width] as const;
+  }, [element]);
+  return [setElement, width] as const;
 }
 
 const number = { format: integer };
@@ -82,24 +82,36 @@ export function LineChart({ series, unit, label, height = 220, yMax, xLabel = (v
   </figure>;
 }
 
-/** Histogram of a published distribution; bars share one zero-based count scale. */
-export function Histogram({ buckets, unit, label }: { buckets: Array<{ lower: number; upper: number; count: number }>; unit: string; label: string }) {
+/** Histogram of a published distribution; bars share one zero-based count scale. An optional marker names one value (the median). */
+export function Histogram({ buckets, unit, label, marker, format }: {
+  buckets: Array<{ lower: number; upper: number; count: number }>; unit: string; label: string; marker?: { value: number; name: string };
+  /** How an axis value reads ("33.005 €" / "€33,005"); by default the number and the unit. */
+  format?: (value: number) => string;
+}) {
   const [ref, measured] = useWidth(640);
+  const axis = format ?? ((value: number) => `${number.format(value)} ${unit}`);
   if (!buckets.length) return <p className="muted">{t("Ni objavljive porazdelitve.")}</p>;
   const width = Math.max(240, measured);
   const height = 160;
   const max = Math.max(1, ...buckets.map((bucket) => bucket.count));
   const barWidth = (width - 40) / buckets.length;
+  const lower = buckets[0].lower, upper = buckets[buckets.length - 1].upper;
+  // The marker's label has its own strip above the plot, so the tallest bar never runs through it; the marker itself
+  // stays inside the plot (a median in a clipped tail sits at the edge rather than off the chart).
+  const top = marker ? 18 : 0;
+  const markerX = marker && upper > lower ? Math.min(width - 20, Math.max(20, 20 + ((marker.value - lower) / (upper - lower)) * (width - 40))) : null;
   return <figure className="chart" ref={ref}>
-    <svg viewBox={`0 0 ${width} ${height + 22}`} role="img" aria-label={label}>
+    <svg viewBox={`0 0 ${width} ${top + height + 22}`} role="img" aria-label={label}>
       {buckets.map((bucket, index) => {
         const h = (bucket.count / max) * height;
-        return <rect key={index} x={20 + index * barWidth + 1} y={height - h} width={Math.max(1, barWidth - 2)} height={h} rx={2} className="bar">
+        return <rect key={index} x={20 + index * barWidth + 1} y={top + height - h} width={Math.max(1, barWidth - 2)} height={h} rx={2} className="bar">
           <title>{number.format(bucket.lower)}–{number.format(bucket.upper)} {unit}: {number.format(bucket.count)}</title></rect>;
       })}
-      <line x1={20} x2={width - 20} y1={height} y2={height} className="baseline"/>
-      <text x={20} y={height + 16} className="axis">{number.format(buckets[0].lower)} {unit}</text>
-      <text x={width - 20} y={height + 16} textAnchor="end" className="axis">{number.format(buckets[buckets.length - 1].upper)} {unit}</text>
+      {markerX != null && marker && <g><line x1={markerX} x2={markerX} y1={top - 4} y2={top + height} className="marker"/>
+        <text x={markerX > width - 120 ? markerX - 5 : markerX + 5} y={11} textAnchor={markerX > width - 120 ? "end" : "start"} className="marker-label">{marker.name}</text></g>}
+      <line x1={20} x2={width - 20} y1={top + height} y2={top + height} className="baseline"/>
+      <text x={20} y={top + height + 16} className="axis">{axis(buckets[0].lower)}</text>
+      <text x={width - 20} y={top + height + 16} textAnchor="end" className="axis">{axis(buckets[buckets.length - 1].upper)}</text>
     </svg>
   </figure>;
 }
@@ -203,5 +215,80 @@ export function ScaleStrip({ items, unit, label }: { items: Array<{ name: string
     <figcaption><ul className="scale-names">{items.map((item, index) => <li key={index} className={item.current ? "current" : undefined}>
       <i className={item.current ? "scale-key current" : "scale-key"}/>{item.name} {format.format(item.value)}</li>)}</ul>
       <span className="sr-only">{unit}</span></figcaption>
+  </figure>;
+}
+
+/** A tile's trend: recent values as one grey line with the latest as an accent dot; no axes (the tile's value and change carry the numbers). */
+export function Sparkline({ points, label }: { points: Array<number | null>; label: string }) {
+  const width = 96, height = 28;
+  const known = points.flatMap((value, index) => value == null ? [] : [{ value, index }]);
+  if (known.length < 2) return null;
+  const min = Math.min(...known.map((item) => item.value)), max = Math.max(...known.map((item) => item.value));
+  const x = (index: number) => 3 + (index / Math.max(1, points.length - 1)) * (width - 6);
+  const y = (value: number) => max === min ? height / 2 : height - 4 - ((value - min) / (max - min)) * (height - 8);
+  const segments: string[] = [];
+  let open = false;
+  for (const [index, value] of points.entries()) {
+    if (value == null) { open = false; continue; }
+    segments.push(`${open ? "L" : "M"}${x(index).toFixed(1)},${y(value).toFixed(1)}`);
+    open = true;
+  }
+  const path = segments.join(" ");
+  const last = known[known.length - 1];
+  return <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={label}>
+    <path d={path} className="spark-line"/>
+    <circle cx={x(last.index)} cy={y(last.value)} r={3} className="spark-end"/>
+  </svg>;
+}
+
+/** Ranked horizontal bars in one hue, in the caller's order: the name (a link when given), the bar and the value at its tip. */
+export function Bars({ items, label, format, max }: {
+  items: Array<{ key: string | number; name: ReactNode; title?: string; value: number; href?: string; note?: string; current?: boolean; pooled?: boolean }>;
+  label: string; format: (value: number) => string; max?: number;
+}) {
+  if (!items.length) return <p className="muted">{t("Ni objavljivih podatkov.")}</p>;
+  const top = Math.max(1e-9, max ?? Math.max(...items.map((item) => item.value)));
+  return <ol className="bars" aria-label={label}>{items.map((item) => <li key={item.key} title={item.title}
+    className={[item.current ? "current" : "", item.pooled ? "pooled" : ""].filter(Boolean).join(" ") || undefined}>
+    <span className="bar-name">{item.href ? <a href={item.href}>{item.name}</a> : item.name}</span>
+    <span className="bar-track" aria-hidden="true"><i style={{ width: `${Math.max(1, (item.value / top) * 100)}%` }}/></span>
+    <span className="bar-value">{format(item.value)}{item.note ? <small> {item.note}</small> : null}</span>
+  </li>)}</ol>;
+}
+
+/** A column with a rounded top and a square base. */
+const column = (x: number, top: number, width: number, bottom: number) => {
+  const r = Math.min(4, width / 2, Math.max(0, bottom - top));
+  return `M${x},${bottom} V${top + r} A${r},${r} 0 0 1 ${x + r},${top} H${x + width - r} A${r},${r} 0 0 1 ${x + width},${top + r} V${bottom} Z`; // i18n-ignore (SVG path commands)
+};
+
+/** Monthly counts as columns on one zero-based scale; months still being reported are lighter. A year label sits under each January. */
+export function Columns({ items, unit, label }: { items: Array<{ period: string; value: number; incomplete?: boolean }>; unit: string; label: string }) {
+  const [ref, measured] = useWidth(640);
+  if (!items.length) return <p className="muted">{t("Ni objavljivih podatkov.")}</p>;
+  const width = Math.max(240, measured);
+  const height = 150;
+  const pad = { left: 40, right: 8, top: 8, bottom: 22 };
+  const ticks = niceTicks(Math.max(1, ...items.map((item) => item.value)), 3);
+  const top = ticks[ticks.length - 1];
+  const slot = (width - pad.left - pad.right) / items.length;
+  const bar = Math.min(24, Math.max(2, slot - 2));
+  const y = (value: number) => pad.top + (1 - value / top) * (height - pad.top - pad.bottom);
+  return <figure className="chart" ref={ref}>
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={label}>
+      {ticks.map((tick) => <g key={tick}><line x1={pad.left} x2={width - pad.right} y1={y(tick)} y2={y(tick)} className="grid"/>
+        <text x={pad.left - 6} y={y(tick) + 4} textAnchor="end" className="axis">{number.format(tick)}</text></g>)}
+      {items.map((item, index) => {
+        const x = pad.left + index * slot + (slot - bar) / 2;
+        return <g key={item.period}>
+          <path d={column(x, y(item.value), bar, y(0))} className={item.incomplete ? "column incomplete" : "column"}>
+            <title>{`${month(item.period)}: ${number.format(item.value)} ${unit}`}</title></path>
+          {item.period.slice(5, 7) === "01" && <text x={x + bar / 2} y={height - 6} textAnchor="middle" className="axis">{item.period.slice(0, 4)}</text>}
+        </g>;
+      })}
+      <line x1={pad.left} x2={width - pad.right} y1={y(0)} y2={y(0)} className="baseline"/>
+    </svg>
+    <div className="sr-only"><table><thead><tr><th>{t("Mesec")}</th><th>{unit}</th></tr></thead>
+      <tbody>{items.map((item) => <tr key={item.period}><th>{month(item.period)}</th><td>{number.format(item.value)}{item.incomplete ? "*" : ""}</td></tr>)}</tbody></table></div>
   </figure>;
 }

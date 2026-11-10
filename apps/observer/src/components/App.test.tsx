@@ -87,7 +87,7 @@ it("opens on Slovenija: median, change, real change and a flats/houses pair on l
   expect(await screen.findByRole("heading", { level: 1, name: "Slovenija" })).toBeInTheDocument();
   // One copy check; the rest asserts the numbers.
   const lede = await screen.findByText(/Mediana cene stanovanj v 12 mesecih do 30\. 6\. 2026/);
-  expect(lede).toHaveTextContent("2966");
+  expect(lede).toHaveTextContent("2.966");
   expect(lede).toHaveTextContent(/\+9,8\s%/);                                   // 2965,78 / 2700 − 1
   expect(lede).toHaveTextContent(/\+6,6\s%/);                                   // real: 1,0984 / 1,03 − 1
   const pair = screen.getByRole("group", { name: /Vrsta nepremičnine/ });
@@ -113,6 +113,15 @@ it("opens a building with its flat sales only (garages are a separate type)", as
   expect(await screen.findByRole("heading", { level: 1, name: "Dunajska cesta 221, Ljubljana" })).toBeInTheDocument();
   expect(screen.getByText(/2 prodaji stanovanj v letih \d{4}–\d{4}/)).toBeInTheDocument();
   expect(screen.getByRole("combobox", { name: "Vrsta nepremičnine" })).toHaveTextContent("garaža / parkirišče (1)");
+});
+
+it("has a market overview page that carries the explorer's area", async () => {
+  window.location.hash = "#?g=133";
+  render(<App/>);
+  await screen.findByRole("heading", { level: 1, name: "Ljubljana" });
+  fireEvent.click(screen.getByRole("link", { name: "Pregled trga" }));
+  expect(window.location.hash).toBe("#pregled-trga?g=133");
+  expect(await screen.findByRole("heading", { level: 1, name: "Pregled trga: Ljubljana" })).toBeInTheDocument();
 });
 
 it("translates earlier links (#pregled, #kakovost)", async () => {

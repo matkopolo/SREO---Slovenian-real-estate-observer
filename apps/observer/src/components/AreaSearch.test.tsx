@@ -79,7 +79,7 @@ it("lists addresses with their deal counts and a whole-street row, and Enter on 
   type("Celovška cesta");
   const group = await screen.findByRole("group", { name: "Naslovi" });
   const options = within(group).getAllByRole("option");
-  expect(options[0]).toHaveTextContent("Vse prodaje na ulici Celovška cesta (2039)");
+  expect(options[0]).toHaveTextContent("Vse prodaje na ulici Celovška cesta (2.039)");
   expect(options[0]).toHaveTextContent("ulica, Ljubljana · 141 stavb");
   expect(options.find((option) => option.textContent?.includes("Celovška cesta 143, Ljubljana"))).toHaveTextContent("naslov · 28 prodaj · 4 najemi");
   expect(options.find((option) => option.textContent?.includes("Celovška cesta 15A"))).toHaveTextContent("ni evidentiranih poslov");

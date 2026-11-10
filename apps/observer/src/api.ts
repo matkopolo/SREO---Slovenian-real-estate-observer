@@ -162,7 +162,7 @@ export async function loadMetric(metric: MetricId, window: Window, level: Geogra
       const rent = rentById.get(sale.geographyId);
       const publishable = sale.value != null && rent?.value != null && sale.sample >= MIN_SAMPLE && rent.sample >= MIN_SAMPLE;
       return { geographyId: sale.geographyId, sample: Math.min(sale.sample, rent?.sample ?? 0),
-        value: publishable ? (rent!.value! * 12) / sale.value! * 100 : null };
+        value: publishable ? (rent!.value! * 12) / sale.value! * 100 : null, rent: rent?.value ?? null, price: sale.value };
     });
   }
   if (metric === "share65" || metric === "netMigration" || metric === "releases") {
@@ -229,6 +229,11 @@ export const loadDemographics = (geographyId: number | undefined, signal?: Abort
   api("/api/v1/demographics", { query: { geographyId } }, signal);
 export const loadMunicipalDemographics = (signal?: AbortSignal) => api("/api/v1/demographics/municipalities", {}, signal);
 
+/** The regions and municipalities an area picker offers. */
+export async function loadAreaLists(signal?: AbortSignal) {
+  const [regions, municipalities] = await Promise.all([loadRegions(signal), loadMunicipalityList(signal)]);
+  return { regions: regions.items, municipalities: municipalities.items };
+}
 export const loadMunicipalityList = (signal?: AbortSignal) =>
   api("/api/v1/geographies", { query: { level: "municipality" } }, signal);
 
