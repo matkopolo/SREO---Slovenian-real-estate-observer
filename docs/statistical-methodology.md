@@ -159,9 +159,14 @@ searched first. For sales the signature is the ordered multiset of ETN building
 part and parcel type codes; for rentals it is the ordered multiset of rented
 space type codes. This distinguishes an apartment with parking from an
 apartment with a different auxiliary component even when both packages contain
-two rows. A mixed-composition cohort is allowed only when fewer than five
-exact-signature matches exist, and the fallback is returned as an explicit
-warning.
+two rows. For houses and land the composition is a gate: a mixed-composition
+cohort is allowed only when fewer than five exact-signature matches exist,
+because the parcels in such a package are the price. For the other groups it is
+a preference (methodology v5, November 2026): when the exact-signature search
+does not reach the 50-comparable target, the search is repeated over every
+composition and the larger cohort wins (the exact-signature cohort on ties);
+the composition then only enters the weights. A mixed cohort is returned with an
+explicit warning either way.
 
 The higher transaction ID in every persisted near-duplicate candidate pair is
 excluded from current-market and same-building comparable populations, matching
@@ -222,10 +227,13 @@ component-level certified valuation.
 
 When fewer than five selected current-market candidates belong to the subject
 municipality, the API estimates a historical local-location factor. It compares
-the median of physically matched transactions in the subject municipality with
-the median of the surrounding selected-radius market over the three completed
-calendar years before the current year. For a 2026 request, that adjustment
-window is 2023–2025 and excludes incomplete 2026.
+the median of transactions of the subject's property group in the subject
+municipality with the median of the surrounding selected-radius market over the
+three completed calendar years before the current year, with the area within
+±30 % of the subject's and any construction year (methodology v5; v4 used the
+strict ±15 % / ±8-year profile, which left most thin municipalities without a
+factor). For a 2026 request, that adjustment window is 2023–2025 and excludes
+incomplete 2026.
 
 The factor is applied only with at least twenty local and fifty total matched
 historical observations. The raw municipality-to-surrounding-market ratio is
@@ -234,6 +242,32 @@ factor is bounded to `0.80–1.20`. Otherwise the applied factor remains `1.0`.
 The response exposes the raw factor, applied factor, whether adjustment was
 applied, and the local sample size. It also returns both the unadjusted
 comparable range and the adjusted range, so the effect remains inspectable.
+
+### Measured accuracy
+
+`TestCurrentMarketEstimateBacktest` (opt in with `ESTIMATE_BACKTEST=<sample>`
+and `TEST_DATABASE_URL`) estimates real sales of the current year from the
+other sales, the subject excluded, and compares each estimate with the price
+paid. On 800 sales of 2026 (release of 10 November 2026; the sample is the
+same for every variant):
+
+| Rule | Group | Estimated | Median abs. error | Median bias | Price within p25–p75 | Factor applied |
+|---|---|---|---|---|---|---|
+| v4 (composition gate, strict factor support) | apartments | 87 % | 13.6 % | −1.3 % | 46 % | 2 % |
+| v4 | houses | 60 % | 34.7 % | −6.3 % | 41 % | 3 % |
+| v5 (composition a preference for flats, wide factor support) | apartments | 87 % | 13.5 % | −1.0 % | 49 % | 19 % |
+| v5 | houses | 60 % | 36.2 % | −5.1 % | 44 % | 40 % |
+
+Treating the composition as a preference for houses as well made them worse
+(38 % median error on a 400-sale sample), hence the gate for houses and land.
+Houses remain weak either way: the recorded area does not carry the land,
+condition or outbuildings that set their prices, and 40 % get no estimate at
+all. A concrete case the change was made for: a 59.5 m² flat built 2009 in
+Ruše, bought for 139 000 € in October 2025, was estimated at 150 000–191 000 €
+under v4 from 13 flat-with-garage packages in Maribor 7–19 km away (Ruše's
+own recent sales are older or sold without a garage, and the municipality
+factor had no support); v5 estimates 119 000–160 000 € (central 137 000 €)
+from 57 sales with the Ruše-vs-surroundings factor 0.86 applied.
 
 ### Confidence and returned evidence
 
@@ -250,7 +284,7 @@ The response exposes:
 - area and construction-year tolerances;
 - location-adjustment factor and supporting local sample size;
 - current reference year, confidence label, warnings, and methodology version
-  `adaptive-current-market-v4`.
+  `adaptive-current-market-v5`.
 
 ## Robust cohort outliers
 
