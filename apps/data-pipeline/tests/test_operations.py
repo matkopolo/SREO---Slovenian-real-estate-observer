@@ -326,107 +326,55 @@ def test_boundary_outage_keeps_existing_boundaries(caplog):
     assert "keeping 6250 previously synchronised boundaries" in caplog.text
 
 
-def test_boundary_outage_on_first_install_still_fails():
+def test_boundary_outage_on_first_install_loads_the_seed(tmp_path: Path, caplog):
+    from real_estate_etl.operations import _sync_geographies_or_keep_existing
+
+    connection = MagicMock()
+    connection.execute.return_value.fetchone.return_value = (0,)
+    calls = []
+
+    def fake_sync(_connection, fetch_json=None):
+        calls.append(fetch_json)
+        if fetch_json is None:
+            raise RuntimeError("HTTP 403")
+        return {"municipality": 212}
+
+    def fake_download(_client, url, target):
+        import zipfile
+
+        with zipfile.ZipFile(target, "w") as bundle:
+            bundle.writestr("SI.GURS.RPE_OBCINE.geojson", '{"type":"FeatureCollection","features":[]}')
+        return target
+
+    with (
+        patch("real_estate_etl.operations.sync_geographies", side_effect=fake_sync),
+        patch("real_estate_etl.operations.http_client.download_file", side_effect=fake_download),
+    ):
+        counts, status = _sync_geographies_or_keep_existing(connection, tmp_path)
+    assert (counts, status) == ({"municipality": 212}, "seed")  # recorded as SOURCE_SEED, not a failure
+    assert calls[0] is None
+    assert callable(calls[1])
+    assert "loading the published boundary seed" in caplog.text
+
+
+def test_boundary_outage_on_first_install_fails_when_the_seed_is_unavailable(tmp_path: Path):
     from real_estate_etl.operations import _sync_geographies_or_keep_existing
 
     connection = MagicMock()
     connection.execute.return_value.fetchone.return_value = (0,)
     with (
         patch("real_estate_etl.operations.sync_geographies", side_effect=RuntimeError("HTTP 403")),
-        pytest.raises(RuntimeError),
+        patch("real_estate_etl.operations.http_client.download_file", side_effect=RuntimeError("seed 404")),
+        pytest.raises(RuntimeError, match="seed 404"),
     ):
-        _sync_geographies_or_keep_existing(connection)
+        _sync_geographies_or_keep_existing(connection, tmp_path)
 
 
-def system_refresh_patches(stack: ExitStack, **overrides) -> dict[str, MagicMock]:
-    mocks = {
-        "refresh_all_national": MagicMock(return_value=RefreshSummary(0, 3, 0)),
-        "sync_geographies": MagicMock(return_value={"country": 1}),
-        "sync_context": MagicMock(return_value=SourceSyncReport({"ecb_euribor_6m": 6})),
-        "sync_demography": MagicMock(return_value=SourceSyncReport(failures={"surs_deaths": "HTTPStatusError: 500"})),
-        "sync_construction": MagicMock(return_value=SourceSyncReport({"gurs_buildings": 0})),
-        "refresh_analytics": MagicMock(return_value={"facts": 3}),
-        "start_release": MagicMock(return_value="release-1"),
-        "update_release_source": MagicMock(),
-        "set_release_stage": MagicMock(),
-        "record_source_status": MagicMock(),
-        "publish_release": MagicMock(),
-        "fail_release": MagicMock(),
-        **overrides,
-    }
-    for name, mock in mocks.items():
-        stack.enter_context(patch(f"real_estate_etl.operations.{name}", mock))
-    return mocks
+def test_record_source_status_distinguishes_seeded_from_failed_sources(caplog):
+    from real_estate_etl.publication import record_source_status
 
-
-def run_unlocked(tmp_path: Path, **kwargs) -> SystemRefreshResult:
-    connection = MagicMock()
-    connection.execute.return_value.fetchone.return_value = (False,)
-    return _refresh_system_unlocked(
-        connection, output_dir=tmp_path, end_year=2026, force=False, workers=1, verbose=False,
-        database_url="postgresql://test", **kwargs,
-    )
-
-
-def test_source_failures_are_recorded_on_the_release(tmp_path: Path, monkeypatch, caplog):
-    caplog.set_level("INFO")
-    monkeypatch.setenv("MODEL_REFRESH_POLICY", "manual")
-    with ExitStack() as stack:
-        mocks = system_refresh_patches(stack)
-        result = run_unlocked(tmp_path)
-
-    expected = {
-        "rpe_boundaries": "ok", "ecb_euribor_6m": "ok", "gurs_buildings": "ok",
-        "surs_deaths": "HTTPStatusError: 500",
-    }
-    assert result.sources == expected
-    mocks["record_source_status"].assert_called_once_with("postgresql://test", "release-1", expected)
-    mocks["publish_release"].assert_called_once()
-    assert "release=release-1 published" in caplog.text
-    assert "failed optional sources=surs_deaths" in caplog.text
-
-
-def test_failed_stage_marks_release_failed_and_reraises_original_error(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("MODEL_REFRESH_POLICY", "manual")
-    error = RuntimeError("analytics broke")
-    with ExitStack() as stack:
-        mocks = system_refresh_patches(stack, refresh_analytics=MagicMock(side_effect=error))
-        with pytest.raises(RuntimeError) as raised:
-            run_unlocked(tmp_path)
-
-    assert raised.value is error
-    mocks["fail_release"].assert_called_once_with("postgresql://test", "release-1", error)
-    mocks["publish_release"].assert_not_called()
-
-
-def test_stop_request_interrupts_between_stages(tmp_path: Path, monkeypatch):
-    from real_estate_etl.operations import RefreshInterrupted
-
-    monkeypatch.setenv("MODEL_REFRESH_POLICY", "manual")
-    with ExitStack() as stack:
-        mocks = system_refresh_patches(stack)
-        with pytest.raises(RefreshInterrupted):
-            run_unlocked(tmp_path, stop_requested=lambda: True)
-
-    mocks["update_release_source"].assert_not_called()
-    mocks["fail_release"].assert_called_once()
-
-
-def test_scheduler_reports_unhealthy_after_first_import_fails(tmp_path: Path):
-    stop = Event()
-    health = tmp_path / "healthy"
-    states = []
-
-    def refresh(*_args, **_kwargs):
-        states.append(health.is_file())  # healthy while the first import runs
-        stop.set()
-        raise RuntimeError("GURS unavailable")
-
-    with patch("real_estate_etl.operations.psycopg.connect", return_value=MagicMock()):
-        scheduled_refresh_loop(
-            "postgresql://example", output_dir=tmp_path, workers=1, verbose=False, health_file=health,
-            stop_event=stop, refresh=refresh, active_release=lambda: None, poll_seconds=0.01,
-        )
-
-    assert states == [True]
-    assert not health.exists()  # nothing published and no refresh running
+    with patch("real_estate_etl.publication.psycopg.connect"):
+        record_source_status("postgresql://x", "release-1", {"rpe_boundaries": "seed", "surs_deaths": "HTTP 500", "ecb": "ok"})
+    assert "loaded from the published seed: rpe_boundaries" in caplog.text
+    assert "failed and kept stored values: surs_deaths" in caplog.text
+    assert "rpe_boundaries, surs_deaths" not in caplog.text

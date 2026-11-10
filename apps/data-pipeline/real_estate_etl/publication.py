@@ -21,6 +21,8 @@ from datetime import date, datetime
 
 import psycopg
 
+from .source_sync import SOURCE_SEED, SUCCESSFUL_STATUSES
+
 logger = logging.getLogger(__name__)
 
 #: Keep the value stable: database maintenance tools may take the same lock.
@@ -132,7 +134,10 @@ def record_source_status(database_url: str, release_id: uuid.UUID, sources: dict
                WHERE id=%s""",
             (json.dumps(sources, sort_keys=True), release_id),
         )
-    failed = sorted(name for name, status in sources.items() if status != "ok")
+    seeded = sorted(name for name, status in sources.items() if status == SOURCE_SEED)
+    if seeded:
+        logger.warning("release=%s sources loaded from the published seed: %s", release_id, ", ".join(seeded))
+    failed = sorted(name for name, status in sources.items() if status not in SUCCESSFUL_STATUSES)
     if failed:
         logger.warning("release=%s optional sources failed and kept stored values: %s", release_id, ", ".join(failed))
 

@@ -16,6 +16,9 @@ import psycopg
 logger = logging.getLogger(__name__)
 
 SOURCE_OK = "ok"
+#: The source was unavailable and its data came from the published seed instead (first install).
+SOURCE_SEED = "seed"
+SUCCESSFUL_STATUSES = frozenset({SOURCE_OK, SOURCE_SEED})
 
 
 @dataclass

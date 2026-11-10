@@ -63,7 +63,11 @@ Each incremental run:
 - refreshes GURS RPE boundaries and the optional context sources (SURS, Banka
   Slovenije, ECB, GURS buildings). A failing source keeps its stored values; its
   error is stored in `analytics.analytical_releases.details->'sources'` and listed
-  in the "published" log line;
+  in the "published" log line. A first install has no stored boundaries: when
+  the GURS boundary service fails, the worker downloads the published seed
+  (`RPE_BOUNDARIES_SEED_URL`, GitHub release `rpe-boundaries`: the same GURS
+  data, CC BY 4.0, exported with `make boundaries-seed`), records the source as
+  `seed`, and takes the live data again on the next refresh;
 - refreshes all deterministic analytics in dependency order inside one
   publication transaction;
 - retrains sale and rental models when an archive checksum changed, while
