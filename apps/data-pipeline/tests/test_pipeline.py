@@ -2,6 +2,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from real_estate_etl.formatting import format_duration
@@ -106,3 +107,28 @@ def test_national_refresh_rechecks_the_revision_years_only(tmp_path: Path):
 
     assert sorted(captured["items"]) == [("rent", 2025), ("rent", 2026), ("sales", 2025), ("sales", 2026)]
     assert prepare.call_args.args[3] is True  # revision years are always re-downloaded
+
+
+def _refused(*_args, **_kwargs):
+    request = httpx.Request("GET", "https://ipi.eprostor.gov.si/jgp-service-api/municipalities")
+    raise httpx.HTTPStatusError("403", request=request, response=httpx.Response(403, request=request))
+
+
+def test_reference_sync_keeps_stored_lists_when_gurs_refuses():
+    from real_estate_etl.pipeline import sync_reference_data
+
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value.fetchone.return_value = (212, 2698)
+    with patch("real_estate_etl.pipeline.http_client.fetch_json", side_effect=_refused):
+        assert sync_reference_data(connection, client=MagicMock()) is False
+    connection.rollback.assert_called_once()
+    connection.commit.assert_not_called()
+
+
+def test_reference_sync_still_fails_on_an_empty_database():
+    from real_estate_etl.pipeline import sync_reference_data
+
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value.fetchone.return_value = (0, 0)
+    with patch("real_estate_etl.pipeline.http_client.fetch_json", side_effect=_refused), pytest.raises(httpx.HTTPStatusError):
+        sync_reference_data(connection, client=MagicMock())

@@ -25,14 +25,39 @@ logger = logging.getLogger(__name__)
 WorkItem = TypeVar("WorkItem")
 
 
-def sync_reference_data(connection: psycopg.Connection, client: httpx.Client | None = None) -> None:
-    """Upsert municipality and cadastral-municipality reference data."""
+def sync_reference_data(connection: psycopg.Connection, client: httpx.Client | None = None) -> bool:
+    """Upsert municipality and cadastral-municipality reference data.
+
+    Returns True when GURS answered. When GURS refuses or fails the request but the
+    reference tables are already populated, the stored names are kept and False is
+    returned: these lists change a few times a decade, and one refused endpoint must
+    not abort a whole refresh (GURS answered 403 on this endpoint for a day in
+    November 2026 while the archive downloads kept working). An empty database still
+    raises, because nothing can be imported without the municipality codes.
+    """
     if client is None:
         with http_client.create_client() as owned:
-            sync_reference_data(connection, owned)
-        return
-    municipalities = http_client.fetch_json(client, f"{API_BASE}/municipalities", "GURS municipalities")
-    cadastral = http_client.fetch_json(client, f"{API_BASE}/register-municipalities", "GURS cadastral municipalities")
+            return sync_reference_data(connection, owned)
+    try:
+        municipalities = http_client.fetch_json(client, f"{API_BASE}/municipalities", "GURS municipalities")
+        cadastral = http_client.fetch_json(
+            client, f"{API_BASE}/register-municipalities", "GURS cadastral municipalities"
+        )
+    except httpx.HTTPError as error:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT (SELECT count(*) FROM municipalities), (SELECT count(*) FROM cadastral_municipalities)"
+            )
+            stored_municipalities, stored_cadastral = cursor.fetchone()
+        connection.rollback()
+        if not stored_municipalities or not stored_cadastral:
+            raise
+        logger.warning(
+            "GURS reference data unavailable (%s: %s); keeping the stored %s municipalities "
+            "and %s cadastral municipalities",
+            type(error).__name__, error, stored_municipalities, stored_cadastral,
+        )
+        return False
     with connection.cursor() as cursor:
         cursor.executemany(
             """INSERT INTO municipalities(code,name) VALUES (%s,%s)
@@ -50,6 +75,7 @@ def sync_reference_data(connection: psycopg.Connection, client: httpx.Client | N
         len(municipalities),
         len(cadastral),
     )
+    return True
 
 
 def fetch_zip(municipality: int, year: int, output_dir: Path, client: JGPClient | None = None) -> Path:
