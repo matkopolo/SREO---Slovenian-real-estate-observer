@@ -173,6 +173,12 @@ excluded from current-market and same-building comparable populations, matching
 the valuation-model training rule. The source transaction remains stored and
 auditable.
 
+Only agreements concluded after the subject's own are compared (methodology
+v6, November 2026): what a property would fetch now rests on what sold since it
+was bought, not on the market before. When fewer than five such agreements
+exist in the window, the whole window is used and the response says so by
+leaving `comparablesAfter` empty.
+
 The search uses progressively larger radii of 1 km, 2.5 km, 5 km, 10 km, and
 20 km:
 
@@ -258,6 +264,17 @@ same for every variant):
 | v5 (composition a preference for flats, wide factor support) | apartments | 87 % | 13.5 % | −1.0 % | 49 % | 19 % |
 | v5 | houses | 60 % | 36.2 % | −5.1 % | 44 % | 40 % |
 
+A later 600-sale run compared v5 with v6 (v5 plus "only agreements after the
+subject's"): overall median error 16.4 % → 15.8 %, bias −0.7 % → +1.9 %, the
+price inside the shown band 48 % → 47 %. The positive bias is expected: the
+backtest's target is the price paid at the time, while v6 estimates the value
+now, which in a rising market is a few per cent higher. The cost is locality:
+with a shorter window the search widens (6 % of estimates found their
+comparables within 5 km instead of 18 %), partly offset by the municipality
+factor (applied in 37 % instead of 24 %). The Ruše flat moves from 119 000–
+160 000 € (central 137 000 €) to 123 000–161 000 € (central 144 000 €) from
+26 sales after its own date.
+
 Treating the composition as a preference for houses as well made them worse
 (38 % median error on a 400-sale sample), hence the gate for houses and land.
 Houses remain weak either way: the recorded area does not carry the land,
@@ -284,7 +301,7 @@ The response exposes:
 - area and construction-year tolerances;
 - location-adjustment factor and supporting local sample size;
 - current reference year, confidence label, warnings, and methodology version
-  `adaptive-current-market-v5`.
+  `adaptive-current-market-v6`.
 
 ## Robust cohort outliers
 

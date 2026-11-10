@@ -374,8 +374,10 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
       : wideRadius == null ? null
       : reference?.kind === "local" && districtBand ? tx("iz širše okolice, zato ocena temelji na cenah {where}", { where })
       : t("iz širše okolice, zato lahko odstopajo od cen v vaši soseski");
+    // Only sales concluded after the owner's purchase, when there were enough of them: the row says since when.
+    const since = market.comparablesAfter ? t("prodaje po {date}", { date: date(market.comparablesAfter) }) : null;
     rows.push({ key: "market", title: SIMILAR_TODAY[purchase.group], value: span(market.lowerTotal, market.upperTotal),
-      note: join([`${t("{sales} do {distance} km", { sales: sold(market.comparableCount), distance: km(market.maximumRadiusMeters) })}, ${confidence}`, caveat, basisKey === "market" && worseNote], " · ") });
+      note: join([`${t("{sales} do {distance} km", { sales: sold(market.comparableCount), distance: km(market.maximumRadiusMeters) })}, ${confidence}`, since, caveat, basisKey === "market" && worseNote], " · ") });
   } else if (!purchase.transactionId) rows.push({ key: "market", title: SIMILAR_TODAY[purchase.group], value: null, note: t("za ročno vnesen nakup podobnih prodaj ne iščemo") });
   else if (context) rows.push({ key: "market", title: SIMILAR_TODAY[purchase.group], value: null, note: t("v okolici ni dovolj podobnih prodaj {type} za primerjavo", { type: OF_TYPE[purchase.group] }) });
   if (local) rows.push(garage

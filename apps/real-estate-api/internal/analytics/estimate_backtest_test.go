@@ -43,10 +43,11 @@ func TestCurrentMarketEstimateBacktest(t *testing.T) {
 		year           *int
 		municipalityID *int64
 		signature      string
+		date           time.Time
 	}
 	rows, err := pool.Query(ctx, `
 		SELECT transaction_id, property_group, area::float8, price::float8, construction_year, municipality_id,
-		       analytics.sale_package_signature(transaction_id)
+		       analytics.sale_package_signature(transaction_id), contract_date
 		FROM analytics.sale_facts
 		WHERE representative_eligible AND contract_date >= make_date($1, 1, 1) AND property_group IN ('apartment', 'house')
 		  AND location IS NOT NULL AND price > 0 AND area > 0
@@ -58,7 +59,7 @@ func TestCurrentMarketEstimateBacktest(t *testing.T) {
 	var subjects []subject
 	for rows.Next() {
 		var item subject
-		if err := rows.Scan(&item.id, &item.group, &item.area, &item.price, &item.year, &item.municipalityID, &item.signature); err != nil {
+		if err := rows.Scan(&item.id, &item.group, &item.area, &item.price, &item.year, &item.municipalityID, &item.signature, &item.date); err != nil {
 			t.Fatalf("scan sample: %v", err)
 		}
 		subjects = append(subjects, item)
@@ -74,6 +75,7 @@ func TestCurrentMarketEstimateBacktest(t *testing.T) {
 		{"composition as preference (flats)", currentMarketOptions{}},
 		{"wide location support", currentMarketOptions{compositionAsGate: true, wideLocationSupport: true}},
 		{"v5: preference (flats) + wide support", currentMarketDefaults},
+		{"v5 + only sales after the subject's", currentMarketOptions{wideLocationSupport: true, afterSubject: true}},
 	}
 	type tally struct {
 		errors, signed                       []float64
@@ -99,7 +101,7 @@ func TestCurrentMarketEstimateBacktest(t *testing.T) {
 				table: "analytics.sale_facts_strict_land", subjectTable: "analytics.sale_facts", amountColumn: "price_per_sqm",
 				transactionKind: "sale", subjectID: item.id, propertyGroup: item.group, area: item.area,
 				constructionYear: item.year, packageSignature: item.signature, municipalityID: item.municipalityID,
-				now: now, options: &options,
+				now: now, since: item.date, options: &options,
 			})
 			if err != nil {
 				t.Fatalf("estimate %d: %v", item.id, err)
@@ -153,9 +155,10 @@ func TestCurrentMarketEstimateForOne(t *testing.T) {
 	var area, price float64
 	var year *int
 	var municipalityID *int64
+	var date time.Time
 	if err := pool.QueryRow(ctx, `SELECT property_group, area::float8, price::float8, construction_year, municipality_id,
-		analytics.sale_package_signature(transaction_id) FROM analytics.sale_facts WHERE transaction_id = $1`, id).
-		Scan(&group, &area, &price, &year, &municipalityID, &signature); err != nil {
+		analytics.sale_package_signature(transaction_id), contract_date FROM analytics.sale_facts WHERE transaction_id = $1`, id).
+		Scan(&group, &area, &price, &year, &municipalityID, &signature, &date); err != nil {
 		t.Fatalf("subject: %v", err)
 	}
 	t.Logf("subject %d: %s %.1f m², paid %.0f € (%.0f €/m²)", id, group, area, price, price/area)
@@ -167,6 +170,7 @@ func TestCurrentMarketEstimateForOne(t *testing.T) {
 		{"composition as preference", currentMarketOptions{}},
 		{"wide location support", currentMarketOptions{compositionAsGate: true, wideLocationSupport: true}},
 		{"v5: preference + wide support", currentMarketDefaults},
+		{"v5 + after the subject's date", currentMarketOptions{wideLocationSupport: true, afterSubject: true}},
 	} {
 		tx, err := database.BeginReadOnly(ctx, pool, pgx.RepeatableRead)
 		if err != nil {
@@ -176,7 +180,7 @@ func TestCurrentMarketEstimateForOne(t *testing.T) {
 		estimate, err := loadCurrentMarketEstimate(ctx, tx, currentMarketQuery{
 			table: "analytics.sale_facts_strict_land", subjectTable: "analytics.sale_facts", amountColumn: "price_per_sqm",
 			transactionKind: "sale", subjectID: id, propertyGroup: group, area: area, constructionYear: year,
-			packageSignature: signature, municipalityID: municipalityID, now: time.Now(), options: &options,
+			packageSignature: signature, municipalityID: municipalityID, now: time.Now(), since: date, options: &options,
 		})
 		_ = tx.Rollback(ctx)
 		if err != nil {

@@ -2878,6 +2878,7 @@ components:
           items: {$ref: '#/components/schemas/MarketComparable'}
         subjectLongitude: {type: number, description: The subject's position (WGS84), the centre of the search.}
         subjectLatitude: {type: number}
+        comparablesAfter: {type: string, format: date, nullable: true, description: The subject's own contract date when only later agreements were compared.}
     MarketComparable:
       type: object
       required: [transactionId, contractDate, amountPerSqm, area, distanceMeters, longitude, latitude]
