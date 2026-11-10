@@ -76,6 +76,7 @@ export const pages: Record<string, string> = {
   "cene {year}": "prices {year}",
   "ponovne prodaje {year}": "repeat sales {year}",
   "najemnine {year}": "rents {year}",
+  "Indeksi cen in najemnin": "Price and rent indices",
   "Indeksi cen in najemnin {noun}": "Price and rent indices: {noun}",
   "Indeks najemnin {noun}": "Rent index: {noun}",
   "Indeksi cen {noun}": "Price indices: {noun}",

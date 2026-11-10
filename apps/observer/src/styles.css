@@ -208,6 +208,10 @@ th[scope="row"] { text-align: left; }
 .card h2 { margin: 0; font-family: var(--font-display); font-size: 1.1875rem; font-weight: 500; }
 .card p { margin: 0; }
 .card.wide { grid-column: 1 / -1; }
+/* A card whose content has one choice: the title and the choice share the header row (the choice drops below on phones). */
+.card-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 12px; }
+.card-head h2 { flex: 1 1 auto; min-width: 0; }
+.card-select select { min-height: 40px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 0.8438rem; }
 .card-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
 .cite { display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 /* Sale inspector card (TransactionEvidence: .panel.td-panel). */
