@@ -1234,7 +1234,13 @@ export interface components {
             profile: components["schemas"]["DemographicProfile"];
             sources: components["schemas"]["DemographicSource"][];
             licence: string;
+            /** @description Slovenian text of the caveat named by releasesCaveatCode. */
             releasesCaveat: string;
+            /**
+             * @description Stable code of the caveat, for clients that show it in their own language.
+             * @enum {string}
+             */
+            releasesCaveatCode: "model_estimate_older_owners";
         };
         MunicipalDemographics: {
             /** Format: int64 */
@@ -1252,7 +1258,13 @@ export interface components {
         MunicipalDemographicsResponse: {
             items: components["schemas"]["MunicipalDemographics"][];
             sources: components["schemas"]["DemographicSource"][];
+            /** @description Slovenian text of the caveat named by releasesCaveatCode. */
             releasesCaveat: string;
+            /**
+             * @description Stable code of the caveat, for clients that show it in their own language.
+             * @enum {string}
+             */
+            releasesCaveatCode: "model_estimate_older_owners";
         };
         RecentTransactions: {
             count: number;
@@ -1546,6 +1558,12 @@ export interface components {
                 };
             }[];
             count: number;
+            /** @description Zoom level the clusters were built for (cluster layers only). */
+            zoom?: number;
+            /** @description Maximum number of features returned (property layers only). */
+            limit?: number;
+            /** @description Geography level of the features (geography layers only). */
+            level?: components["schemas"]["GeographyLevel"];
         };
         Distribution: {
             metric: string;

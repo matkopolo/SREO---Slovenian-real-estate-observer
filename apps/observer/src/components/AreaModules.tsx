@@ -333,7 +333,7 @@ export function Population({ data, name, municipalityId, failed }: { data?: Demo
         {ranking?.older != null && <p>{tx("Po deležu starejših je {name} na {rank}. mestu od {total} občin (1. mesto = najstarejša), po neto priseljevanju {migration}.", {
           name: <Name>{name}</Name>, rank: ranking.older, total: ranking.total,
           migration: ranking.migration != null ? t("na {rank}. mestu", { rank: ranking.migration }) : t("ni objavljena") })}</p>}
-        <p className="muted">{data.releasesCaveat ? t(data.releasesCaveat) : ""} {t("Umrljivost: {area}, {years};", {
+        <p className="muted">{data.releasesCaveatCode === "model_estimate_older_owners" ? t("Modelna ocena: starejši (65+), ki živijo sami × starostna stopnja umrljivosti × delež lastniških stanovanj. Ni napoved ponudbe ali cen: dedovanje traja, stanovanja pogosto ostanejo v družini, lokacija in velikost se ne ujemata s povpraševanjem.") : data.releasesCaveat} {t("Umrljivost: {area}, {years};", {
           area: deathArea, years: releases?.deathYears ?? "—" })}
           {" "}{t("delež samskih po starosti: Slovenija; delež lastniških stanovanj: območje (popis 2021).")} {t("Domovi za starejše lahko oceno zvišajo.")}</p>
         <p className="evidence-note">{t("To so kazalniki ponudbe in povpraševanja, ne napoved cen. Preverili smo obdobje 2010–2025: demografija (staranje, sproščena stanovanja, mladi, selitve) ni imela merljivega vpliva na razlike v rasti cen med občinami in regijami; ravni cen po regijah so ostale stabilne. Morebiten učinek je manjši od približno 0,5 odstotne točke na leto.")}</p>

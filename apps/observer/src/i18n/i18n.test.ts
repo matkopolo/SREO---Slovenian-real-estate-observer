@@ -28,10 +28,8 @@ describe("English translation", () => {
     }
     expect(duplicates).toEqual([]);
   });
-  it("uses every English entry (dynamic keys are listed)", () => {
-    // Reached through t(data.releasesCaveat): the API sends this Slovenian caveat as text.
-    const DYNAMIC = new Set(["Modelna ocena: starejši (65+), ki živijo sami × starostna stopnja umrljivosti × delež lastniških stanovanj. Ni napoved ponudbe ali cen: dedovanje traja, stanovanja pogosto ostanejo v družini, lokacija in velikost se ne ujemata s povpraševanjem."]);
-    expect(Object.keys(EN).filter((key) => !used.has(key) && !DYNAMIC.has(key))).toEqual([]);
+  it("uses every English entry", () => {
+    expect(Object.keys(EN).filter((key) => !used.has(key))).toEqual([]);
   });
   it("has no English entry that is still Slovenian", () => {
     const untranslated = Object.entries(EN).filter(([, en]) => /[čšžČŠŽ]/.test(en.replace(/\{\w+\}/g, ""))).map(([sl]) => sl);
