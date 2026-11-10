@@ -47,6 +47,7 @@
   ],
   "files.exclude": {
     "**/.pytest_cache": true,
+    "**/.ruff_cache": true,
     "**/__pycache__": true,
     "**/*.egg-info": true,
     "**/node_modules": true
@@ -65,7 +66,7 @@
   "explorer.fileNesting.enabled": true,
   "explorer.fileNesting.patterns": {
     "docker-compose.yml": ".env,.env.example,Dockerfile*",
-    "pyproject.toml": "requirements*.txt,pytest.ini",
+    "pyproject.toml": "pytest.ini",
     "package.json": "package-lock.json,yarn.lock,pnpm-lock.yaml,tsconfig*.json,vite.config.*,eslint.config.*,prettier.config.*"
   },
   "terminal.integrated.env.osx": {

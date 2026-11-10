@@ -3,8 +3,6 @@ package httpapi
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"net/http/httptest"
 	"testing"
 
@@ -38,7 +36,10 @@ func TestHistoryHTTP(t *testing.T) {
 		{"/api/v1/economy/inflation-factor?from=2025-01-01&to=2025-03-01", nil, 503},
 	} {
 		t.Run(test.path, func(t *testing.T) {
-			handler := New(Dependencies{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Histories: fakeHistory{test.err}})
+			handler := handlerWith(func(d *Dependencies) {
+				d.Histories = fakeHistory{test.err}
+				d.Economics = fakeEconomics{factorErr: errors.New("incomplete CPI series")}
+			})
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequest("GET", test.path, nil))
 			if response.Code != test.status {

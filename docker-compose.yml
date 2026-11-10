@@ -1,3 +1,7 @@
+# Fixed project name: volumes stay real_estate_postgres_data / real_estate_pipeline_data
+# whatever the checkout folder is called.
+name: real_estate
+
 services:
   db:
     build:
@@ -23,12 +27,14 @@ services:
       POSTGRES_DB: real_estate
       POSTGRES_USER: real_estate
       POSTGRES_PASSWORD: real_estate
+    # Development superuser: published on loopback only.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
+    restart: unless-stopped
     mem_limit: 4g
+    shm_size: 1g
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./database/migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U real_estate -d real_estate"]
       interval: 5s
@@ -36,13 +42,15 @@ services:
       retries: 10
 
   database-migrations:
-    # This one-shot client only needs psql and bash. Using the official image
-    # avoids pulling the locally built PostGIS image on a fresh checkout.
-    image: postgres:16-bookworm
-    entrypoint: ["/bin/bash", "/run-migrations.sh"]
-    volumes:
-      - ./database/migrations:/migrations:ro
-      - ./database/run-migrations.sh:/run-migrations.sh:ro
+    # Official PostgreSQL client base; no host shell or bind mounts required.
+    build:
+      context: .
+      dockerfile: infrastructure/docker/migrations/compose.Dockerfile
+    image: real-estate-compose-migrations:16
+    pull_policy: build
+    environment:
+      # Login password the runner sets on the least-privilege real_estate_pipeline role.
+      PIPELINE_DATABASE_PASSWORD: ${PIPELINE_DATABASE_PASSWORD:-real_estate_pipeline}
     depends_on:
       db:
         condition: service_healthy
@@ -58,20 +66,22 @@ services:
       API_ENV: development
       API_BUILD: local
       API_ADDRESS: ":8080"
-      API_ALLOWED_ORIGINS: "http://localhost:5173,http://localhost:3000"
+      # Only the Vite dev server is cross-origin; the observer proxies /api/ same-origin.
+      API_ALLOWED_ORIGINS: "http://localhost:5174"
       DATABASE_URL: postgresql://real_estate_api:real_estate_api@db:5432/real_estate
       DATABASE_MAX_CONNECTIONS: 10
       LOG_LEVEL: info
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     mem_limit: 512m
+    restart: unless-stopped
+    # Not gated on the pipeline: atomic publication means the API always serves the
+    # last published release, and /api/v1/data-status reports when data is missing or stale.
     depends_on:
       db:
         condition: service_healthy
       database-migrations:
         condition: service_completed_successfully
-      pipeline-worker:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:8080/health/ready"]
       interval: 10s
@@ -96,7 +106,9 @@ services:
       - --health-file
       - /tmp/pipeline-healthy
     environment:
-      DATABASE_URL: postgresql://real_estate:real_estate@db:5432/real_estate
+      # Least-privilege role (045_pipeline_least_privilege.sql); refresh functions run as
+      # SECURITY DEFINER. Destructive admin commands use the superuser (see Makefile).
+      DATABASE_URL: postgresql://real_estate_pipeline:${PIPELINE_DATABASE_PASSWORD:-real_estate_pipeline}@db:5432/real_estate
       OMP_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
@@ -104,6 +116,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ANALYTICS_PROGRESS_INTERVAL_SECONDS: ${ANALYTICS_PROGRESS_INTERVAL_SECONDS:-15}
       MODEL_DETAILED_PROGRESS: ${MODEL_DETAILED_PROGRESS:-false}
+      MODEL_REFRESH_POLICY: ${MODEL_REFRESH_POLICY:-auto}
     init: true
     mem_limit: 3g
     restart: unless-stopped
@@ -122,28 +135,31 @@ services:
       retries: 240
       start_period: 10s
 
-  web:
+  observer:
+    # SREO web frontend (React + MapLibre, served by nginx, which proxies same-origin /api/* to the API).
+    # http://localhost:3000; :3100 keeps earlier links working.
     build:
-      context: ./apps/web
+      context: ./apps/observer
       dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_API_URL: http://localhost:8080
-    image: real-estate-web:development
+    image: real-estate-observer:development
     pull_policy: build
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8080
     ports:
-      - "3000:3000"
-    mem_limit: 768m
+      - "127.0.0.1:3000:80"
+      - "127.0.0.1:3100:80"
+    mem_limit: 128m
+    restart: unless-stopped
+    # nginx resolves the API per request, so the frontend can start before the API is ready.
     depends_on:
-      real-estate-api:
+      db:
         condition: service_healthy
+      database-migrations:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
-      interval: 10s
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/"]
+      interval: 15s
       timeout: 3s
       retries: 5
-      start_period: 10s
+      start_period: 5s
 
 volumes:
   postgres_data:

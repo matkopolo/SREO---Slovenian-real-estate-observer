@@ -1,11 +1,6 @@
 package httpapi
 
-import (
-	"errors"
-	"net/http"
-
-	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/analytics"
-)
+import "net/http"
 
 func (s *server) saleDistribution(w http.ResponseWriter, r *http.Request) {
 	filter, ok := statisticsFilter(w, r)
@@ -26,10 +21,11 @@ func (s *server) saleDistribution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.distributions.SaleDistribution(r.Context(), filter, metric, bins)
-	if distributionError(w, r, s, err) {
+	if err != nil {
+		s.fail(w, r, "calculate distribution", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, r, http.StatusOK, result)
 }
 
 func (s *server) rentalDistribution(w http.ResponseWriter, r *http.Request) {
@@ -51,23 +47,9 @@ func (s *server) rentalDistribution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.distributions.RentalDistribution(r.Context(), filter, metric, bins)
-	if distributionError(w, r, s, err) {
+	if err != nil {
+		s.fail(w, r, "calculate distribution", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
-}
-
-func distributionError(w http.ResponseWriter, r *http.Request, s *server, err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, analytics.ErrGeographyNotFound) {
-		writeError(w, r, http.StatusNotFound, "geography_not_found",
-			"geography was not found")
-		return true
-	}
-	s.logger.Error("distribution", "error", err)
-	writeError(w, r, http.StatusInternalServerError, "query_failed",
-		"could not calculate distribution")
-	return true
+	writeJSON(w, r, http.StatusOK, result)
 }

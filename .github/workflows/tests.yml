@@ -1,15 +1,27 @@
 name: Tests
 
+# Pull requests run on their merge ref; pushes only on main, so a PR branch never runs twice.
 on:
   push:
+    branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TEST_DATABASE_URL: postgresql://real_estate:real_estate@localhost:5432/real_estate
+
 jobs:
-  test:
+  pipeline:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgis/postgis:16-3.5
+        image: postgis/postgis:16-3.7  # same PostgreSQL major and PostGIS as the app database image
         env:
           POSTGRES_DB: real_estate
           POSTGRES_USER: real_estate
@@ -21,19 +33,13 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-
-    env:
-      TEST_DATABASE_URL: postgresql://real_estate:real_estate@localhost:5432/real_estate
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: |
-            apps/data-pipeline/pyproject.toml
-            apps/data-pipeline/requirements*.txt
+          cache-dependency-path: apps/data-pipeline/pyproject.toml
       - run: pip install -e ".[dev,ml]"
         working-directory: apps/data-pipeline
       - run: ruff check .
@@ -47,62 +53,90 @@ jobs:
       - name: Run pipeline unit and integration tests
         run: pytest -q
         working-directory: apps/data-pipeline
-      - name: Build pipeline worker
-        run: docker build -t real-estate-data-pipeline:test apps/data-pipeline
-      - name: Validate Compose services
-        run: docker compose config --quiet
+      # Dependencies are version ranges without a lock file: report, do not block.
+      - name: Audit Python dependencies (advisory)
+        continue-on-error: true
+        run: pip install pip-audit && pip-audit --skip-editable
+        working-directory: apps/data-pipeline
+
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:16-3.7  # same PostgreSQL major and PostGIS as the app database image
+        env:
+          POSTGRES_DB: real_estate
+          POSTGRES_USER: real_estate
+          POSTGRES_PASSWORD: real_estate
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U real_estate -d real_estate"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: apps/real-estate-api
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply database migrations
+        working-directory: .
+        run: |
+          for migration in database/migrations/*.sql; do
+            psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
+          done
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.5"
           cache-dependency-path: apps/real-estate-api/go.sum
-      - run: gofmt -w . && git diff --exit-code
-        working-directory: apps/real-estate-api
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: go vet ./...
-        working-directory: apps/real-estate-api
+      - run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - run: go build ./...
-        working-directory: apps/real-estate-api
       - run: go test -race ./...
-        working-directory: apps/real-estate-api
+
+  observer:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/observer
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: apps/web/package-lock.json
+          cache-dependency-path: apps/observer/package-lock.json
       - run: npm ci
-        working-directory: apps/web
       - run: npm run lint
-        working-directory: apps/web
+      - name: Generated API contract is current
+        run: npm run generate:api-types && git diff --exit-code -- src/generated/api-schema.d.ts
       - run: npm run typecheck
-        working-directory: apps/web
-      - name: Verify generated API contract
-        run: npm run generate:api-types && git diff --exit-code -- lib/generated/api-schema.d.ts
-        working-directory: apps/web
-      - run: npm test
-        working-directory: apps/web
-      - run: npm run build
-        working-directory: apps/web
-      - name: Test production migrations on disposable databases
-        run: MIGRATION_TEST_DATABASE_URL="$TEST_DATABASE_URL" pytest -q database/tests
-      - name: Build production images (same-origin web)
-        run: |
-          docker build -t real-estate-api:test apps/real-estate-api
-          docker build --build-arg NEXT_PUBLIC_API_URL= -t real-estate-web:test apps/web
-          docker build -t real-estate-migrations:test -f infrastructure/docker/migrations/Dockerfile .
-      - uses: azure/setup-kubectl@v4
-        with:
-          version: v1.35.8
-      - name: Validate pinned Kubernetes schemas
-        run: |
-          pip install -r infrastructure/kubernetes/scripts/requirements.txt
-          . infrastructure/kubernetes/addons/versions.env
-          curl -fsSL "$CNPG_MANIFEST" -o /tmp/cnpg.yaml
-          curl -fsSL "$BARMAN_MANIFEST" -o /tmp/barman.yaml
-          python infrastructure/kubernetes/scripts/validate.py /tmp/cnpg.yaml /tmp/barman.yaml
-      - name: Disposable K3s dry-run smoke (no historical import or training)
-        run: python infrastructure/kubernetes/scripts/smoke.py
+      - name: Unit tests (incl. i18n audit)
+        run: npm test
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      # The production bundle is built once, inside the image, by the compose job.
+
+  compose:
+    needs: [pipeline, api, observer]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose services
+        run: docker compose config --quiet
+      - name: Build all images once
+        run: docker compose build
+      - name: nginx configuration
+        run: docker run --rm --add-host real-estate-api:127.0.0.1 real-estate-observer:development nginx -t
+      - name: Fresh Compose startup and migration retry (no import or training)
+        run: python infrastructure/docker/smoke.py
 
   images:
-    needs: test
+    needs: compose
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -114,15 +148,12 @@ jobs:
           - image: api
             context: apps/real-estate-api
             file: apps/real-estate-api/Dockerfile
-          - image: web
-            context: apps/web
-            file: apps/web/Dockerfile
+          - image: observer
+            context: apps/observer
+            file: apps/observer/Dockerfile
           - image: pipeline
             context: apps/data-pipeline
             file: apps/data-pipeline/Dockerfile
-          - image: migrations
-            context: .
-            file: infrastructure/docker/migrations/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -138,7 +169,8 @@ jobs:
           file: ${{ matrix.file }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/matkopolo/nepremicninskiagent-${{ matrix.image }}:sha-${{ github.sha }}
-          build-args: NEXT_PUBLIC_API_URL=
+          tags: ghcr.io/matkopolo/sreo-${{ matrix.image }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
           provenance: mode=max
           sbom: true

@@ -81,23 +81,22 @@ type RentalStatisticsStore interface {
 	RentalPropertyPoints(context.Context, StatisticsFilter, Bounds, int) ([]RentalPropertyPoint, error)
 }
 
-func (r *StatisticsRepository) RentalClusters(
+func (r *RentalStatisticsRepository) RentalClusters(
 	ctx context.Context, filter StatisticsFilter, bounds Bounds, gridSize float64,
 ) ([]Cluster, error) {
-	clause, geographyID, err := r.geographyClause(ctx, filter.GeographyID)
+	var args queryArgs
+	where, err := r.factFilter(ctx, "fact", filter, &args)
 	if err != nil {
 		return nil, err
 	}
 	query := fmt.Sprintf(`
 		WITH bounded AS (
-		  SELECT ST_SnapToGrid(ST_Transform(location,4326),$11,$11) grid_point,
-		    monthly_rent_per_sqm,monthly_rent_ex_vat,representative_eligible
-		  FROM analytics.rental_facts
-		  WHERE location IS NOT NULL
-		    AND location && ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3794)
-		    AND ($1::date IS NULL OR contract_date >= $1)
-		    AND ($2::date IS NULL OR contract_date <= $2)
-		    AND ($3 = '' OR property_group=$3) AND %s
+		  SELECT ST_SnapToGrid(ST_Transform(fact.location,4326),%[2]s,%[2]s) grid_point,
+		    fact.monthly_rent_per_sqm,fact.monthly_rent_ex_vat,fact.representative_eligible
+		  FROM analytics.rental_facts fact
+		  WHERE fact.location IS NOT NULL
+		    AND fact.location && %[3]s
+		    AND %[1]s
 		)
 		SELECT ST_X(grid_point),ST_Y(grid_point),count(*)::bigint,
 		  count(*) FILTER (WHERE representative_eligible)::bigint,
@@ -105,10 +104,9 @@ func (r *StatisticsRepository) RentalClusters(
 		    FILTER (WHERE representative_eligible)::float8,
 		  percentile_cont(.5) WITHIN GROUP (ORDER BY monthly_rent_ex_vat)
 		    FILTER (WHERE representative_eligible)::float8
-		FROM bounded GROUP BY grid_point ORDER BY count(*) DESC LIMIT 5000`, clause)
-	rows, err := r.pool.Query(ctx, query, filter.FromDate, filter.ToDate,
-		filter.PropertyGroup, geographyID, filter.MinArea, filter.MaxArea, bounds.West, bounds.South,
-		bounds.East, bounds.North, gridSize)
+		FROM bounded GROUP BY grid_point ORDER BY count(*) DESC LIMIT 5000`,
+		where, args.add(gridSize), boundsEnvelope(bounds, &args))
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("rental map clusters: %w", err)
 	}
@@ -126,29 +124,27 @@ func (r *StatisticsRepository) RentalClusters(
 	return items, rows.Err()
 }
 
-func (r *StatisticsRepository) RentalPropertyPoints(
+func (r *RentalStatisticsRepository) RentalPropertyPoints(
 	ctx context.Context, filter StatisticsFilter, bounds Bounds, limit int,
 ) ([]RentalPropertyPoint, error) {
-	clause, geographyID, err := r.geographyClause(ctx, filter.GeographyID)
+	var args queryArgs
+	where, err := r.factFilter(ctx, "fact", filter, &args)
 	if err != nil {
 		return nil, err
 	}
 	query := fmt.Sprintf(`
-		SELECT transaction_id,cadastral_municipality_code,building_number,
-		  ST_X(ST_Transform(location,4326)),
-		  ST_Y(ST_Transform(location,4326)),contract_date::text,property_group,
-		  area::float8,monthly_rent_ex_vat::float8,
-		  monthly_rent_per_sqm::float8,representative_eligible
-		FROM analytics.rental_facts
-		WHERE location IS NOT NULL
-		  AND location && ST_Transform(ST_MakeEnvelope($7,$8,$9,$10,4326),3794)
-		  AND ($1::date IS NULL OR contract_date >= $1)
-		  AND ($2::date IS NULL OR contract_date <= $2)
-		  AND ($3 = '' OR property_group=$3) AND %s
-		ORDER BY contract_date DESC NULLS LAST,transaction_id LIMIT $11`, clause)
-	rows, err := r.pool.Query(ctx, query, filter.FromDate, filter.ToDate,
-		filter.PropertyGroup, geographyID, filter.MinArea, filter.MaxArea, bounds.West, bounds.South,
-		bounds.East, bounds.North, limit)
+		SELECT fact.transaction_id,fact.cadastral_municipality_code,fact.building_number,
+		  ST_X(ST_Transform(fact.location,4326)),
+		  ST_Y(ST_Transform(fact.location,4326)),fact.contract_date::text,fact.property_group,
+		  fact.area::float8,fact.monthly_rent_ex_vat::float8,
+		  fact.monthly_rent_per_sqm::float8,fact.representative_eligible
+		FROM analytics.rental_facts fact
+		WHERE fact.location IS NOT NULL
+		  AND fact.location && %s
+		  AND %s
+		ORDER BY fact.contract_date DESC NULLS LAST,fact.transaction_id LIMIT %s`,
+		boundsEnvelope(bounds, &args), where, args.add(limit))
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("rental map points: %w", err)
 	}
@@ -167,10 +163,11 @@ func (r *StatisticsRepository) RentalPropertyPoints(
 	return items, rows.Err()
 }
 
-func (r *StatisticsRepository) RentalOverview(
+func (r *RentalStatisticsRepository) RentalOverview(
 	ctx context.Context, filter StatisticsFilter,
 ) (RentalOverview, error) {
-	clause, geographyID, err := r.geographyClause(ctx, filter.GeographyID)
+	var args queryArgs
+	where, err := r.factFilter(ctx, "fact", filter, &args)
 	if err != nil {
 		return RentalOverview{}, err
 	}
@@ -191,13 +188,10 @@ func (r *StatisticsRepository) RentalOverview(
 		  avg(monthly_rent_per_sqm) FILTER (WHERE is_quality_eligible)::float8,
 		  percentile_cont(.5) WITHIN GROUP (ORDER BY area)
 		    FILTER (WHERE representative_eligible)::float8
-		FROM analytics.rental_facts
-		WHERE ($1::date IS NULL OR contract_date >= $1)
-		  AND ($2::date IS NULL OR contract_date <= $2)
-		  AND ($3 = '' OR property_group=$3) AND %s`, clause)
+		FROM analytics.rental_facts fact
+		WHERE %s`, where)
 	var result RentalOverview
-	err = r.pool.QueryRow(ctx, query, filter.FromDate, filter.ToDate,
-		filter.PropertyGroup, geographyID, filter.MinArea, filter.MaxArea).Scan(
+	err = r.db.QueryRow(ctx, query, args...).Scan(
 		&result.TransactionCount, &result.EligibleCount, &result.IncludedSampleSize,
 		&result.ExcludedOutlierCount, &result.MonthlyRentSampleSize,
 		&result.RentPerSQMSampleSize, &result.MedianMonthlyRent,
@@ -212,10 +206,11 @@ func (r *StatisticsRepository) RentalOverview(
 	return result, nil
 }
 
-func (r *StatisticsRepository) RentalTimeSeries(
+func (r *RentalStatisticsRepository) RentalTimeSeries(
 	ctx context.Context, filter StatisticsFilter, interval string,
 ) ([]RentalTimeSeriesPoint, error) {
-	clause, geographyID, err := r.geographyClause(ctx, filter.GeographyID)
+	var args queryArgs
+	where, err := r.factFilter(ctx, "fact", filter, &args)
 	if err != nil {
 		return nil, err
 	}
@@ -224,18 +219,15 @@ func (r *StatisticsRepository) RentalTimeSeries(
 	query := fmt.Sprintf(`
 		WITH periods AS (
 		  SELECT date_trunc('%s',contract_date)::date period,
-		    (date_trunc('%s',contract_date)+interval '%s'>current_date) incomplete,
+		    (date_trunc('%s',contract_date)+interval '%s'>(SELECT coalesce(max(r.analytics_rent_through), current_date::timestamptz) - interval '9 months' FROM analytics.analytical_releases r JOIN analytics.analytical_publication p ON r.id = p.active_release_id)) incomplete,
 		    count(*)::bigint transaction_count,
 		    count(*) FILTER (WHERE representative_eligible)::bigint sample_size,
 		    percentile_cont(.5) WITHIN GROUP (ORDER BY monthly_rent_ex_vat)
 		      FILTER (WHERE representative_eligible)::float8 median_rent,
 		    percentile_cont(.5) WITHIN GROUP (ORDER BY monthly_rent_per_sqm)
 		      FILTER (WHERE representative_eligible)::float8 median_per_sqm
-		  FROM analytics.rental_facts
-		  WHERE contract_date IS NOT NULL
-		    AND ($1::date IS NULL OR contract_date >= $1)
-		    AND ($2::date IS NULL OR contract_date <= $2)
-		    AND ($3 = '' OR property_group=$3) AND %s
+		  FROM analytics.rental_facts fact
+		  WHERE fact.contract_date IS NOT NULL AND %s
 		  GROUP BY 1,2
 		), compared AS (
 		  SELECT *,
@@ -255,9 +247,8 @@ func (r *StatisticsRepository) RentalTimeSeries(
 		  CASE WHEN previous_period=period-interval '1 year' AND previous_per_sqm>0
 		    THEN 100*(median_per_sqm/previous_per_sqm-1) END
 		FROM compared ORDER BY period`,
-		unit, unit, step, clause, lag, lag, lag, lag)
-	rows, err := r.pool.Query(ctx, query, filter.FromDate, filter.ToDate,
-		filter.PropertyGroup, geographyID, filter.MinArea, filter.MaxArea)
+		unit, unit, step, where, lag, lag, lag, lag)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("rental time-series statistics: %w", err)
 	}
@@ -284,29 +275,26 @@ func (r *StatisticsRepository) RentalTimeSeries(
 	return items, rows.Err()
 }
 
-func (r *StatisticsRepository) RentalOutliers(
+func (r *RentalStatisticsRepository) RentalOutliers(
 	ctx context.Context, filter StatisticsFilter, limit, offset int,
 ) ([]RentalOutlierRecord, int64, error) {
-	clause, geographyID, err := r.geographyClause(ctx, filter.GeographyID)
+	var args queryArgs
+	where, err := r.factFilter(ctx, "fact", filter, &args)
 	if err != nil {
 		return nil, 0, err
 	}
 	query := fmt.Sprintf(`
-		SELECT count(*) OVER ()::bigint,f.transaction_id,f.contract_date::text,
-		  f.property_group,f.area::float8,f.monthly_rent_ex_vat::float8,
-		  f.monthly_rent_per_sqm::float8,e.cohort_level,e.cohort_size,
+		SELECT count(*) OVER ()::bigint,fact.transaction_id,fact.contract_date::text,
+		  fact.property_group,fact.area::float8,fact.monthly_rent_ex_vat::float8,
+		  fact.monthly_rent_per_sqm::float8,e.cohort_level,e.cohort_size,
 		  e.cohort_median::float8,e.lower_bound::float8,e.upper_bound::float8,
 		  e.modified_z_score::float8,e.rule_version
-		FROM analytics.rental_facts f
+		FROM analytics.rental_facts fact
 		JOIN analytics.rental_outlier_evaluations e USING(transaction_id)
-		WHERE e.status='outlier'
-		  AND ($1::date IS NULL OR f.contract_date >= $1)
-		  AND ($2::date IS NULL OR f.contract_date <= $2)
-		  AND ($3 = '' OR f.property_group=$3) AND %s
-		ORDER BY e.modified_z_score DESC NULLS LAST,f.transaction_id
-		LIMIT $7 OFFSET $8`, clause)
-	rows, err := r.pool.Query(ctx, query, filter.FromDate, filter.ToDate,
-		filter.PropertyGroup, geographyID, filter.MinArea, filter.MaxArea, limit, offset)
+		WHERE e.status='outlier' AND %s
+		ORDER BY e.modified_z_score DESC NULLS LAST,fact.transaction_id
+		LIMIT %s OFFSET %s`, where, args.add(limit), args.add(offset))
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list rental outliers: %w", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
 )
 
 type ContextBenchmark struct {
@@ -141,7 +142,7 @@ type contextSubject struct {
 	packageSignature string
 }
 
-func (r *StatisticsRepository) TransactionContext(
+func (r *TransactionRepository) TransactionContext(
 	ctx context.Context, kind string, id int64,
 ) (TransactionContext, error) {
 	factTable, amountColumn := "analytics.sale_facts", "price_per_sqm"
@@ -154,9 +155,8 @@ func (r *StatisticsRepository) TransactionContext(
 	} else if kind != "sale" {
 		return TransactionContext{}, ErrTransactionNotFound
 	}
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
-		IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly,
-	})
+	now := r.now()
+	tx, err := database.BeginReadOnly(ctx, r.db, pgx.RepeatableRead)
 	if err != nil {
 		return TransactionContext{}, fmt.Errorf("begin transaction context: %w", err)
 	}
@@ -201,7 +201,7 @@ func (r *StatisticsRepository) TransactionContext(
 	}
 	result := TransactionContext{
 		TransactionKind: kind, TransactionID: id, ContractYear: subject.year,
-		IncompletePeriod: subject.year == time.Now().Year(),
+		IncompletePeriod: subject.year == now.Year(),
 		PropertyGroup:    subject.propertyGroup, ActualAmountPerSQM: subject.actual,
 		DirectComparables: []DirectComparable{}, Benchmarks: []ContextBenchmark{},
 		Quality:            subject.quality,
@@ -224,27 +224,18 @@ func (r *StatisticsRepository) TransactionContext(
 		result.DirectComparables = direct
 	}
 
-	nearbyFound := false
 	for _, profile := range nearbyBenchmarkProfiles(subject.constructionYear) {
-		for _, radius := range []int{500, 1000, 2500, 5000} {
-			benchmark, ok, loadErr := loadContextBenchmark(ctx, tx, benchmarkQuery{
-				table: cohortTable, subjectTable: factTable, amountColumn: amountColumn,
-				subjectID: id, actual: subject.actual, subjectArea: subject.area,
-				subjectConstructionYear: subject.constructionYear, profile: profile,
-				propertyGroup: subject.propertyGroup, year: subject.year,
-				scope: "nearby", label: fmt.Sprintf("Primerljivi posli v krogu %s",
-					formatRadius(radius)), radius: radius,
-			})
-			if loadErr != nil {
-				return TransactionContext{}, loadErr
-			}
-			if ok {
-				result.Benchmarks = append(result.Benchmarks, benchmark)
-				nearbyFound = true
-				break
-			}
+		benchmark, ok, loadErr := loadNearbyBenchmark(ctx, tx, benchmarkQuery{
+			table: cohortTable, subjectTable: factTable, amountColumn: amountColumn,
+			subjectID: id, actual: subject.actual, subjectArea: subject.area,
+			subjectConstructionYear: subject.constructionYear, profile: profile,
+			propertyGroup: subject.propertyGroup, year: subject.year, scope: "nearby",
+		}, nearbyBenchmarkRadii)
+		if loadErr != nil {
+			return TransactionContext{}, loadErr
 		}
-		if nearbyFound {
+		if ok {
+			result.Benchmarks = append(result.Benchmarks, benchmark)
 			break
 		}
 	}
@@ -304,13 +295,14 @@ func (r *StatisticsRepository) TransactionContext(
 		constructionYear: subject.constructionYear,
 		packageSignature: subject.packageSignature,
 		municipalityID:   subject.municipalityID,
+		now:              now,
 	})
 	if estimateErr != nil {
 		return TransactionContext{}, estimateErr
 	}
 	result.CurrentMarket = currentMarket
 
-	valuation, valuationErr := r.ValuationPrediction(ctx, kind, id)
+	valuation, valuationErr := loadValuationPrediction(ctx, r.db, kind, id)
 	if valuationErr == nil {
 		result.Valuation = &ContextValuation{
 			PredictedAmountPerSQM: valuation.PredictedAmountPerSQM,
@@ -336,9 +328,12 @@ type currentMarketQuery struct {
 	area                                             float64
 	constructionYear                                 *int
 	municipalityID                                   *int64
+	// now is the reference time: the current year and the age of each comparable.
+	now time.Time
 }
 
 type marketCandidate struct {
+	transactionID                int64
 	amountPerSQM, area, distance float64
 	constructionYear             *int
 	contractDate                 time.Time
@@ -349,62 +344,115 @@ type marketCandidate struct {
 const (
 	currentMarketMinimumSample = 5
 	currentMarketTargetSample  = 50
-	locationMinimumLocalSample = 20
-	locationMinimumTotalSample = 50
-	locationShrinkageStrength  = 30.0
+	// currentMarketCandidateLimit is the most comparables one search tier uses.
+	currentMarketCandidateLimit = 250
+	locationMinimumLocalSample  = 20
+	locationMinimumTotalSample  = 50
+	locationShrinkageStrength   = 30.0
 )
 
-func loadCurrentMarketEstimate(
-	ctx context.Context, tx pgx.Tx, input currentMarketQuery,
-) (*CurrentMarketEstimate, error) {
-	if input.area <= 0 {
-		return nil, nil
-	}
-	profiles := nearbyBenchmarkProfiles(input.constructionYear)
-	radii := []int{1000, 2500, 5000, 10000, 20000}
-	var selected []marketCandidate
-	var selectedProfile benchmarkProfile
-	selectedRadius := 0
-	selectedStartYear := time.Now().Year()
-	packageCompositionMatched := true
+// currentMarketRadii are the search tiers, narrowest first; the last is the widest search.
+var currentMarketRadii = []int{1000, 2500, 5000, 10000, 20000}
+
+// currentMarketSelection is the comparable set chosen for the estimate.
+type currentMarketSelection struct {
+	candidates     []marketCandidate
+	radius         int
+	startYear      int
+	packageMatched bool
+}
+
+// selectCurrentCandidates picks the comparable set from candidates sorted by distance (then
+// transaction id). It tries, in order, comparables of the same package composition and then any
+// composition; within each, this calendar year before also the previous one; and widening
+// radii. A tier uses its nearest currentMarketCandidateLimit comparables. The first tier that
+// reaches the target sample wins; otherwise the largest tier seen (the earliest on ties).
+//
+// Package signatures are costly to compute, so they are loaded on demand: loadSignatures(r)
+// must fill packageSignature for every candidate within r metres. The chosen comparables always
+// have their signatures (the weights use them).
+func selectCurrentCandidates(
+	candidates []marketCandidate, packageSignature string, thisYear int, loadSignatures func(radius int) error,
+) (currentMarketSelection, error) {
+	var selected currentMarketSelection
 	search := func(requirePackageMatch bool) error {
-		targetReached := false
-		for _, startYear := range []int{time.Now().Year(), time.Now().Year() - 1} {
-			for _, profile := range profiles {
-				for _, radius := range radii {
-					candidates, err := queryCurrentCandidates(ctx, tx, input, profile, radius, startYear, requirePackageMatch)
-					if err != nil {
+		for _, startYear := range []int{thisYear, thisYear - 1} {
+			for _, radius := range currentMarketRadii {
+				if requirePackageMatch {
+					if err := loadSignatures(radius); err != nil {
 						return err
 					}
-					if len(candidates) > len(selected) {
-						selected, selectedProfile, selectedRadius, selectedStartYear = candidates, profile, radius, startYear
-					}
-					if len(candidates) >= currentMarketTargetSample {
-						selected, selectedProfile, selectedRadius, selectedStartYear = candidates, profile, radius, startYear
-						targetReached = true
-						break
-					}
 				}
-				if targetReached {
-					break
+				tier := currentMarketTier(candidates, packageSignature, requirePackageMatch, startYear, radius)
+				if len(tier) > len(selected.candidates) || len(tier) >= currentMarketTargetSample {
+					selected = currentMarketSelection{candidates: tier, radius: radius, startYear: startYear,
+						packageMatched: requirePackageMatch}
 				}
-			}
-			if targetReached {
-				break
+				if len(tier) >= currentMarketTargetSample {
+					return nil
+				}
 			}
 		}
 		return nil
 	}
 	if err := search(true); err != nil {
-		return nil, err
+		return currentMarketSelection{}, err
 	}
-	if len(selected) < currentMarketMinimumSample {
-		selected = nil
-		packageCompositionMatched = false
+	if len(selected.candidates) < currentMarketMinimumSample {
+		selected = currentMarketSelection{}
 		if err := search(false); err != nil {
-			return nil, err
+			return currentMarketSelection{}, err
 		}
 	}
+	if len(selected.candidates) >= currentMarketMinimumSample && !selected.packageMatched {
+		if err := loadSignatures(selected.radius); err != nil {
+			return currentMarketSelection{}, err
+		}
+		selected.candidates = currentMarketTier(candidates, packageSignature, false, selected.startYear, selected.radius)
+	}
+	return selected, nil
+}
+
+// currentMarketTier is one search tier: the nearest comparables within radius contracted from
+// startYear on, optionally of the subject's package composition.
+func currentMarketTier(
+	candidates []marketCandidate, packageSignature string, requirePackageMatch bool, startYear, radius int,
+) []marketCandidate {
+	tier := []marketCandidate{}
+	for _, candidate := range candidates {
+		if candidate.distance > float64(radius) {
+			break // sorted by distance
+		}
+		if candidate.contractDate.Year() < startYear ||
+			(requirePackageMatch && candidate.packageSignature != packageSignature) {
+			continue
+		}
+		tier = append(tier, candidate)
+		if len(tier) == currentMarketCandidateLimit {
+			break
+		}
+	}
+	return tier
+}
+
+func loadCurrentMarketEstimate(
+	ctx context.Context, tx database.Querier, input currentMarketQuery,
+) (*CurrentMarketEstimate, error) {
+	if input.area <= 0 {
+		return nil, nil
+	}
+	thisYear := input.now.Year()
+	profile := nearbyBenchmarkProfiles(input.constructionYear)[0]
+	candidates, err := queryCurrentCandidates(ctx, tx, input, profile)
+	if err != nil {
+		return nil, err
+	}
+	selection, err := selectCurrentCandidates(candidates, input.packageSignature, thisYear,
+		signatureLoader(ctx, tx, input.transactionKind, candidates))
+	if err != nil {
+		return nil, err
+	}
+	selected, selectedRadius := selection.candidates, selection.radius
 	if len(selected) < currentMarketMinimumSample {
 		return nil, nil
 	}
@@ -416,16 +464,16 @@ func loadCurrentMarketEstimate(
 			*input.municipalityID == *candidate.municipalityID {
 			localCurrent++
 		}
-		areaTolerance := float64(selectedProfile.areaTolerancePercent) / 100
+		areaTolerance := float64(profile.areaTolerancePercent) / 100
 		areaScore := math.Max(0, 1-math.Abs(candidate.area/input.area-1)/areaTolerance)
 		ageScore := .5
 		if input.constructionYear != nil && candidate.constructionYear != nil &&
-			selectedProfile.constructionYearTolerance > 0 {
+			profile.constructionYearTolerance > 0 {
 			ageScore = math.Max(0, 1-math.Abs(float64(*candidate.constructionYear-*input.constructionYear))/
-				float64(selectedProfile.constructionYearTolerance))
+				float64(profile.constructionYearTolerance))
 		}
 		distanceScore := math.Max(0, 1-candidate.distance/20000)
-		recencyScore := math.Max(0, 1-time.Since(candidate.contractDate).Hours()/(24*730))
+		recencyScore := math.Max(0, 1-input.now.Sub(candidate.contractDate).Hours()/(24*730))
 		packageScore := 0.0
 		if candidate.packageSignature == input.packageSignature {
 			packageScore = 1
@@ -435,7 +483,7 @@ func loadCurrentMarketEstimate(
 	}
 
 	locationFactor, rawLocationFactor, localSample, adjustmentErr := currentMarketLocationFactor(
-		ctx, tx, input, selectedProfile, selectedRadius, localCurrent,
+		ctx, tx, input, profile, selectedRadius, localCurrent,
 	)
 	if adjustmentErr != nil {
 		return nil, adjustmentErr
@@ -447,7 +495,7 @@ func loadCurrentMarketEstimate(
 	central := unadjustedCentral * locationFactor
 	upper := unadjustedUpper * locationFactor
 	warnings := []string{"statistična tržna ocena, ne uradna cenitev", "tekoče leto še ni zaključeno"}
-	if selectedStartYear < time.Now().Year() {
+	if selection.startYear < thisYear {
 		warnings = append(warnings, "za doseganje ciljnega vzorca so vključeni tudi posli prejšnjega koledarskega leta")
 	}
 	if len(selected) < currentMarketTargetSample {
@@ -458,19 +506,19 @@ func loadCurrentMarketEstimate(
 	} else if rawLocationFactor != 1 {
 		warnings = append(warnings, "lokalna prilagoditev ni uporabljena zaradi premajhnega podpornega vzorca")
 	}
-	if !packageCompositionMatched {
+	if !selection.packageMatched {
 		warnings = append(warnings, "premalo poslov z enako sestavo vrst sestavin paketa; uporabljena je mešana sestava paketov")
 	}
 	confidence := "very_low"
 	if len(selected) >= 20 {
 		confidence = "low"
 	}
-	if len(selected) >= currentMarketTargetSample && selectedRadius <= 10000 && selectedProfile.areaTolerancePercent == 15 {
+	if len(selected) >= currentMarketTargetSample && selectedRadius <= 10000 && profile.areaTolerancePercent == 15 {
 		confidence = "moderate"
 	}
 	var ageTolerance *int
-	if selectedProfile.constructionYearTolerance > 0 {
-		ageTolerance = &selectedProfile.constructionYearTolerance
+	if profile.constructionYearTolerance > 0 {
+		ageTolerance = &profile.constructionYearTolerance
 	}
 	return &CurrentMarketEstimate{
 		LowerTotal: lower * input.area, CentralTotal: central * input.area, UpperTotal: upper * input.area,
@@ -480,53 +528,49 @@ func loadCurrentMarketEstimate(
 		UnadjustedLowerPerSQM: unadjustedLower, UnadjustedCentralPerSQM: unadjustedCentral,
 		UnadjustedUpperPerSQM: unadjustedUpper,
 		ComparableCount:       len(selected), MaximumRadiusMeters: selectedRadius,
-		AreaTolerancePercent:      selectedProfile.areaTolerancePercent,
+		AreaTolerancePercent:      profile.areaTolerancePercent,
 		ConstructionYearTolerance: ageTolerance, LocationAdjustmentFactor: locationFactor,
 		RawLocationFactor: rawLocationFactor, LocationAdjustmentApplied: locationFactor != 1,
-		LocalAdjustmentSampleSize: localSample, PackageCompositionMatched: packageCompositionMatched,
-		ReferenceYear: time.Now().Year(),
+		LocalAdjustmentSampleSize: localSample, PackageCompositionMatched: selection.packageMatched,
+		ReferenceYear: thisYear,
 		Confidence:    confidence, Warnings: warnings,
 		MethodologyVersion: "adaptive-current-market-v4",
 	}, nil
 }
 
+// queryCurrentCandidates loads, in one query, every comparable any search tier of
+// selectCurrentCandidates can use: the widest radius and the earliest start year, sorted by
+// distance. Package signatures are not computed here (see signatureLoader).
 func queryCurrentCandidates(
-	ctx context.Context, tx pgx.Tx, input currentMarketQuery, profile benchmarkProfile, radius, startYear int,
-	requirePackageMatch bool,
+	ctx context.Context, tx database.Querier, input currentMarketQuery, profile benchmarkProfile,
 ) ([]marketCandidate, error) {
-	args := []any{input.subjectID, input.propertyGroup, startYear, input.area, radius, time.Now().Year() + 1}
+	thisYear := input.now.Year()
+	var args queryArgs
+	subject := args.add(input.subjectID)
 	ageClause := "TRUE"
-	packageClause := "TRUE"
-	signatureSQL := packageSignatureExpression(input.transactionKind, "fact.transaction_id")
-	if requirePackageMatch {
-		args = append(args, input.packageSignature)
-		packageClause = fmt.Sprintf("%s=$%d", signatureSQL, len(args))
-	}
 	if profile.constructionYearTolerance > 0 && input.constructionYear != nil {
-		args = append(args, *input.constructionYear)
-		ageClause = fmt.Sprintf("fact.construction_year IS NOT NULL AND abs(fact.construction_year-$%d)<=%d",
-			len(args), profile.constructionYearTolerance)
+		ageClause = fmt.Sprintf("fact.construction_year IS NOT NULL AND abs(fact.construction_year-%s)<=%d",
+			args.add(*input.constructionYear), profile.constructionYearTolerance)
 	}
-	query := fmt.Sprintf(`SELECT fact.%s::float8,fact.area::float8,
-	  ST_Distance(fact.location,subject.location)::float8,fact.construction_year,
-	  fact.contract_date,%s,fact.municipality_id
-	FROM %s fact CROSS JOIN (SELECT location FROM %s WHERE transaction_id=$1) subject
-	WHERE fact.transaction_id<>$1 AND fact.property_group=$2
-	  AND fact.contract_date>=make_date($3,1,1) AND fact.contract_date<make_date($6,1,1)
-	  AND fact.representative_eligible AND fact.%s>0 AND fact.area>0
+	query := fmt.Sprintf(`
+	SELECT fact.transaction_id,fact.%[1]s::float8,fact.area::float8,
+	  ST_Distance(fact.location,subject.location)::float8 distance,fact.construction_year,
+	  fact.contract_date,fact.municipality_id
+	FROM %[2]s fact CROSS JOIN (SELECT location FROM %[3]s WHERE transaction_id=%[4]s) subject
+	WHERE fact.transaction_id<>%[4]s AND fact.property_group=%[5]s
+	  AND fact.contract_date>=make_date(%[6]s-1,1,1) AND fact.contract_date<make_date(%[6]s+1,1,1)
+	  AND fact.representative_eligible AND fact.%[1]s>0 AND fact.area>0
 	  AND subject.location IS NOT NULL AND fact.location IS NOT NULL
-	  AND ST_DWithin(fact.location,subject.location,$5)
-	  AND abs(fact.area/$4-1)<=%f AND %s AND %s
-	  AND NOT EXISTS (
-	    SELECT 1 FROM analytics.near_duplicate_candidates duplicate
-	    WHERE duplicate.transaction_kind='%s'
-	      AND duplicate.candidate_transaction_id=fact.transaction_id
-	  )
-	ORDER BY ST_Distance(fact.location,subject.location),fact.transaction_id LIMIT 250`,
-		input.amountColumn, signatureSQL,
-		input.table, input.subjectTable, input.amountColumn,
-		float64(profile.areaTolerancePercent)/100, ageClause, packageClause,
-		input.transactionKind)
+	  AND ST_DWithin(fact.location,subject.location,%[7]s)
+	  AND abs(fact.area/%[8]s-1)<=%[9]f AND %[10]s
+	  AND fact.transaction_id NOT IN (
+	    SELECT candidate_transaction_id FROM analytics.near_duplicate_candidates
+	    WHERE transaction_kind='%[11]s')
+	ORDER BY distance,fact.transaction_id`,
+		input.amountColumn, input.table, input.subjectTable, subject,
+		args.add(input.propertyGroup), args.add(thisYear),
+		args.add(currentMarketRadii[len(currentMarketRadii)-1]), args.add(input.area),
+		float64(profile.areaTolerancePercent)/100, ageClause, input.transactionKind)
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load current market candidates: %w", err)
@@ -535,9 +579,8 @@ func queryCurrentCandidates(
 	result := []marketCandidate{}
 	for rows.Next() {
 		var candidate marketCandidate
-		if err := rows.Scan(&candidate.amountPerSQM, &candidate.area, &candidate.distance,
-			&candidate.constructionYear, &candidate.contractDate,
-			&candidate.packageSignature, &candidate.municipalityID); err != nil {
+		if err := rows.Scan(&candidate.transactionID, &candidate.amountPerSQM, &candidate.area, &candidate.distance,
+			&candidate.constructionYear, &candidate.contractDate, &candidate.municipalityID); err != nil {
 			return nil, fmt.Errorf("scan current market candidate: %w", err)
 		}
 		result = append(result, candidate)
@@ -545,6 +588,55 @@ func queryCurrentCandidates(
 	return result, rows.Err()
 }
 
+// signatureLoader returns the loadSignatures callback of selectCurrentCandidates: it computes
+// the package signatures of the candidates within a radius that are still unknown, in one query.
+func signatureLoader(
+	ctx context.Context, tx database.Querier, kind string, candidates []marketCandidate,
+) func(radius int) error {
+	loaded := 0 // candidates are sorted by distance: the first loaded ones are known
+	return func(radius int) error {
+		end := loaded
+		for end < len(candidates) && candidates[end].distance <= float64(radius) {
+			end++
+		}
+		if end == loaded {
+			return nil
+		}
+		ids := make([]int64, 0, end-loaded)
+		for _, candidate := range candidates[loaded:end] {
+			ids = append(ids, candidate.transactionID)
+		}
+		rows, err := tx.Query(ctx, fmt.Sprintf(`SELECT id,%s FROM unnest($1::bigint[]) id`,
+			packageSignatureExpression(kind, "id")), ids)
+		if err != nil {
+			return fmt.Errorf("load package signatures: %w", err)
+		}
+		defer rows.Close()
+		signatures := make(map[int64]string, len(ids))
+		for rows.Next() {
+			var id int64
+			var signature string
+			if err := rows.Scan(&id, &signature); err != nil {
+				return fmt.Errorf("scan package signature: %w", err)
+			}
+			signatures[id] = signature
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("load package signatures: %w", err)
+		}
+		for index := loaded; index < end; index++ {
+			candidates[index].packageSignature = signatures[candidates[index].transactionID]
+		}
+		loaded = end
+		return nil
+	}
+}
+
+// The near-duplicate exclusions in this file are written as NOT IN (a hashed anti-join over the
+// candidate ids, about 50 ms) rather than NOT EXISTS: near_duplicate_candidates has no index
+// led by candidate_transaction_id, so a per-row NOT EXISTS probes the primary key at ~10 ms
+// per comparable. candidate_transaction_id is part of the primary key, so it is never NULL
+// and NOT IN keeps NOT EXISTS semantics.
 func packageSignatureExpression(kind, transactionExpression string) string {
 	if kind == "rent" {
 		return fmt.Sprintf("analytics.rental_package_signature(%s)", transactionExpression)
@@ -553,14 +645,14 @@ func packageSignatureExpression(kind, transactionExpression string) string {
 }
 
 func currentMarketLocationFactor(
-	ctx context.Context, tx pgx.Tx, input currentMarketQuery, profile benchmarkProfile,
+	ctx context.Context, tx database.Querier, input currentMarketQuery, profile benchmarkProfile,
 	radius, localCurrent int,
 ) (float64, float64, int, error) {
 	if input.municipalityID == nil || localCurrent >= 5 {
 		return 1, 1, localCurrent, nil
 	}
-	args := []any{input.subjectID, input.propertyGroup, time.Now().Year() - 3,
-		time.Now().Year(), input.area, radius, *input.municipalityID}
+	args := []any{input.subjectID, input.propertyGroup, input.now.Year() - 3,
+		input.now.Year(), input.area, radius, *input.municipalityID}
 	ageClause := "TRUE"
 	if profile.constructionYearTolerance > 0 && input.constructionYear != nil {
 		args = append(args, *input.constructionYear)
@@ -577,11 +669,9 @@ func currentMarketLocationFactor(
 	  AND fact.%s>0 AND fact.area>0 AND fact.location IS NOT NULL
 	  AND ST_DWithin(fact.location,subject.location,$6)
 	  AND abs(fact.area/$5-1)<=%f AND %s
-	  AND NOT EXISTS (
-	    SELECT 1 FROM analytics.near_duplicate_candidates duplicate
-	    WHERE duplicate.transaction_kind='%s'
-	      AND duplicate.candidate_transaction_id=fact.transaction_id
-	  )`, input.amountColumn, input.amountColumn,
+	  AND fact.transaction_id NOT IN (
+	    SELECT candidate_transaction_id FROM analytics.near_duplicate_candidates
+	    WHERE transaction_kind='%s')`, input.amountColumn, input.amountColumn,
 		input.table, input.subjectTable, input.amountColumn,
 		float64(profile.areaTolerancePercent)/100, ageClause, input.transactionKind)
 	var localN, allN int
@@ -633,7 +723,7 @@ type directComparableQuery struct {
 }
 
 func loadDirectComparables(
-	ctx context.Context, tx pgx.Tx, input directComparableQuery,
+	ctx context.Context, tx database.Querier, input directComparableQuery,
 ) ([]DirectComparable, error) {
 	query := fmt.Sprintf(`
 		SELECT fact.transaction_id,fact.contract_date::text,
@@ -662,11 +752,9 @@ func loadDirectComparables(
 		  AND fact.%s>0
 		  AND (extract(year FROM fact.contract_date)::integer=$5
 		    OR abs(fact.area/$4-1)<=.15)
-		  AND NOT EXISTS (
-		    SELECT 1 FROM analytics.near_duplicate_candidates duplicate
-		    WHERE duplicate.transaction_kind='%s'
-		      AND duplicate.candidate_transaction_id=fact.transaction_id
-		  )
+		  AND fact.transaction_id NOT IN (
+		    SELECT candidate_transaction_id FROM analytics.near_duplicate_candidates
+		    WHERE transaction_kind='%s')
 		ORDER BY match_tier,abs(fact.area/$4-1),
 		  abs(fact.contract_date-make_date($5,7,1)),fact.transaction_id
 		LIMIT 8`, input.totalColumn, input.amountColumn, input.amountColumn,
@@ -753,51 +841,125 @@ type benchmarkQuery struct {
 	profile                                                        benchmarkProfile
 }
 
-func loadContextBenchmark(
-	ctx context.Context, tx pgx.Tx, input benchmarkQuery,
-) (ContextBenchmark, bool, error) {
+// benchmarkPredicate is the population of a benchmark beyond the common conditions: its
+// geography (or none for the country) and the profile's area and construction-year tolerances.
+func benchmarkPredicate(input benchmarkQuery, args *queryArgs) string {
 	predicate := "TRUE"
-	args := []any{input.subjectID, input.propertyGroup, input.year, input.actual}
 	if input.geographyID != nil {
-		predicate = fmt.Sprintf("fact.%s=$5", input.geographyColumn)
-		args = append(args, *input.geographyID)
-	} else if input.scope == "nearby" {
-		predicate = fmt.Sprintf(`fact.location IS NOT NULL AND ST_DWithin(
-		  fact.location,(SELECT location FROM %s WHERE transaction_id=$1),$5
-		)`, input.subjectTable)
-		args = append(args, input.radius)
+		predicate = fmt.Sprintf("fact.%s=%s", input.geographyColumn, args.add(*input.geographyID))
 	}
 	if input.profile.areaTolerancePercent > 0 && input.subjectArea > 0 {
-		args = append(args, input.subjectArea)
-		predicate += fmt.Sprintf(" AND abs(fact.area/$%d-1)<=%f", len(args),
+		predicate += fmt.Sprintf(" AND abs(fact.area/%s-1)<=%f", args.add(input.subjectArea),
 			float64(input.profile.areaTolerancePercent)/100)
 	}
 	if input.profile.constructionYearTolerance > 0 && input.subjectConstructionYear != nil {
-		args = append(args, *input.subjectConstructionYear)
-		predicate += fmt.Sprintf(" AND fact.construction_year IS NOT NULL AND abs(fact.construction_year-$%d)<=%d",
-			len(args), input.profile.constructionYearTolerance)
+		predicate += fmt.Sprintf(" AND fact.construction_year IS NOT NULL AND abs(fact.construction_year-%s)<=%d",
+			args.add(*input.subjectConstructionYear), input.profile.constructionYearTolerance)
+	}
+	return predicate
+}
+
+// benchmarkFrom is the common population of every benchmark: representative comparables of
+// the subject's property group and contract year, without the subject. It adds $1..$4.
+func benchmarkFrom(input benchmarkQuery, args *queryArgs) (subject, actual, conditions string) {
+	subject = args.add(input.subjectID)
+	group := args.add(input.propertyGroup)
+	year := args.add(input.year)
+	actual = args.add(input.actual)
+	conditions = fmt.Sprintf(`fact.transaction_id<>%[1]s AND fact.property_group=%[2]s
+		  AND fact.contract_date>=make_date(%[3]s,1,1) AND fact.contract_date<make_date(%[3]s+1,1,1)
+		  AND fact.representative_eligible AND fact.%[4]s>0`, subject, group, year, input.amountColumn)
+	return subject, actual, conditions
+}
+
+func loadContextBenchmark(
+	ctx context.Context, tx database.Querier, input benchmarkQuery,
+) (ContextBenchmark, bool, error) {
+	var args queryArgs
+	_, actual, conditions := benchmarkFrom(input, &args)
+	predicate := benchmarkPredicate(input, &args)
+	label := "NULL::text"
+	if input.geographyID != nil {
+		label = fmt.Sprintf("(SELECT name FROM analytics.geographic_units WHERE id=%s)", args.add(*input.geographyID))
 	}
 	query := fmt.Sprintf(`
 		SELECT count(*)::bigint,
-		  percentile_cont(.5) WITHIN GROUP(ORDER BY fact.%s)::float8,
-		  100.0*count(*) FILTER(WHERE fact.%s<=$4)/NULLIF(count(*),0)::float8
-		FROM %s fact
-		WHERE fact.transaction_id<>$1
-		  AND fact.property_group=$2
-		  AND fact.contract_date>=make_date($3,1,1)
-		  AND fact.contract_date<make_date($3+1,1,1)
-		  AND fact.representative_eligible
-		  AND fact.%s>0
-		  AND %s`, input.amountColumn, input.amountColumn, input.table,
-		input.amountColumn, predicate)
+		  percentile_cont(.5) WITHIN GROUP(ORDER BY fact.%[1]s)::float8,
+		  100.0*count(*) FILTER(WHERE fact.%[1]s<=%[2]s)/NULLIF(count(*),0)::float8,
+		  %[6]s
+		FROM %[3]s fact
+		WHERE %[4]s AND %[5]s`, input.amountColumn, actual, input.table, conditions, predicate, label)
 	var sample int64
 	var median, percentile *float64
-	if err := tx.QueryRow(ctx, query, args...).Scan(
-		&sample, &median, &percentile,
-	); err != nil {
-		return ContextBenchmark{}, false, fmt.Errorf(
-			"load %s context benchmark: %w", input.scope, err)
+	var name *string
+	if err := tx.QueryRow(ctx, query, args...).Scan(&sample, &median, &percentile, &name); err != nil {
+		return ContextBenchmark{}, false, fmt.Errorf("load %s context benchmark: %w", input.scope, err)
 	}
+	if name != nil {
+		input.label = *name
+	}
+	return newContextBenchmark(input, sample, median, percentile)
+}
+
+// nearbyBenchmarkRadii are the nearby search radii, narrowest first.
+var nearbyBenchmarkRadii = []int{500, 1000, 2500, 5000}
+
+// loadNearbyBenchmark computes the nearby benchmark for every radius in one query and returns
+// the narrowest radius with a usable sample.
+func loadNearbyBenchmark(
+	ctx context.Context, tx database.Querier, input benchmarkQuery, radii []int,
+) (ContextBenchmark, bool, error) {
+	var args queryArgs
+	subject, actual, conditions := benchmarkFrom(input, &args)
+	predicate := benchmarkPredicate(input, &args)
+	query := fmt.Sprintf(`
+		SELECT radius.meters,count(fact.transaction_id)::bigint,
+		  percentile_cont(.5) WITHIN GROUP(ORDER BY fact.%[1]s)::float8,
+		  100.0*count(fact.transaction_id) FILTER(WHERE fact.%[1]s<=%[2]s)/NULLIF(count(fact.transaction_id),0)::float8
+		FROM unnest(%[7]s::int[]) radius(meters)
+		LEFT JOIN %[3]s fact ON %[4]s AND %[5]s
+		  AND fact.location IS NOT NULL
+		  AND ST_DWithin(fact.location,(SELECT location FROM %[6]s WHERE transaction_id=%[8]s),radius.meters)
+		GROUP BY radius.meters ORDER BY radius.meters`,
+		input.amountColumn, actual, input.table, conditions, predicate, input.subjectTable,
+		args.add(radii), subject)
+	rows, err := tx.Query(ctx, query, args...)
+	if err != nil {
+		return ContextBenchmark{}, false, fmt.Errorf("load nearby context benchmark: %w", err)
+	}
+	type radiusSample struct {
+		radius             int
+		sample             int64
+		median, percentile *float64
+	}
+	var samples []radiusSample
+	for rows.Next() {
+		var item radiusSample
+		if err := rows.Scan(&item.radius, &item.sample, &item.median, &item.percentile); err != nil {
+			rows.Close()
+			return ContextBenchmark{}, false, fmt.Errorf("scan nearby context benchmark: %w", err)
+		}
+		samples = append(samples, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return ContextBenchmark{}, false, fmt.Errorf("load nearby context benchmark: %w", err)
+	}
+	for _, item := range samples {
+		radiusInput := input
+		radiusInput.radius = item.radius
+		radiusInput.label = fmt.Sprintf("Primerljivi posli v krogu %s", formatRadius(item.radius))
+		benchmark, ok, err := newContextBenchmark(radiusInput, item.sample, item.median, item.percentile)
+		if err != nil || ok {
+			return benchmark, ok, err
+		}
+	}
+	return ContextBenchmark{}, false, nil
+}
+
+// newContextBenchmark applies the minimum sample (5) and builds the benchmark; ok is false
+// when there is no usable comparison.
+func newContextBenchmark(input benchmarkQuery, sample int64, median, percentile *float64) (ContextBenchmark, bool, error) {
 	if sample < 5 || median == nil || percentile == nil {
 		return ContextBenchmark{}, false, nil
 	}
@@ -805,17 +967,8 @@ func loadContextBenchmark(
 	if !valid {
 		return ContextBenchmark{}, false, nil
 	}
-	label := input.label
-	if input.geographyID != nil {
-		if err := tx.QueryRow(ctx,
-			"SELECT name FROM analytics.geographic_units WHERE id=$1",
-			*input.geographyID).Scan(&label); err != nil {
-			return ContextBenchmark{}, false, fmt.Errorf(
-				"load context geography label: %w", err)
-		}
-	}
 	benchmark := ContextBenchmark{
-		Scope: input.scope, Label: label, GeographyID: input.geographyID,
+		Scope: input.scope, Label: input.label, GeographyID: input.geographyID,
 		MedianAmountPerSQM: *median, SampleSize: sample,
 		DifferencePercent: difference, Percentile: *percentile,
 		Period: input.year, Reliability: benchmarkReliability(sample),
@@ -829,7 +982,8 @@ func loadContextBenchmark(
 		benchmark.BuildingAgeYears = &input.profile.constructionYearTolerance
 	}
 	if input.scope == "nearby" {
-		benchmark.RadiusMeters = &input.radius
+		radius := input.radius
+		benchmark.RadiusMeters = &radius
 	}
 	return benchmark, true, nil
 }

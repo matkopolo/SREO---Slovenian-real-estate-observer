@@ -465,7 +465,6 @@ regression.
 - `analytics.missingness_profiles`: field coverage by transaction kind,
   property group, contract year, and national/municipality geography. Targets
   are never imputed.
-- `analytics.publication_policy`: minimum samples and policy version.
 - `analytics.near_duplicate_candidates`: explainable cross-transaction
   same-building-part candidates within date, area, and amount tolerances.
 
@@ -474,14 +473,67 @@ code 1 or 2 with code 3 or any other class is not strict. Land attached to a
 house or apartment remains part of that package and is not reclassified as a
 land-only sale.
 
-### Identity and preferences
+### Construction sources (migration 042)
 
-- `app_users`: normalized email, bcrypt password hash, display name, and
-  lifecycle timestamps.
-- `auth_sessions`: SHA-256 hashes of random opaque bearer tokens; raw tokens
-  are never stored.
-- `user_preferences`: one bounded JSON object per user.
+`analytics.cadastre_buildings`: one row per registered building from the GURS
+Kataster nepremičnin (stavbe) national snapshot, replaced as a whole by
+`sync-construction`. Ownership files in the archive are never imported.
 
-The `real_estate_api` role remains unable to modify imported transactions or
-analytical values. It has narrowly scoped writes for identity, sessions,
-preferences, and anomaly review metadata only.
+| Column | Type | Source field | Meaning |
+|---|---|---|---|
+| `eid` | text, PK | `EID_STAVBA` | GURS building identifier |
+| `cadastral_code` | integer | `KO_ID` | Cadastral municipality code |
+| `building_number` | integer | `ST_STAVBE` | Building number within the cadastral municipality; with `cadastral_code` it matches ETN `building_parts` |
+| `year_built` | integer, null | `LETO_IZGRADNJE` | Year of construction |
+| `floors`, `dwellings`, `business_units` | integer, null | | Counts as registered |
+| `building_type` | integer, null | `TIPI_STAVB` | Code in `cadastre_codebooks` (`building_type`) |
+| `load_bearing_structure` | integer, null | `NOSILNE_KONSTRUKCIJE` | Code in `cadastre_codebooks` (`load_bearing_structure`) |
+| `registration_status` | integer, null | `STATUSI_VPISA_STAVBE` | Code in `cadastre_codebooks` (`registration_status`) |
+| `gross_floor_area` | numeric, null | `BRUTO_TLORISNA_POVRSINA` | Gross floor area, m² |
+| `municipality_eid` | text, null | | RPE municipality; equals `geographic_units.gurs_eid` |
+| `record_changed_on` | date, null | `DATUM_SYS` | Last change of the register record |
+| `location` | geometry(Point, 3794), null | | Building centroid (D96/TM) |
+| `source_date` | date | file name | Date of the GURS snapshot; indexed for `max(source_date)` |
+
+`analytics.cadastre_codebooks`: labels for the coded cadastre columns, as
+published with the archive. Primary key `(codebook, code)`; `codebook` is one of
+`building_type`, `load_bearing_structure`, `registration_status`.
+
+### Context series and lending rules (migration 041)
+
+`analytics.context_series`: long-format official context data used next to,
+never inside, the ETN statistics (affordability, demography, permits).
+
+| Column | Meaning |
+|---|---|
+| `source` | `surs`, `bsi` (Banka Slovenije) or `ecb` |
+| `series` | Series id, for example `net_wage_mean`, `net_wage_p50`, `housing_rate_aprc`, `euribor_6m`, `population_25_29`, `deaths_total`, `net_migration_total`, `dwellings_owner_occupied`, `households_one_person`, `permit_dwellings` |
+| `geography_key` | `SI` for national series or `municipality:<SURS code>` |
+| `period` | Source period as published: `2025`, `2026H1` (half-year), `2026M09` (SURS month) or `2026-10` (ECB month) |
+| `value`, `unit` | Value and its unit (EUR, %, persons, dwellings, …) |
+| `source_table`, `retrieved_at` | Source table id (for example SURS `05C4004S`) and fetch time |
+
+Primary key `(source, series, geography_key, period)`; `context_series_lookup_idx`
+serves `(series, geography_key, period DESC)`. Demography series are context only;
+see [demographics](../../docs/demographics.md).
+
+`analytics.lending_rules`: Banka Slovenije macroprudential limits for household
+housing loans, one row per `valid_from` date: `dsti_max` (maximum debt-service to
+net income, 0-1), `min_remaining_income` (EUR a month that must remain),
+`recommended_ltv_primary` (recommended loan-to-value for a primary residence),
+`source_url` and `note`. The affordability endpoints use the row valid on the
+calculation date.
+
+### Removed: identity and preferences
+
+SREO has no accounts. `app_users`, `auth_sessions` and `user_preferences`
+(migration 017) are dropped by `044_drop_identity.sql`. The `real_estate_api` role
+only reads.
+
+### Database roles
+
+| Role | Login | Privileges |
+|---|---|---|
+| `real_estate` | yes (development superuser) | Owns every object; used by the migration runner and destructive admin commands |
+| `real_estate_api` | yes | SELECT on the published source, reference and analytics data; EXECUTE on read-only helper functions |
+| `real_estate_pipeline` | yes (`PIPELINE_DATABASE_PASSWORD`) | SELECT/INSERT/UPDATE/DELETE/TRUNCATE on `public` and `analytics` tables (not `schema_migrations`), sequence USAGE, TEMPORARY; EXECUTE on the `analytics.refresh_*` functions, which run as SECURITY DEFINER. No DDL |

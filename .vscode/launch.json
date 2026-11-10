@@ -11,7 +11,7 @@
       "env": {
         "API_ENV": "development",
         "DATABASE_URL": "postgresql://real_estate_api:real_estate_api@localhost:5432/real_estate",
-        "API_ALLOWED_ORIGINS": "http://localhost:5173,http://localhost:3000",
+        "API_ALLOWED_ORIGINS": "http://localhost:5174",
         "LOG_LEVEL": "debug"
       }
     },

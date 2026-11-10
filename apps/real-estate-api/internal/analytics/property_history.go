@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
 )
 
 // Source identities are not cadastral lineage or proof of uninterrupted ownership.
@@ -70,8 +71,8 @@ type HistoryStore interface {
 	ResaleSummary(context.Context, StatisticsFilter) (ResaleSummary, error)
 }
 
-func (r *StatisticsRepository) PropertyHistory(ctx context.Context, id int64) (PropertyHistory, error) {
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+func (r *TransactionRepository) PropertyHistory(ctx context.Context, id int64) (PropertyHistory, error) {
+	tx, err := database.BeginReadOnly(ctx, r.db, pgx.RepeatableRead)
 	if err != nil {
 		return PropertyHistory{}, err
 	}
@@ -83,7 +84,7 @@ func (r *StatisticsRepository) PropertyHistory(ctx context.Context, id int64) (P
 	return result, tx.Commit(ctx)
 }
 
-func loadPropertyHistory(ctx context.Context, tx pgx.Tx, id int64) (PropertyHistory, error) {
+func loadPropertyHistory(ctx context.Context, tx database.Querier, id int64) (PropertyHistory, error) {
 	result := PropertyHistory{TransactionID: id, Assets: []HistoryAsset{}}
 	var exists bool
 	if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM analytics.sale_facts WHERE transaction_id=$1)", id).Scan(&exists); err != nil {
@@ -166,12 +167,13 @@ func loadPropertyHistory(ctx context.Context, tx pgx.Tx, id int64) (PropertyHist
 	return result, nil
 }
 
-func (r *StatisticsRepository) ResaleSummary(ctx context.Context, filter StatisticsFilter) (ResaleSummary, error) {
-	clause, geo, err := r.geographyClause(ctx, filter.GeographyID)
+func (r *TransactionRepository) ResaleSummary(ctx context.Context, filter StatisticsFilter) (ResaleSummary, error) {
+	var args queryArgs
+	where, err := r.factFilter(ctx, "pair", filter, &args)
 	if err != nil {
 		return ResaleSummary{}, err
 	}
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	tx, err := database.BeginReadOnly(ctx, r.db, pgx.ReadCommitted)
 	if err != nil {
 		return ResaleSummary{}, err
 	}
@@ -182,26 +184,27 @@ func (r *StatisticsRepository) ResaleSummary(ctx context.Context, filter Statist
 	if _, err := tx.Exec(ctx, "SET LOCAL max_parallel_workers_per_gather=0"); err != nil {
 		return ResaleSummary{}, err
 	}
-	result, err := loadResaleSummary(ctx, tx, filter, clause, geo)
+	result, err := loadResaleSummary(ctx, tx, saleFactsTable(filter), where, args)
 	if err != nil {
 		return result, err
 	}
 	return result, tx.Commit(ctx)
 }
 
-func loadResaleSummary(ctx context.Context, tx pgx.Tx, filter StatisticsFilter, clause string, geo *int64) (ResaleSummary, error) {
-	// Restrict the later sale only: its predecessor may predate the selected period.
-	query := fmt.Sprintf(`SELECT count(*),count(DISTINCT (identity_kind,cadastral_municipality_code,identity_number,part_number)),
-		CASE WHEN count(*)>=30 THEN percentile_cont(0.25) WITHIN GROUP(ORDER BY interval_days) END,
-		CASE WHEN count(*)>=30 THEN percentile_cont(0.5) WITHIN GROUP(ORDER BY interval_days) END,
-		CASE WHEN count(*)>=30 THEN percentile_cont(0.75) WITHIN GROUP(ORDER BY interval_days) END,count(*)>=30
-		FROM analytics.property_resale_pairs WHERE comparable
-		AND ($1::date IS NULL OR contract_date >= $1) AND ($2::date IS NULL OR contract_date <= $2)
-		AND ($3='' OR property_group=$3) AND %s
-		AND ($5::float8 IS NULL OR area >= $5) AND ($6::float8 IS NULL OR area <= $6)
-		AND transaction_id IN (SELECT transaction_id FROM %s)`, clause, saleFactsTable(filter))
+// loadResaleSummary summarises comparable resale intervals. where filters the later sale
+// (alias pair) only: its predecessor may predate the selected period.
+func loadResaleSummary(ctx context.Context, db database.Querier, factTable, where string, args []any) (ResaleSummary, error) {
+	query := fmt.Sprintf(`SELECT count(*),count(DISTINCT (pair.identity_kind,pair.cadastral_municipality_code,pair.identity_number,pair.part_number)),
+		CASE WHEN count(*)>=30 THEN percentile_cont(0.25) WITHIN GROUP(ORDER BY pair.interval_days) END,
+		CASE WHEN count(*)>=30 THEN percentile_cont(0.5) WITHIN GROUP(ORDER BY pair.interval_days) END,
+		CASE WHEN count(*)>=30 THEN percentile_cont(0.75) WITHIN GROUP(ORDER BY pair.interval_days) END,count(*)>=30
+		FROM analytics.property_resale_pairs pair WHERE pair.comparable AND %s
+		AND pair.transaction_id IN (SELECT transaction_id FROM %s)`, where, factTable)
 	var result ResaleSummary
-	err := tx.QueryRow(ctx, query, filter.FromDate, filter.ToDate, filter.PropertyGroup, geo, filter.MinArea, filter.MaxArea).
+	err := db.QueryRow(ctx, query, args...).
 		Scan(&result.PairCount, &result.AssetCount, &result.P25Days, &result.MedianDays, &result.P75Days, &result.IsPublishable)
-	return result, err
+	if err != nil {
+		return ResaleSummary{}, fmt.Errorf("resale summary: %w", err)
+	}
+	return result, nil
 }

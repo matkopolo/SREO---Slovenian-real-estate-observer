@@ -1,8 +1,16 @@
 openapi: 3.1.0
 info:
-  title: Slovenian Real Estate Analytics API
-  version: 0.1.0
-  description: Read-only analytics API backed by GURS transaction data and PostGIS.
+  title: SREO API
+  version: 0.2.0
+  description: >-
+    Read-only API of SREO: analytics over GURS ETN sale and rental transactions with
+    PostGIS geographies, SURS and Banka Slovenije context, and GURS construction sources.
+    Every operation is a GET; there are no accounts or writes. Each request has a deadline
+    (504 timeout when exceeded), and every response carries X-Request-ID.
+    Analytics answers carry a weak ETag tied to the active analytical release and answer
+    If-None-Match with 304; other answers carry an ETag hashed from their body.
+    Properties marked x-internal document the methodology (raw averages, rule versions,
+    diagnostics); the SREO frontend does not use them and they may change without notice.
 servers:
   - url: http://localhost:8080
 paths:
@@ -20,19 +28,6 @@ paths:
   /health/ready:
     get:
       operationId: getReadiness
-      tags: [Operations]
-      responses:
-        "200":
-          description: API and database are ready.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Readiness"
-        "503":
-          $ref: "#/components/responses/Error"
-  /api/v1/health:
-    get:
-      operationId: getAPIHealth
       tags: [Operations]
       responses:
         "200":
@@ -130,6 +125,44 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+  /api/v1/geographies/boundaries:
+    get:
+      operationId: listGeographyBoundaries
+      tags: [Geographies]
+      summary: Simplified boundaries of one level in one response (finer levels for a bounding box)
+      description: >-
+        Statistical regions and municipalities are returned for all of Slovenia (or a bbox). City districts,
+        local communities and settlements require `bbox` (west,south,east,north). At most 1200 units are returned,
+        nearest to the bbox centre first. Unsimplified outlines (`detail=full`) are served only per geography
+        by /geographies/{id}/boundary.
+      parameters:
+        - name: level
+          in: query
+          required: true
+          schema: { type: string, enum: [statistical_region, municipality, city_district, local_community, settlement] }
+        - name: bbox
+          in: query
+          required: false
+          description: Required for city_district, local_community and settlement.
+          schema: { type: string, example: "14.40,45.98,14.62,46.12" }
+        - name: detail
+          in: query
+          required: false
+          schema: { type: string, enum: [low, medium], default: medium }
+      responses:
+        "200":
+          description: GeoJSON FeatureCollection; properties are the geography units.
+          content:
+            application/geo+json:
+              schema:
+                type: object
+                required: [type, features, count]
+                properties:
+                  type: { type: string, enum: [FeatureCollection] }
+                  features: { type: array, items: { type: object } }
+                  count: { type: integer }
+        "400":
           $ref: "#/components/responses/Error"
   /api/v1/geographies/{id}:
     get:
@@ -248,6 +281,7 @@ paths:
           schema:
             type: integer
             minimum: 0
+            maximum: 100000
             default: 0
       responses:
         "200":
@@ -296,6 +330,51 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+  /api/v1/transactions/recent:
+    get:
+      operationId: listRecentTransactions
+      tags: [Transactions]
+      summary: Newest recorded agreements of an area with their address
+      parameters:
+        - $ref: "#/components/parameters/FromDate"
+        - $ref: "#/components/parameters/ToDate"
+        - $ref: "#/components/parameters/PropertyGroup"
+        - $ref: "#/components/parameters/MinArea"
+        - $ref: "#/components/parameters/MaxArea"
+        - $ref: "#/components/parameters/StatisticsGeographyId"
+        - name: transactionKind
+          in: query
+          required: false
+          schema: { type: string, enum: [sale, rent], default: sale }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 10 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, maximum: 100000, default: 0 }
+        - name: sort
+          in: query
+          required: false
+          schema: { type: string, enum: [date, price, perSqm, area], default: date }
+        - name: order
+          in: query
+          required: false
+          schema: { type: string, enum: [asc, desc], default: desc }
+        - name: street
+          in: query
+          required: false
+          description: Only agreements with a part on this street (registered name, case-insensitive).
+          schema: { type: string, maxLength: 120 }
+      responses:
+        "200":
+          description: One page, newest first by default; `total` counts all matching agreements, `representative` tells whether one enters the statistics.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RecentTransactions" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/rentals/statistics/overview:
     get:
       operationId: getRentalStatisticsOverview
@@ -369,6 +448,7 @@ paths:
           schema:
             type: integer
             minimum: 0
+            maximum: 100000
             default: 0
       responses:
         "200":
@@ -449,6 +529,7 @@ paths:
           in: query
           required: true
           schema: {type: string, enum: [country, statistical_region, municipality, city_district, local_community, settlement]}
+      description: At most 1200 units are returned, the most active first.
       responses:
         "200":
           description: Rental summaries grouped by named geography.
@@ -524,6 +605,234 @@ paths:
           $ref: "#/components/responses/Error"
         "503":
           $ref: "#/components/responses/Error"
+  /api/v1/affordability:
+    get:
+      operationId: getAffordability
+      tags: [Economy]
+      summary: Illustrative borrowing capacity per net-income band
+      description: >-
+        Combines SURS net wage percentiles for the area's municipality (Slovenia when
+        unavailable), Banka Slovenije average rates on new housing loans, the dated
+        Banka Slovenije DSTI and minimum-remaining-income limits, and the area's GURS ETN
+        median EUR/m2 of the latest complete year. A statistical illustration, not a credit
+        offer or a personal assessment.
+      parameters:
+        - name: geographyId
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: propertyGroup
+          in: query
+          required: false
+          schema: { type: string, enum: [apartment, house], default: apartment }
+        - name: netIncome
+          in: query
+          required: false
+          description: The user's own net monthly income (EUR); adds a `household` result.
+          schema: { type: number, exclusiveMinimum: 0, maximum: 100000 }
+        - name: coBorrowerIncome
+          in: query
+          required: false
+          description: A second borrower's net monthly income (EUR); requires netIncome. Limits apply per borrower.
+          schema: { type: number, exclusiveMinimum: 0, maximum: 100000 }
+      responses:
+        "200":
+          description: Inputs with their periods and sources, and one row per income band.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Affordability"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/v1/affordability/municipalities:
+    get:
+      operationId: listMunicipalAffordability
+      tags: [Economy]
+      summary: Median and mean earner's illustrative borrowing capacity for every municipality
+      description: >-
+        One response for all municipalities: SURS net wages by municipality of residence (Slovenia
+        when unavailable), Banka Slovenije limits and average rates, and the municipality's GURS ETN
+        median EUR/m2 pooled over fromYear–toYear with its representative sample size.
+      parameters:
+        - name: propertyGroup
+          in: query
+          required: false
+          schema: { type: string, enum: [apartment, house], default: apartment }
+        - name: fromYear
+          in: query
+          required: false
+          schema: { type: integer, minimum: 2007 }
+        - name: toYear
+          in: query
+          required: false
+          schema: { type: integer, minimum: 2007 }
+      responses:
+        "200":
+          description: One item per municipality.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MunicipalAffordability" }
+        "400": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/demographics:
+    get:
+      operationId: getDemographics
+      tags: [Economy]
+      summary: SURS demographic and housing-stock context for Slovenia, a statistical region or a municipality
+      description: >-
+        Population by five-year age group (1 January), net migration, register-census dwellings,
+        tenure and households, and a modelled yearly estimate of dwellings potentially released by
+        owners aged 65+ who live alone (age-specific regional death rates × national living-alone
+        shares × the area's owner-occupied share). The estimate is context, not a forecast of listings or prices.
+      parameters:
+        - name: geographyId
+          in: query
+          required: false
+          description: Omit for Slovenia.
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        "200":
+          description: Demographic profile with sources and the release-estimate caveat.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DemographicsResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/demographics/municipalities:
+    get:
+      operationId: listMunicipalDemographics
+      tags: [Economy]
+      summary: Demographic indicators for every municipality in one response
+      responses:
+        "200":
+          description: One item per municipality.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MunicipalDemographicsResponse" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/map/buildings:
+    get:
+      operationId: getMapBuildings
+      tags: [Map]
+      summary: Recorded agreements grouped by building inside a bounding box
+      description: >-
+        One item per building (cadastral municipality code + building number) with the number of
+        agreements in the period and the median EUR/m2 (sales) or monthly EUR/m2 (rentals) of the
+        representative agreements. Busiest buildings first.
+      parameters:
+        - $ref: "#/components/parameters/BoundingBox"
+        - $ref: "#/components/parameters/FromDate"
+        - $ref: "#/components/parameters/ToDate"
+        - $ref: "#/components/parameters/PropertyGroup"
+        - $ref: "#/components/parameters/StatisticsGeographyId"
+        - name: transactionKind
+          in: query
+          required: false
+          schema: { type: string, enum: [sale, rent], default: sale }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 5000, default: 2000 }
+      responses:
+        "200":
+          description: Building aggregates.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MapBuildingsResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/construction/summary:
+    get:
+      operationId: getConstructionSummary
+      tags: [Construction]
+      summary: Registered buildings by year built and SURS permits for an area
+      description: >-
+        Registered GURS buildings are completed or measurable buildings, not construction in
+        progress. SURS permits are counts per municipality and year.
+      parameters:
+        - name: geographyId
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: fromYear
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1900 }
+        - name: toYear
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1900 }
+        - name: withDwellings
+          in: query
+          required: false
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Summary with its sources.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConstructionSummaryResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/construction/map:
+    get:
+      operationId: getConstructionMap
+      tags: [Construction]
+      summary: Municipality aggregates (zoom < 12) or registered building points (zoom ≥ 12)
+      parameters:
+        - name: geographyId
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: fromYear
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1900 }
+        - name: toYear
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1900 }
+        - name: withDwellings
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: bbox
+          in: query
+          required: true
+          schema: { type: string }
+        - name: zoom
+          in: query
+          required: true
+          schema: { type: number, minimum: 0, maximum: 22 }
+      responses:
+        "200":
+          description: At most 300 municipalities or 3000 buildings; `truncated` marks a cut list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConstructionMapResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/construction/buildings/{eid}:
+    get:
+      operationId: getConstructionBuilding
+      tags: [Construction]
+      parameters:
+        - name: eid
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[0-9]{1,40}$" }
+      responses:
+        "200":
+          description: Cadastre attributes with labels and the number of ETN sale/rental agreements in the building.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConstructionBuilding" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/sales/transactions/{id}:
     get:
       operationId: getSaleTransaction
@@ -661,17 +970,77 @@ paths:
         - $ref: "#/components/parameters/ToDate"
       responses:
         "200":
-          description: Buildings matching an address or cadastral identity.
+          description: >-
+            Buildings matching an address or cadastral identity. Matching ignores case and
+            diacritics, expands "c."/"ul.", and reads "15A"/"15 a". Only buildings with a recorded
+            sale or rental are known. A suffixed number ("15A") matches the parts registered with
+            that suffix; when only the bare number is registered, matchType stays "address" and the
+            items carry the bare number (or the suffix their other parts use, as on the building page).
+            When the house number has no such building, matchType is "nearest" and items are the
+            nearest numbers on the street. Register notes ("k.o. Bežigrad") and misspelt duplicates of
+            a busier street are not listed in streets.
           content:
             application/json:
               schema:
                 type: object
-                required: [items, count]
+                required: [items, count, matchType, requestedHouseNumber, streets, settlements]
                 properties:
                   items:
                     type: array
-                    items: {type: object, additionalProperties: true}
+                    items:
+                      type: object
+                      required: [cadastralMunicipalityCode, buildingNumber, settlement, street, houseNumber,
+                        houseNumberSuffix, longitude, latitude, saleCount, rentalCount, saleCounts, rentalCounts]
+                      properties:
+                        cadastralMunicipalityCode: {type: integer}
+                        buildingNumber: {type: string}
+                        settlement: {type: [string, "null"]}
+                        street: {type: [string, "null"]}
+                        houseNumber: {type: [string, "null"]}
+                        houseNumberSuffix: {type: [string, "null"]}
+                        longitude: {type: number}
+                        latitude: {type: number}
+                        saleCount: {type: integer}
+                        rentalCount: {type: integer}
+                        saleCounts:
+                          type: object
+                          additionalProperties: {type: integer}
+                        rentalCounts:
+                          type: object
+                          additionalProperties: {type: integer}
                   count: {type: integer}
+                  matchType:
+                    type: string
+                    enum: [address, nearest, street, cadastral, none]
+                  requestedHouseNumber:
+                    type: [string, "null"]
+                    description: House number read from the query ("100", "15a").
+                  streets:
+                    type: array
+                    description: Streets the query names (busiest first, at most three).
+                    items:
+                      type: object
+                      required: [street, settlement, municipalityId, buildingCount, saleCount, rentalCount]
+                      properties:
+                        street:
+                          type: string
+                          description: Most common registered spelling; empty for a rural settlement address.
+                        settlement: {type: string}
+                        municipalityId: {type: [integer, "null"], format: int64}
+                        buildingCount: {type: integer}
+                        saleCount: {type: integer}
+                        rentalCount: {type: integer}
+                  settlements:
+                    type: array
+                    description: Settlements (naselja) named by a query without a house number (at most five).
+                    items:
+                      type: object
+                      required: [id, name, municipalityId, municipality]
+                      properties:
+                        id: {type: integer, format: int64}
+                        name: {type: string}
+                        municipalityId: {type: [integer, "null"], format: int64}
+                        municipality: {type: string}
         "400":
           $ref: "#/components/responses/Error"
   /api/v1/buildings/{cadastralCode}/{buildingNumber}/statistics:
@@ -782,6 +1151,7 @@ paths:
           in: query
           required: true
           schema: {type: string, enum: [country, statistical_region, municipality, city_district, local_community, settlement]}
+      description: At most 1200 units are returned, the most active first.
       responses:
         "200":
           description: Sale summaries grouped by named geography.
@@ -816,10 +1186,10 @@ paths:
           schema: {type: integer, minimum: 1, maximum: 100, default: 50}
         - name: offset
           in: query
-          schema: {type: integer, minimum: 0, default: 0}
+          schema: {type: integer, minimum: 0, maximum: 100000, default: 0}
       responses:
         "200":
-          description: Ranked, non-destructive anomaly review queue.
+          description: Ranked anomaly signals (read-only; reviews are not recorded through the API).
           content:
             application/json:
               schema: {type: object, additionalProperties: true}
@@ -841,133 +1211,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/AnomalySummary"
         "400":
-          $ref: "#/components/responses/Error"
-  /api/v1/anomalies/{kind}/{id}/review:
-    patch:
-      operationId: reviewAnomaly
-      tags: [Anomalies]
-      security: [{BearerAuth: []}]
-      parameters:
-        - name: kind
-          in: path
-          required: true
-          schema: {type: string, enum: [sale, rent]}
-        - $ref: "#/components/parameters/TransactionId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [status]
-              properties:
-                status:
-                  $ref: "#/components/schemas/ReviewStatus"
-                notes: {type: [string, "null"], maxLength: 2000}
-      responses:
-        "204": {description: Review saved.}
-        "400":
-          $ref: "#/components/responses/Error"
-        "401":
-          $ref: "#/components/responses/Error"
-        "404":
-          $ref: "#/components/responses/Error"
-  /api/v1/auth/register:
-    post:
-      operationId: registerUser
-      tags: [Identity]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RegistrationRequest"
-      responses:
-        "201":
-          description: Account and opaque bearer session created.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AuthSession"
-        "400":
-          $ref: "#/components/responses/Error"
-        "409":
-          $ref: "#/components/responses/Error"
-  /api/v1/auth/login:
-    post:
-      operationId: loginUser
-      tags: [Identity]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/LoginRequest"
-      responses:
-        "200":
-          description: Opaque bearer session.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AuthSession"
-        "400":
-          $ref: "#/components/responses/Error"
-        "401":
-          $ref: "#/components/responses/Error"
-  /api/v1/auth/logout:
-    post:
-      operationId: logoutUser
-      tags: [Identity]
-      security: [{BearerAuth: []}]
-      responses:
-        "204": {description: Current session revoked.}
-        "401":
-          $ref: "#/components/responses/Error"
-  /api/v1/users/me:
-    get:
-      operationId: getCurrentUser
-      tags: [Identity]
-      security: [{BearerAuth: []}]
-      responses:
-        "200":
-          description: Current user.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/User"
-        "401":
-          $ref: "#/components/responses/Error"
-  /api/v1/users/me/preferences:
-    get:
-      operationId: getPreferences
-      tags: [Preferences]
-      security: [{BearerAuth: []}]
-      responses:
-        "200":
-          description: Saved preference object.
-          content:
-            application/json:
-              schema: {type: object, additionalProperties: true}
-        "401":
-          $ref: "#/components/responses/Error"
-    put:
-      operationId: savePreferences
-      tags: [Preferences]
-      security: [{BearerAuth: []}]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {type: object, additionalProperties: true}
-      responses:
-        "200":
-          description: Saved preference object.
-          content:
-            application/json:
-              schema: {type: object, additionalProperties: true}
-        "400":
-          $ref: "#/components/responses/Error"
-        "401":
           $ref: "#/components/responses/Error"
   /api/v1/indices:
     get:
@@ -1017,11 +1260,6 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
 components:
-  securitySchemes:
-    BearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: opaque
   parameters:
     HistogramBins:
       name: bins
@@ -1197,7 +1435,6 @@ components:
         modelVersions: {type: string}
         startedAt: {type: string, format: date-time}
         publishedAt: {type: string, format: date-time}
-        failureMessage: {type: string}
     GeographyLevel:
       type: string
       enum: [country, statistical_region, municipality, city_district, local_community, settlement]
@@ -1216,6 +1453,7 @@ components:
         code:
           type: integer
         compositeCode:
+          x-internal: true
           type: integer
         name:
           type: string
@@ -1277,6 +1515,7 @@ components:
           type: integer
           format: int64
         eligibleCount:
+          x-internal: true
           type: integer
           format: int64
         includedSampleSize:
@@ -1294,19 +1533,23 @@ components:
         medianPrice:
           type: [number, "null"]
         cleanedAveragePrice:
+          x-internal: true
           type: [number, "null"]
         rawAveragePrice:
+          x-internal: true
           type: [number, "null"]
         medianPricePerSqm:
           type: [number, "null"]
         cleanedAveragePricePerSqm:
+          x-internal: true
           type: [number, "null"]
         rawAveragePricePerSqm:
+          x-internal: true
           type: [number, "null"]
         medianArea:
           type: [number, "null"]
         isPublishable: {type: boolean}
-        suppressionReason: {type: [string, "null"]}
+        suppressionReason: {type: [string, "null"], x-internal: true}
     StatisticsTimeSeriesPoint:
       allOf:
         - $ref: "#/components/schemas/StatisticsOverview"
@@ -1360,7 +1603,7 @@ components:
         - isPublishable
       properties:
         transactionCount: {type: integer, format: int64}
-        eligibleCount: {type: integer, format: int64}
+        eligibleCount: {type: integer, format: int64, x-internal: true}
         includedSampleSize: {type: integer, format: int64}
         excludedOutlierCount: {type: integer, format: int64}
         monthlyRentSampleSize: {type: integer, format: int64}
@@ -1373,7 +1616,7 @@ components:
         rawAverageMonthlyRentPerSqm: {type: [number, "null"]}
         medianArea: {type: [number, "null"]}
         isPublishable: {type: boolean}
-        suppressionReason: {type: [string, "null"]}
+        suppressionReason: {type: [string, "null"], x-internal: true}
     RentalStatisticsTimeSeriesPoint:
       type: object
       required:
@@ -1397,7 +1640,7 @@ components:
         rentPerSqmYoYPercent: {type: [number, "null"]}
         weakComparisonSample: {type: boolean}
         isPublishable: {type: boolean}
-        suppressionReason: {type: [string, "null"]}
+        suppressionReason: {type: [string, "null"], x-internal: true}
     RentalStatisticsTimeSeries:
       type: object
       required: [interval, items, count]
@@ -1434,8 +1677,8 @@ components:
         cohortMedian: {type: number}
         lowerBound: {type: number}
         upperBound: {type: number}
-        modifiedZScore: {type: [number, "null"]}
-        ruleVersion: {type: string}
+        modifiedZScore: {type: [number, "null"], x-internal: true}
+        ruleVersion: {type: string, x-internal: true}
     RentalOutlierList:
       type: object
       required: [items, count, total, limit, offset]
@@ -1470,8 +1713,8 @@ components:
         cohortMedian: {type: [number, "null"]}
         lowerBound: {type: [number, "null"]}
         upperBound: {type: [number, "null"]}
-        modifiedZScore: {type: [number, "null"]}
-        ruleVersion: {type: string}
+        modifiedZScore: {type: [number, "null"], x-internal: true}
+        ruleVersion: {type: string, x-internal: true}
     TransactionGeography:
       type: object
       required: [id, level, name]
@@ -1480,6 +1723,402 @@ components:
         level:
           $ref: "#/components/schemas/GeographyLevel"
         name: {type: string}
+    ContextObservation:
+      type: object
+      required: [series, period, value, sourceTable]
+      properties:
+        series: { type: string }
+        period: { type: string }
+        value: { type: number }
+        sourceTable: { type: string }
+    LendingRule:
+      type: object
+      required: [validFrom, dstiMax, minRemainingIncome, recommendedLtv, sourceUrl, note]
+      properties:
+        validFrom: { type: string, format: date }
+        dstiMax: { type: number }
+        minRemainingIncome: { type: number }
+        recommendedLtv: { type: number }
+        sourceUrl: { type: string }
+        note: { type: string }
+    AffordabilityRow:
+      type: object
+      required: [band, maxInstalment, floorBinding, loan20Years, loan30Years, loan30YearsVariable, loan30YearsStress, priceAtRecommendedLtv, downPayment, affordableSqm, twoEarnersLoan30Years]
+      properties:
+        band:
+          type: object
+          required: [id, netMonthlyIncome]
+          properties:
+            id: { type: string, enum: [p10, q1, p50, mean, q3, p90] }
+            netMonthlyIncome: { type: number }
+        maxInstalment: { type: number }
+        floorBinding: { type: boolean, description: True when the minimum remaining income, not the DSTI ratio, limits the instalment. }
+        loan20Years: { type: number }
+        loan30Years: { type: number }
+        loan30YearsVariable: { type: number }
+        loan30YearsStress: { type: number }
+        priceAtRecommendedLtv: { type: number }
+        downPayment: { type: number }
+        affordableSqm: { type: number, nullable: true }
+        twoEarnersLoan30Years: { type: number }
+    Affordability:
+      type: object
+      required: [wageGeography, wagePeriod, wageSource, rule, rates, stressMarginPoints, market, rows, disclaimer, household]
+      properties:
+        household:
+          type: object
+          nullable: true
+          description: Present when netIncome is given; per-borrower limits summed.
+          required: [netIncomes, maxInstalment, floorBinding, loan20Years, loan30Years, loan30YearsStress, recommendedLtv]
+          properties:
+            netIncomes: { type: array, items: { type: number } }
+            maxInstalment: { type: number }
+            floorBinding: { type: boolean }
+            loan20Years: { type: number }
+            loan30Years: { type: number }
+            loan30YearsStress: { type: number }
+            recommendedLtv: { type: number }
+        wageGeography:
+          type: object
+          required: [key, name, nationalFallback]
+          properties:
+            key: { type: string }
+            name: { type: string }
+            nationalFallback: { type: boolean }
+        wagePeriod: { type: string }
+        wageSource: {type: string, x-internal: true}
+        rule: { $ref: "#/components/schemas/LendingRule" }
+        rates:
+          type: object
+          required: [fixedOver10Years, variable, aprc, euribor6m]
+          properties:
+            fixedOver10Years: { $ref: "#/components/schemas/ContextObservation" }
+            variable: { $ref: "#/components/schemas/ContextObservation" }
+            aprc:
+              x-internal: true
+              allOf: [{ $ref: "#/components/schemas/ContextObservation" }]
+              nullable: true
+            euribor6m:
+              x-internal: true
+              allOf: [{ $ref: "#/components/schemas/ContextObservation" }]
+              nullable: true
+        stressMarginPoints: { type: number }
+        market:
+          type: object
+          required: [propertyGroup, year, medianPricePerSqm, sampleSize, isPublishable]
+          properties:
+            propertyGroup: { type: string }
+            year: { type: integer }
+            medianPricePerSqm: { type: number, nullable: true }
+            sampleSize: { type: integer, format: int64 }
+            isPublishable: { type: boolean }
+        rows:
+          type: array
+          items: { $ref: "#/components/schemas/AffordabilityRow" }
+        disclaimer: {type: string, x-internal: true}
+    ConstructionSummaryResponse:
+      type: object
+      required: [filter, summary, sources]
+      properties:
+        filter:
+          type: object
+          required: [fromYear, toYear, withDwellings]
+          properties:
+            fromYear: { type: integer }
+            toYear: { type: integer }
+            withDwellings: { type: boolean }
+        summary:
+          type: object
+          required: [sourceDate, buildingsByYear, permits, permitsScope]
+          properties:
+            sourceDate: { type: string, format: date, nullable: true }
+            buildingsByYear:
+              type: array
+              items:
+                type: object
+                required: [year, buildings, dwellings, grossFloorArea]
+                properties:
+                  year: { type: integer }
+                  buildings: { type: integer, format: int64 }
+                  dwellings: { type: integer, format: int64 }
+                  grossFloorArea: { type: number }
+            permits:
+              type: array
+              items:
+                type: object
+                required: [year, buildings, dwellings, floorArea]
+                properties:
+                  year: { type: string }
+                  buildings: { type: number, nullable: true }
+                  dwellings: { type: number, nullable: true }
+                  floorArea: { type: number, nullable: true }
+            permitsScope: { type: string, enum: [slovenia, municipalities] }
+        sources:
+          type: array
+          items:
+            type: object
+            required: [name, licence, note]
+            properties:
+              name: { type: string }
+              licence: { type: string }
+              note: { type: string }
+    ConstructionMapFeature:
+      type: object
+      required: [kind, id, name, longitude, latitude, buildings, dwellings]
+      properties:
+        kind: { type: string, enum: [area, building] }
+        id: { type: string }
+        name: { type: string }
+        longitude: { type: number }
+        latitude: { type: number }
+        buildings: { type: integer, format: int64 }
+        dwellings: { type: integer, format: int64 }
+        yearBuilt: { type: integer }
+        geographyId: { type: integer, format: int64 }
+    ConstructionMapResponse:
+      type: object
+      required: [level, items, count, truncated]
+      properties:
+        level: { type: string, enum: [municipality, building] }
+        items: { type: array, items: { $ref: "#/components/schemas/ConstructionMapFeature" } }
+        count: { type: integer }
+        truncated: { type: boolean }
+    ConstructionBuilding:
+      type: object
+      required: [eid, cadastralCode, buildingNumber, yearBuilt, floors, dwellings, businessUnits, buildingType, loadBearingStructure, registrationStatus, grossFloorArea, recordChangedOn, municipality, municipalityId, longitude, latitude, saleTransactions, rentalTransactions, sourceDate]
+      properties:
+        eid: { type: string }
+        cadastralCode: { type: integer }
+        buildingNumber: { type: integer }
+        yearBuilt: { type: integer, nullable: true }
+        floors: { type: integer, nullable: true }
+        dwellings: { type: integer, nullable: true }
+        businessUnits: { type: integer, nullable: true }
+        buildingType: { type: string, nullable: true }
+        loadBearingStructure: {type: string, nullable: true, x-internal: true}
+        registrationStatus: { type: string, nullable: true }
+        grossFloorArea: { type: number, nullable: true }
+        recordChangedOn: {type: string, format: date, nullable: true, x-internal: true}
+        municipality: { type: string, nullable: true }
+        municipalityId: { type: integer, format: int64, nullable: true }
+        longitude: { type: number, nullable: true }
+        latitude: { type: number, nullable: true }
+        saleTransactions: { type: integer, format: int64 }
+        rentalTransactions: { type: integer, format: int64 }
+        sourceDate: { type: string, format: date }
+    DemographicUnit:
+      type: object
+      required: [id, level, code, name]
+      properties:
+        id: { type: integer, format: int64 }
+        level: { type: string, enum: [country, statistical_region, municipality] }
+        code: { type: integer }
+        name: { type: string }
+    DemographicProfile:
+      type: object
+      required: [geography, period, earlierPeriod, population, pyramid, migration, housing, releases]
+      properties:
+        geography: { $ref: "#/components/schemas/DemographicUnit" }
+        period: { type: string, description: "SURS half-year label of the 1 January stock, e.g. 2026H1" }
+        earlierPeriod: { type: string, nullable: true }
+        population:
+          type: object
+          required: [total, change5Years, change10Years, age0To14, age15To64, age25To34, age65Plus, share65Plus, oldAgeDependency, enteringThirtiesPerYear]
+          properties:
+            total: { type: number }
+            change5Years: { type: number, nullable: true }
+            change10Years: { type: number, nullable: true }
+            age0To14: { type: number }
+            age15To64: { type: number }
+            age25To34: { type: number }
+            age65Plus: { type: number }
+            share65Plus: { type: number }
+            oldAgeDependency: { type: number }
+            enteringThirtiesPerYear: { type: number }
+        pyramid:
+          type: array
+          items:
+            type: object
+            required: [group, population, earlier]
+            properties:
+              group: { type: string }
+              population: { type: number }
+              earlier: { type: number, nullable: true }
+        migration:
+          type: array
+          items:
+            type: object
+            required: [year, net, international, internal, perThousand]
+            properties:
+              year: { type: string }
+              net: { type: number }
+              international: { type: number, nullable: true }
+              internal: { type: number, nullable: true }
+              perThousand: { type: number, nullable: true }
+        housing:
+          type: object
+          nullable: true
+          required: [year, dwellings, occupied, unoccupied, seasonal, vacant, splitYear, ownerOccupiedShare, households, onePersonShare, personsPerOccupiedDwelling]
+          properties:
+            year: { type: string }
+            dwellings: { type: number }
+            occupied: { type: number, nullable: true }
+            unoccupied: { type: number, nullable: true }
+            seasonal: { type: number, nullable: true }
+            vacant: { type: number, nullable: true }
+            splitYear: { type: string, nullable: true }
+            ownerOccupiedShare: { type: number, nullable: true }
+            households: { type: number, nullable: true }
+            onePersonShare: { type: number, nullable: true }
+            personsPerOccupiedDwelling: { type: number, nullable: true }
+        releases:
+          type: object
+          nullable: true
+          required: [perYear, perThousandDwellings, ownerShare, deathYears, deathRatesFrom, modelled, byAge]
+          properties:
+            perYear: { type: number }
+            perThousandDwellings: { type: number, nullable: true }
+            ownerShare: { type: number }
+            deathYears: { type: string }
+            deathRatesFrom: { type: string }
+            modelled: { type: boolean }
+            byAge:
+              type: array
+              items:
+                type: object
+                required: [group, population, deathRate, aloneShare, releases]
+                properties:
+                  group: { type: string }
+                  population: { type: number }
+                  deathRate: { type: number }
+                  aloneShare: { type: number }
+                  releases: { type: number }
+    DemographicSource:
+      type: object
+      required: [table, name]
+      properties:
+        table: { type: string }
+        name: { type: string }
+    DemographicsResponse:
+      type: object
+      required: [profile, sources, licence, releasesCaveat, releasesCaveatCode]
+      properties:
+        profile: { $ref: "#/components/schemas/DemographicProfile" }
+        sources: { type: array, items: { $ref: "#/components/schemas/DemographicSource" } }
+        licence: { type: string }
+        releasesCaveat: { type: string, description: Slovenian text of the caveat named by releasesCaveatCode. }
+        releasesCaveatCode:
+          type: string
+          enum: [model_estimate_older_owners]
+          description: Stable code of the caveat, for clients that show it in their own language.
+    MunicipalDemographics:
+      type: object
+      required: [geographyId, name, population, share65Plus, change10Years, netMigrationPerThousand, releasesPerThousandDwellings, enteringThirtiesPerYear, releasesPerYear]
+      properties:
+        geographyId: { type: integer, format: int64 }
+        name: { type: string }
+        population: { type: number }
+        share65Plus: { type: number }
+        change10Years: { type: number, nullable: true }
+        netMigrationPerThousand: { type: number, nullable: true, description: "Five-year average" }
+        releasesPerThousandDwellings: { type: number, nullable: true }
+        enteringThirtiesPerYear: { type: number }
+        releasesPerYear: { type: number, nullable: true }
+    MunicipalDemographicsResponse:
+      type: object
+      required: [items, sources, releasesCaveat, releasesCaveatCode]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/MunicipalDemographics" } }
+        sources: { type: array, items: { $ref: "#/components/schemas/DemographicSource" } }
+        releasesCaveat: { type: string, description: Slovenian text of the caveat named by releasesCaveatCode. }
+        releasesCaveatCode:
+          type: string
+          enum: [model_estimate_older_owners]
+          description: Stable code of the caveat, for clients that show it in their own language.
+    RecentTransactions:
+      type: object
+      required: [items, count, total, offset, transactionKind]
+      properties:
+        count: { type: integer }
+        total: { type: integer, description: "All agreements matching the filter (for paging)" }
+        offset: { type: integer }
+        transactionKind: { type: string, enum: [sale, rent] }
+        items:
+          type: array
+          items:
+            type: object
+            required: [transactionId, contractDate, propertyGroup, area, amount, amountPerSqm, representative, settlement, street, houseNumber, constructionYear]
+            properties:
+              transactionId: { type: integer, format: int64 }
+              contractDate: { type: string, format: date, nullable: true }
+              propertyGroup: { $ref: "#/components/schemas/PropertyGroup" }
+              area: { type: number, nullable: true }
+              amount: { type: number, nullable: true, description: "Contract price, or monthly rent excluding VAT" }
+              amountPerSqm: { type: number, nullable: true }
+              representative: { type: boolean }
+              settlement: { type: string, nullable: true }
+              street: { type: string, nullable: true }
+              houseNumber: { type: string, nullable: true }
+              constructionYear: { type: integer, nullable: true }
+              settlementName: { type: string, nullable: true, description: "Settlement (naselje) of the agreement" }
+              cadastralMunicipalityCode: { type: integer, nullable: true, description: "Cadastral municipality of the largest land parcel" }
+              parcelNumber: { type: string, nullable: true, description: "Largest land parcel of a sale (land has no street address)" }
+              parcelCount: { type: integer, description: "Land parcels the price covers" }
+    MapBuilding:
+      type: object
+      required: [cadastralMunicipalityCode, buildingNumber, longitude, latitude, transactionCount, representativeCount, medianAmountPerSqm, latestContractDate, settlement, street, houseNumber, houseNumberSuffix, constructionYear]
+      properties:
+        settlement: { type: string, nullable: true }
+        street: { type: string, nullable: true }
+        houseNumber: { type: string, nullable: true }
+        houseNumberSuffix: { type: string, nullable: true }
+        constructionYear: { type: integer, nullable: true }
+        cadastralMunicipalityCode: { type: integer }
+        buildingNumber: { type: string }
+        longitude: { type: number }
+        latitude: { type: number }
+        transactionCount: { type: integer, format: int64 }
+        representativeCount: { type: integer, format: int64 }
+        medianAmountPerSqm: { type: number, nullable: true }
+        latestContractDate: { type: string, format: date, nullable: true }
+    MapBuildingsResponse:
+      type: object
+      required: [items, count, limit, truncated, transactionKind]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/MapBuilding" } }
+        count: { type: integer }
+        limit: { type: integer }
+        truncated: { type: boolean }
+        transactionKind: { type: string, enum: [sale, rent] }
+    MunicipalAffordability:
+      type: object
+      required: [propertyGroup, fromYear, toYear, rule, rates, items, count, disclaimer]
+      properties:
+        propertyGroup: { type: string }
+        fromYear: { type: integer }
+        toYear: { type: integer }
+        rule: { $ref: "#/components/schemas/LendingRule" }
+        rates:
+          type: object
+          required: [fixedOver10Years, variable]
+          properties:
+            fixedOver10Years: { $ref: "#/components/schemas/ContextObservation" }
+            variable: { $ref: "#/components/schemas/ContextObservation" }
+        items:
+          type: array
+          items:
+            type: object
+            required: [geographyId, name, wagePeriod, nationalWageFallback, medianPricePerSqm, sampleSize, rows]
+            properties:
+              geographyId: { type: integer, format: int64 }
+              name: { type: string }
+              wagePeriod: { type: string }
+              nationalWageFallback: {type: boolean, x-internal: true}
+              medianPricePerSqm: { type: number, nullable: true }
+              sampleSize: { type: integer, format: int64 }
+              rows: { type: array, items: { $ref: "#/components/schemas/AffordabilityRow" } }
+        count: { type: integer }
+        disclaimer: {type: string, x-internal: true}
     InflationFactor:
       type: object
       required: [from, to, factor, months, source]
@@ -1737,8 +2376,10 @@ components:
         upperBound:
           type: number
         modifiedZScore:
+          x-internal: true
           type: [number, "null"]
         ruleVersion:
+          x-internal: true
           type: string
     OutlierList:
       type: object
@@ -1795,6 +2436,15 @@ components:
         count:
           type: integer
           minimum: 0
+        zoom:
+          type: integer
+          description: Zoom level the clusters were built for (cluster layers only).
+        limit:
+          type: integer
+          description: Maximum number of features returned (property layers only).
+        level:
+          $ref: "#/components/schemas/GeographyLevel"
+          description: Geography level of the features (geography layers only).
     Distribution:
       type: object
       required: [metric, sampleSize, belowBoundCount, aboveBoundCount, buckets, isPublishable]
@@ -1816,7 +2466,7 @@ components:
         belowBoundCount: {type: integer, format: int64}
         aboveBoundCount: {type: integer, format: int64}
         isPublishable: {type: boolean}
-        suppressionReason: {type: [string, "null"]}
+        suppressionReason: {type: [string, "null"], x-internal: true}
         buckets:
           type: array
           items:
@@ -1850,7 +2500,7 @@ components:
         indexValue: {type: number}
         sampleSize: {type: integer}
         basePeriod: {type: string, format: date}
-        methodologyVersion: {type: string}
+        methodologyVersion: {type: string, x-internal: true}
         modelVersion: {type: [string, "null"]}
         calculationRunId: {type: string, format: uuid}
         observedSampleSize: {type: integer}
@@ -1860,7 +2510,7 @@ components:
         nominalCoverage: {type: [number, "null"]}
         uncertaintyMethod: {type: [string, "null"]}
         isPublishable: {type: boolean}
-        suppressionReason: {type: [string, "null"]}
+        suppressionReason: {type: [string, "null"], x-internal: true}
     MarketIndexList:
       type: object
       required: [items, count, scope]
@@ -1877,6 +2527,10 @@ components:
         - cadastralMunicipalityCode
         - buildingNumber
         - knownBuildingPartCount
+        - settlement
+        - street
+        - houseNumber
+        - houseNumberSuffix
         - sales
         - rentals
         - saleHistory
@@ -1888,6 +2542,10 @@ components:
         buildingNumber: {type: string}
         constructionYear: {type: [integer, "null"]}
         knownBuildingPartCount: {type: integer, format: int64}
+        settlement: {type: [string, "null"]}
+        street: {type: [string, "null"]}
+        houseNumber: {type: [string, "null"]}
+        houseNumberSuffix: {type: [string, "null"]}
         longitude: {type: [number, "null"]}
         latitude: {type: [number, "null"]}
         sales:
@@ -1906,7 +2564,7 @@ components:
           type: array
           items:
             type: object
-            required: [transactionId, propertyGroup]
+            required: [transactionId, propertyGroup, representative]
             properties:
               transactionId: {type: integer, format: int64}
               contractDate: {type: [string, "null"], format: date}
@@ -1915,11 +2573,12 @@ components:
               area: {type: [number, "null"]}
               amount: {type: [number, "null"]}
               amountPerSqm: {type: [number, "null"]}
+              representative: {type: boolean}
         rentalTransactions:
           type: array
           items:
             type: object
-            required: [transactionId, propertyGroup]
+            required: [transactionId, propertyGroup, representative]
             properties:
               transactionId: {type: integer, format: int64}
               contractDate: {type: [string, "null"], format: date}
@@ -1928,6 +2587,7 @@ components:
               area: {type: [number, "null"]}
               amount: {type: [number, "null"]}
               amountPerSqm: {type: [number, "null"]}
+              representative: {type: boolean}
     BuildingMarketSummary:
       type: object
       required: [transactionCount, representativeCount]
@@ -1983,35 +2643,6 @@ components:
         flagged: {type: integer, format: int64}
         unreviewed: {type: integer, format: int64}
         highPriority: {type: integer, format: int64}
-    RegistrationRequest:
-      type: object
-      required: [email, password, displayName]
-      properties:
-        email: {type: string, format: email}
-        password: {type: string, minLength: 12, maxLength: 72}
-        displayName: {type: string, minLength: 1, maxLength: 100}
-    LoginRequest:
-      type: object
-      required: [email, password]
-      properties:
-        email: {type: string, format: email}
-        password: {type: string}
-    User:
-      type: object
-      required: [id, email, displayName, createdAt]
-      properties:
-        id: {type: string, format: uuid}
-        email: {type: string, format: email}
-        displayName: {type: string}
-        createdAt: {type: string, format: date-time}
-    AuthSession:
-      type: object
-      required: [token, expiresAt, user]
-      properties:
-        token: {type: string}
-        expiresAt: {type: string, format: date-time}
-        user:
-          $ref: "#/components/schemas/User"
     ValuationPrediction:
       type: object
       required:
@@ -2158,7 +2789,7 @@ components:
         quality:
           $ref: "#/components/schemas/QualityDecision"
         outlierStatus: {type: [string, "null"]}
-        methodologyVersion: {type: string}
+        methodologyVersion: {type: string, x-internal: true}
     ContextValuation:
       type: object
       required:
@@ -2220,24 +2851,24 @@ components:
         lowerAmountPerSqm: {type: number}
         centralAmountPerSqm: {type: number}
         upperAmountPerSqm: {type: number}
-        unadjustedLowerAmountPerSqm: {type: number}
-        unadjustedCentralAmountPerSqm: {type: number}
-        unadjustedUpperAmountPerSqm: {type: number}
+        unadjustedLowerAmountPerSqm: {type: number, x-internal: true}
+        unadjustedCentralAmountPerSqm: {type: number, x-internal: true}
+        unadjustedUpperAmountPerSqm: {type: number, x-internal: true}
         comparableCount: {type: integer}
         maximumRadiusMeters: {type: integer}
         areaTolerancePercent: {type: integer}
         constructionYearTolerance: {type: integer}
         locationAdjustmentFactor: {type: number}
-        rawLocationAdjustmentFactor: {type: number}
+        rawLocationAdjustmentFactor: {type: number, x-internal: true}
         locationAdjustmentApplied: {type: boolean}
-        localAdjustmentSampleSize: {type: integer}
-        packageCompositionMatched: {type: boolean}
+        localAdjustmentSampleSize: {type: integer, x-internal: true}
+        packageCompositionMatched: {type: boolean, x-internal: true}
         referenceYear: {type: integer}
         confidence: {type: string, enum: [moderate, low, very_low]}
         warnings:
           type: array
           items: {type: string}
-        methodologyVersion: {type: string}
+        methodologyVersion: {type: string, x-internal: true}
     ErrorResponse:
       type: object
       required: [error]

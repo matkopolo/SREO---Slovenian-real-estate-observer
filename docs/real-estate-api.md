@@ -1,17 +1,15 @@
 # Real-estate API service
 
-Production deployment is documented in [K3s deployment](k3s-deployment.md) and
-[operations](kubernetes-operations.md). API pods use the CNPG stable RW Service
-with a separate least-privilege identity; /health/live is independent of the
-database, while /health/ready verifies connectivity. Redis remains optional and
-unintegrated; see infrastructure/kubernetes/cache for the future cache contract.
+The supported runtime is Docker Compose. The API uses a separate least-privilege
+database identity; /health/live is independent of the database while /health/ready
+verifies connectivity. Redis remains optional and unintegrated.
 
 ## Responsibility
 
 `apps/real-estate-api` is a Go HTTP service over PostgreSQL/PostGIS. It exposes
 bounded, versioned JSON/GeoJSON endpoints for market analytics, maps,
-transactions, buildings, anomalies, indices, valuations, geography, identity,
-and preferences. It does not download GURS data or fit statistical models.
+transactions, buildings, construction, anomalies, indices, valuations,
+geography, affordability and demographics. There are no accounts. It does not download GURS data or fit statistical models.
 
 Public routes remain under `/api/v1`; the executable and Docker Compose
 service are named `real-estate-api`.
@@ -39,21 +37,33 @@ timeouts, graceful shutdown, and readiness checks.
 - Geography: list, detail, children, and topology-preserving boundaries.
 - Sale/rental statistics: overview, time series, distributions, outliers, and
   transaction extremes.
-- Maps: bounded clusters, named geographic summaries, and capped property
-  points for sales and rentals.
+- Maps: bounded clusters, named geographic summaries, capped property
+  points for sales and rentals, and `/api/v1/map/buildings`: agreements grouped
+  by building (cadastral code + building number) with the period count and the
+  median EUR/m² of representative agreements, busiest first (limit ≤ 5,000).
 - Transactions/buildings: agreement composition, contextual comparables,
   cadastral building history, and address search. Search results include total
   and per-property-group sale/rental counts constrained by the requested
   `from`/`to` dates, so clients can suggest a relevant market without guessing
   or switching filters automatically.
-- Quality: anomaly list/summary and authenticated review decisions.
+- Quality: anomaly list and summary (read-only).
 - Models: market indices and versioned transaction valuation estimates with
   uncertainty and diagnostics.
 - Economy: `/api/v1/economy/inflation` proxies the official SURS SiStat
   monthly inflation table `H281S`, supports monthly, quarterly, and yearly
   output, and caches the external response for six hours. Inflation is
   national context and is never filtered by property or geography.
-- Identity: registration, login/logout, current user, and saved preferences.
+- Demographics: `/api/v1/demographics?geographyId=` (Slovenia, statistical
+  region or municipality) and `/api/v1/demographics/municipalities` serve SURS
+  population by five-year age group, net migration, register-census dwellings,
+  tenure and households, plus a modelled yearly estimate of dwellings
+  potentially released by owners aged 65+ living alone: Σ age-group population ×
+  regional death rate (deaths ÷ 1 January population, last three years) ×
+  national living-alone share (census 2021) × the area's owner-occupied share
+  (census 2021). Municipal estimates borrow regional death rates and are marked
+  `modelled`. It is context, not a forecast of listings or prices; care-home
+  residents can raise it. Regions sum their municipalities. Values are loaded
+  from `analytics.context_series` (`sync-demography`) and cached for 10 minutes.
 
 The authoritative operation and schema definitions are in
 `apps/real-estate-api/openapi/openapi.yaml`.
@@ -139,11 +149,12 @@ uncertainty, and known limitations.
 
 ## Security and persistence
 
-Public analytical routes are read-only. Passwords are bcrypt hashes; sessions
-use opaque bearer tokens whose hashes are stored with expiry. The database
-role is denied source/analytics mutation and has narrow writes for users,
-sessions, preferences, and review state. Authentication is not a claim that
-model outputs are appraisals or investment advice.
+The API is read-only for the public frontend: there are no accounts, sessions
+or saved preferences (removed with migration 044). It connects as
+`real_estate_api`, which can read published data but cannot import, migrate,
+refresh or modify anything. It is published on `127.0.0.1:8080`; the public
+entry point is the observer's same-origin `/api/` proxy. Model outputs are not
+appraisals or investment advice.
 
 ## Development
 

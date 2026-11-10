@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgresql://example")
@@ -32,5 +35,29 @@ func TestLoadRejectsInvalidPoolSize(t *testing.T) {
 	t.Setenv("DATABASE_MAX_CONNECTIONS", "zero")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() expected an error")
+	}
+}
+
+func TestLoadReadsTimeouts(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://example")
+	t.Setenv("DATABASE_STATEMENT_TIMEOUT", "")
+	t.Setenv("API_REQUEST_TIMEOUT", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DatabaseStatementTimeout != 15*time.Second || cfg.RequestTimeout != 20*time.Second {
+		t.Fatalf("timeouts = %s, %s", cfg.DatabaseStatementTimeout, cfg.RequestTimeout)
+	}
+	t.Setenv("DATABASE_STATEMENT_TIMEOUT", "5s")
+	t.Setenv("API_REQUEST_TIMEOUT", "8s")
+	if cfg, err = Load(); err != nil || cfg.DatabaseStatementTimeout != 5*time.Second || cfg.RequestTimeout != 8*time.Second {
+		t.Fatalf("cfg=%+v err=%v", cfg, err)
+	}
+	for _, value := range []string{"fast", "0s", "45s"} {
+		t.Setenv("API_REQUEST_TIMEOUT", value)
+		if _, err := Load(); err == nil {
+			t.Fatalf("API_REQUEST_TIMEOUT=%s: expected an error", value)
+		}
 	}
 }

@@ -93,17 +93,20 @@ func TestCurrentMarketCandidatesUseCompositionAndExcludeNearDuplicates(t *testin
 		"SELECT analytics.sale_package_signature($1)", subjectID).Scan(&signature); err != nil {
 		t.Fatalf("load signature: %v", err)
 	}
-	candidates, err := queryCurrentCandidates(ctx, tx, currentMarketQuery{
+	all, err := queryCurrentCandidates(ctx, tx, currentMarketQuery{
 		table: "analytics.sale_facts", subjectTable: "analytics.sale_facts",
 		amountColumn:  "price_per_sqm",
 		propertyGroup: "apartment", transactionKind: "sale", subjectID: subjectID,
 		area: 50, constructionYear: intPointer(2000),
-		packageSignature: signature,
-	}, nearbyBenchmarkProfiles(intPointer(2000))[0], 1000,
-		time.Now().Year(), true)
+		packageSignature: signature, now: time.Now(),
+	}, nearbyBenchmarkProfiles(intPointer(2000))[0])
 	if err != nil {
 		t.Fatalf("query candidates: %v", err)
 	}
+	if err := signatureLoader(ctx, tx, "sale", all)(20000); err != nil {
+		t.Fatalf("load signatures: %v", err)
+	}
+	candidates := currentMarketTier(all, signature, true, time.Now().Year(), 1000)
 	if len(candidates) != 4 {
 		t.Fatalf("candidate count=%d want=4 (subject, duplicate and mismatched composition excluded)",
 			len(candidates))
@@ -111,6 +114,17 @@ func TestCurrentMarketCandidatesUseCompositionAndExcludeNearDuplicates(t *testin
 	for _, candidate := range candidates {
 		if candidate.packageSignature != signature {
 			t.Fatalf("composition mismatch: got %q want %q", candidate.packageSignature, signature)
+		}
+	}
+	// Any composition adds the mismatched fixture (and any real sale nearby), never the
+	// subject or its near duplicate.
+	mixed := currentMarketTier(all, signature, false, time.Now().Year(), 1000)
+	if len(mixed) < 5 {
+		t.Fatalf("any-composition count=%d want at least 5", len(mixed))
+	}
+	for _, candidate := range mixed {
+		if candidate.transactionID == subjectID || candidate.transactionID == subjectID+1 {
+			t.Fatalf("subject or near duplicate %d among candidates", candidate.transactionID)
 		}
 	}
 	direct, err := loadDirectComparables(ctx, tx, directComparableQuery{

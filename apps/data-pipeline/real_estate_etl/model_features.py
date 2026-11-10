@@ -1,8 +1,14 @@
-"""Feature preprocessing and estimator construction for valuation models."""
+"""Valuation-model feature schema and preprocessing.
+
+Feature matrices hold the columns of :data:`MODEL_FEATURES` in that order. Code that
+addresses a column uses :data:`FEATURE_INDEX` (or the column lists below), never a bare
+position, so reordering or adding a feature cannot silently shift another one.
+"""
+
+from __future__ import annotations
 
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import Ridge
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -16,6 +22,12 @@ MODEL_FEATURES = [
     "property_group",
     "municipality_id",
 ]
+CATEGORICAL_FEATURES = ("property_group", "municipality_id")
+NUMERIC_FEATURES = tuple(name for name in MODEL_FEATURES if name not in CATEGORICAL_FEATURES)
+
+FEATURE_INDEX = {name: position for position, name in enumerate(MODEL_FEATURES)}
+NUMERIC_COLUMNS = [FEATURE_INDEX[name] for name in NUMERIC_FEATURES]
+CATEGORICAL_COLUMNS = [FEATURE_INDEX[name] for name in CATEGORICAL_FEATURES]
 
 
 def preprocessor(
@@ -47,10 +59,10 @@ def preprocessor(
     )
 
 
-def hedonic_pipeline() -> Pipeline:
-    return Pipeline(
-        [
-            ("features", preprocessor(list(range(6)), [6, 7])),
-            ("regression", Ridge(alpha=2.0)),
-        ]
+def feature_preprocessor(*, dense: bool = False, offset: int = 0) -> ColumnTransformer:
+    """Preprocessor for a matrix of :data:`MODEL_FEATURES`, preceded by ``offset`` extra numeric columns."""
+    return preprocessor(
+        [*range(offset), *(column + offset for column in NUMERIC_COLUMNS)],
+        [column + offset for column in CATEGORICAL_COLUMNS],
+        dense=dense,
     )

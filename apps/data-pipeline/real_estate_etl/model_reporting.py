@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from .formatting import format_duration
+
 
 def format_model_report(result: Any) -> str:
     """Format persisted model metrics without implying a single accuracy score."""
@@ -13,7 +15,7 @@ def format_model_report(result: Any) -> str:
     lines = [
         f"Model validation — {kind}",
         f"  version={result.model_version} rows={result.rows:,} "
-        f"elapsed={_duration(result.elapsed_seconds)}",
+        f"elapsed={format_duration(result.elapsed_seconds)}",
         "  estimators: hedonic valuation=temporally selected Ridge regression, Elastic Net, "
         "or histogram gradient boosting; anomaly signal=separate Isolation Forest",
         "  untouched latest-complete-year holdout: "
@@ -33,29 +35,21 @@ def format_model_report(result: Any) -> str:
         for group, raw in sorted(groups.items()):
             if not isinstance(raw, Mapping):
                 continue
-            temporal = raw.get("final_holdout", raw.get("temporal", {}))
-            spatial = raw.get("grouped_robustness", raw.get("spatial", {}))
+            temporal = raw.get("final_holdout", {})
+            spatial = raw.get("grouped_robustness", {})
             if not isinstance(temporal, Mapping) or not isinstance(spatial, Mapping):
                 continue
             model_mae = _as_float(temporal.get("mae_amount_per_sqm"))
             baseline = temporal.get("baseline", {})
-            baseline_mae = _as_float(
-                baseline.get("mae_amount_per_sqm")
-                if isinstance(baseline, Mapping) and baseline
-                else temporal.get("local_median_baseline_mae")
-            )
+            baseline_mae = _as_float(baseline.get("mae_amount_per_sqm")) if isinstance(baseline, Mapping) else None
             improvement = (
                 1 - model_mae / baseline_mae
                 if model_mae is not None and baseline_mae and baseline_mae > 0
                 else None
             )
-            held_out_label = (
-                "municipalities" if "held_out_municipalities" in spatial else "groups"
-            )
             spatial_summary = (
                 f"grouped R²={_number(spatial.get('r2_log'), 3)} "
-                f"across {int(spatial.get('held_out_group_count', spatial.get('held_out_municipalities', 0)))} "
-                f"held-out {held_out_label}"
+                f"across {int(spatial.get('held_out_group_count', 0))} held-out groups"
                 if "r2_log" in spatial
                 else f"spatial={spatial.get('status', 'unavailable')}"
             )
@@ -69,8 +63,7 @@ def format_model_report(result: Any) -> str:
             )
 
     warnings = _warnings(metrics)
-    for warning in warnings:
-        lines.append(f"  WARNING: {warning}")
+    lines.extend(f"  WARNING: {warning}" for warning in warnings)
     lines.append(
         "  Interpretation: validation error and coverage are diagnostics, not a "
         "certified appraisal or a classification accuracy."
@@ -90,8 +83,8 @@ def _warnings(metrics: Mapping[str, Any]) -> list[str]:
         for group, raw in groups.items():
             if not isinstance(raw, Mapping):
                 continue
-            temporal = raw.get("temporal", {})
-            spatial = raw.get("spatial", {})
+            temporal = raw.get("final_holdout", {})
+            spatial = raw.get("grouped_robustness", {})
             if isinstance(temporal, Mapping) and (_as_float(temporal.get("r2_log")) or 0) < 0:
                 weak.append(f"{group} temporal")
             if isinstance(spatial, Mapping) and "r2_log" in spatial and (
@@ -119,8 +112,3 @@ def _percent(value: Any) -> str:
 
 def _signed_percent(value: float | None) -> str:
     return "n/a" if value is None else f"{100 * value:+.1f}% MAE improvement"
-
-
-def _duration(seconds: float) -> str:
-    minutes, remaining = divmod(round(seconds), 60)
-    return f"{minutes}m {remaining:02d}s" if minutes else f"{remaining}s"

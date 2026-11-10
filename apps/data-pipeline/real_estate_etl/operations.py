@@ -1,196 +1,76 @@
-"""End-to-end refresh, reset, and scheduling operations for the worker."""
+"""End-to-end refresh, reset, and scheduling operations for the worker.
+
+A system refresh runs these stages in order, each recorded on the analytical release:
+
+1. ``source``     import new or revised GURS national archives;
+2. ``geography``  refresh RPE boundaries (an outage keeps the stored boundaries);
+   then the optional context sources (SURS, Banka Slovenije, ECB, GURS buildings),
+   whose per-source outcome is stored in ``details.sources`` on the release;
+3. ``analytics``  rebuild the analytical facts in one transaction;
+4. ``models``     retrain valuation models when the policy and new data call for it;
+5. ``published``  switch the active release, in the same transaction as 3 and 4.
+
+Stages 3 to 5 deliberately share one long transaction: readers keep seeing the
+previous release until the new one is complete. That holds back vacuum for the
+duration of the refresh, which is acceptable for a refresh every 14 days.
+"""
 
 from __future__ import annotations
 
 import logging
 import os
 import signal
-import textwrap
 import time
-import uuid
-from collections.abc import Callable
-from contextlib import contextmanager
+from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import datetime, timedelta
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Thread, current_thread, main_thread
+from typing import Any
 
 import psycopg
+from psycopg import sql
 
+from .analytics_plan import ANALYTICS_REFRESH_FUNCTIONS, format_analytics_plan
+from .construction import sync_construction
+from .context import sync_context
+from .demography import sync_demography
 from .geography import sync_geographies
+from .health import HEARTBEAT_SECONDS, STALE_SLACK, HealthHeartbeat, WorkerHealth, utc_now
 from .models import RefreshSummary
 from .pipeline import refresh_all_national
+from .publication import (
+    active_release_published_at,
+    fail_release,
+    maintenance_lock,
+    publish_release,
+    record_source_status,
+    set_release_stage,
+    start_release,
+    update_release_source,
+)
+from .source_sync import SOURCE_OK, SourceSyncReport
 
 logger = logging.getLogger(__name__)
 
-REFRESH_LOCK_ID = 724_202_607
 DEFAULT_INTERVAL_DAYS = 14
 DEFAULT_RETRY_HOURS = 1
 DEFAULT_ANALYTICS_PROGRESS_INTERVAL_SECONDS = 15.0
+#: The current and previous GURS years are re-downloaded on every refresh: late
+#: registrations keep arriving for the year that just ended.
+REVISION_YEARS = 2
 
-
-def model_training_enabled() -> bool:
-    """Compose keeps automatic training; production can require a deliberate Job."""
-    policy = os.getenv("MODEL_REFRESH_POLICY", "auto")
-    if policy not in {"auto", "manual"}:
-        raise ValueError("MODEL_REFRESH_POLICY must be auto or manual")
-    return policy == "auto"
-
-
-@contextmanager
-def maintenance_lock(connection):
-    """Serialize manual maintenance with the scheduler using its existing lock."""
-    acquired = connection.execute(
-        "SELECT pg_try_advisory_lock(%s)", (REFRESH_LOCK_ID,)
-    ).fetchone()[0]
-    connection.commit()
-    if not acquired:
-        raise RefreshAlreadyRunning("another data-pipeline refresh is already running")
-    try:
-        yield
-        connection.commit()
-    finally:
-        connection.rollback()
-        connection.execute("SELECT pg_advisory_unlock(%s)", (REFRESH_LOCK_ID,))
-        connection.commit()
-
-ANALYTICS_REFRESH_FUNCTIONS = (
-    "analytics.refresh_sale_facts",
-    "analytics.refresh_land_transaction_facts",
-    "analytics.refresh_sale_outliers",
-    "analytics.refresh_rental_facts",
-    "analytics.refresh_rental_outliers",
-    "analytics.refresh_anomaly_signals",
-    "analytics.refresh_near_duplicate_candidates",
-    "analytics.refresh_missingness_profiles",
-    "analytics.refresh_repeat_sales_indices",
-)
-
-ANALYTICS_STAGE_DESCRIPTIONS = {
-    "analytics.refresh_sale_facts": (
-        "build one quality-audited analytical fact per sale agreement from its "
-        "building parts and parcels; source transactions remain unchanged"
-    ),
-    "analytics.refresh_land_transaction_facts": (
-        "classify land-only sales into strict, broad, and audit populations "
-        "using the preserved ETN land codes"
-    ),
-    "analytics.refresh_sale_outliers": (
-        "recalculate robust sale cohorts and representative-sample flags; "
-        "statistical outliers are marked, not deleted"
-    ),
-    "analytics.refresh_rental_facts": (
-        "build one quality-audited analytical fact per rental agreement from "
-        "the preserved rental transactions and components"
-    ),
-    "analytics.refresh_rental_outliers": (
-        "recalculate robust rental cohorts and representative-sample flags; "
-        "statistical outliers are marked, not deleted"
-    ),
-    "analytics.refresh_anomaly_signals": (
-        "combine quality, robust-cohort, duplicate, spatial, and available "
-        "model evidence into non-destructive review signals"
-    ),
-    "analytics.refresh_near_duplicate_candidates": (
-        "identify explainable possible duplicate transaction pairs within the "
-        "configured seven-day and similarity rules"
-    ),
-    "analytics.refresh_missingness_profiles": (
-        "measure field availability by transaction kind, property group, year, "
-        "and geography without imputing missing targets"
-    ),
-    "analytics.refresh_repeat_sales_indices": (
-        "rebuild eligible repeat-sale pairs and their published market-index "
-        "vintages from representative transactions"
-    ),
-}
-
-ANALYTICS_STAGE_DATABASE_EFFECTS = {
-    "analytics.refresh_sale_facts": (
-        (
-            "analytics.sale_facts",
-            "rebuilds derived sale facts, prices, areas, quality reasons, and geography; raw transactions are unchanged",
-        ),
-    ),
-    "analytics.refresh_land_transaction_facts": (
-        (
-            "analytics.land_transaction_facts",
-            "rebuilds land-only analytical rows and their strict, broad, and audit eligibility flags",
-        ),
-    ),
-    "analytics.refresh_sale_outliers": (
-        (
-            "analytics.sale_outlier_evaluations",
-            "rebuilds cohort status, bounds, modified z-score, and the outlier decision for every sale fact",
-        ),
-        (
-            "analytics.sale_facts",
-            "updates quality eligibility/reasons for implausible values and sets representative_eligible from the outlier decision; no sale is deleted",
-        ),
-    ),
-    "analytics.refresh_rental_facts": (
-        (
-            "analytics.rental_facts",
-            "rebuilds derived rental facts, rents, areas, quality reasons, and geography; raw rental agreements are unchanged",
-        ),
-    ),
-    "analytics.refresh_rental_outliers": (
-        (
-            "analytics.rental_outlier_evaluations",
-            "rebuilds cohort status, bounds, modified z-score, and the outlier decision for every rental fact",
-        ),
-        (
-            "analytics.rental_facts",
-            "sets representative_eligible from quality eligibility and the outlier decision; no rental agreement is deleted",
-        ),
-    ),
-    "analytics.refresh_anomaly_signals": (
-        (
-            "analytics.anomaly_signals",
-            "upserts non-destructive anomaly flags, component scores, reasons, and combined review scores; stale signals are removed",
-        ),
-    ),
-    "analytics.refresh_near_duplicate_candidates": (
-        (
-            "analytics.near_duplicate_candidates",
-            "rebuilds auditable candidate pairs and identifies only the later record as the possible duplicate",
-        ),
-        (
-            "analytics.anomaly_signals",
-            "updates possible_duplicate, duplicate_score, reasons, and the combined review score",
-        ),
-    ),
-    "analytics.refresh_missingness_profiles": (
-        (
-            "analytics.missingness_profiles",
-            "rebuilds present/missing counts and coverage rates by population, field, year, and geography",
-        ),
-    ),
-    "analytics.refresh_repeat_sales_indices": (
-        (
-            "analytics.repeat_sale_pairs",
-            "rebuilds eligible consecutive repeat-sale pairs",
-        ),
-        (
-            "analytics.index_calculation_runs",
-            "records the repeat-sale index calculation run and data vintage",
-        ),
-        (
-            "analytics.market_indices",
-            "stores the resulting repeat-sale index series, sample sizes, and intervals",
-        ),
-    ),
-}
-
+#: Tables emptied by ``reset-and-repopulate``. TRUNCATE runs without CASCADE, so a new
+#: table that references one of these fails the reset loudly until it is listed here.
 RESET_TABLES = (
     "analytics.valuation_predictions",
     "analytics.market_indices",
     "analytics.repeat_sale_pairs",
     "analytics.index_calculation_runs",
+    "analytics.model_publications",
     "analytics.model_runs",
     "analytics.anomaly_signals",
     "analytics.near_duplicate_candidates",
-    "analytics.missingness_profiles",
     "analytics.land_transaction_facts",
     "analytics.sale_outlier_evaluations",
     "analytics.rental_outlier_evaluations",
@@ -208,8 +88,8 @@ RESET_TABLES = (
 )
 
 
-class RefreshAlreadyRunning(RuntimeError):
-    pass
+class RefreshInterrupted(RuntimeError):
+    """The worker was asked to stop between two refresh stages."""
 
 
 @dataclass(frozen=True)
@@ -217,77 +97,55 @@ class SystemRefreshResult:
     archives: RefreshSummary
     geography_counts: dict[str, int]
     model_rows: dict[str, int]
+    sources: dict[str, str]
+
+
+class ReleaseLogger(logging.LoggerAdapter):
+    """Prefix every message with the release id so logs match the release row."""
+
+    def process(self, msg: Any, kwargs: MutableMapping[str, Any]) -> tuple[Any, MutableMapping[str, Any]]:
+        return f"release={self.extra['release_id']} {msg}", kwargs
+
+
+def model_training_enabled() -> bool:
+    """Compose keeps automatic training; production can require a deliberate Job."""
+    policy = os.getenv("MODEL_REFRESH_POLICY", "auto")
+    if policy not in {"auto", "manual"}:
+        raise ValueError("MODEL_REFRESH_POLICY must be auto or manual")
+    return policy == "auto"
 
 
 def _analytics_progress_interval() -> float:
-    raw = os.getenv(
-        "ANALYTICS_PROGRESS_INTERVAL_SECONDS",
-        str(DEFAULT_ANALYTICS_PROGRESS_INTERVAL_SECONDS),
-    )
+    raw = os.getenv("ANALYTICS_PROGRESS_INTERVAL_SECONDS", str(DEFAULT_ANALYTICS_PROGRESS_INTERVAL_SECONDS))
     try:
         return max(1.0, float(raw))
     except ValueError:
+        logger.warning(
+            "ANALYTICS_PROGRESS_INTERVAL_SECONDS=%r is not a number; using %ss",
+            raw, DEFAULT_ANALYTICS_PROGRESS_INTERVAL_SECONDS,
+        )
         return DEFAULT_ANALYTICS_PROGRESS_INTERVAL_SECONDS
 
 
 def _log_running_stage(label: str, started: float, done: Event, interval: float) -> None:
     while not done.wait(interval):
-        logger.info(
-            f"  {label}: PostgreSQL is still processing "
-            f"(elapsed={time.monotonic() - started:.1f}s)"
-        )
+        logger.info("  %s: PostgreSQL is still processing (elapsed=%.1fs)", label, time.monotonic() - started)
 
 
-def _print_analytics_plan(functions: tuple[str, ...]) -> None:
-    width = 88
-    lines = [
-        " ANALYTICS REFRESH PLAN ".center(width, "="),
-        (
-            f"[analytics] execution plan: {len(functions)} sequential stages; "
-            "database refresh stages do not run in parallel"
-        ),
-        "-" * width,
-    ]
-    for position, function in enumerate(functions, start=1):
-        label = function.rsplit(".", 1)[-1]
-        if position > 1:
-            lines.append("")
-        lines.append(f"[analytics] {position}/{len(functions)} {label}")
-        description = ANALYTICS_STAGE_DESCRIPTIONS.get(function)
-        if description:
-            lines.extend(
-                textwrap.wrap(
-                    f"Action: {description}",
-                    width=width,
-                    initial_indent="  ",
-                    subsequent_indent="          ",
-                )
-            )
-        effects = ANALYTICS_STAGE_DATABASE_EFFECTS.get(function)
-        if effects:
-            lines.append("  Database effects:")
-            for table, effect in effects:
-                lines.extend(
-                    textwrap.wrap(
-                        f"- {table}: {effect}",
-                        width=width,
-                        initial_indent="    ",
-                        subsequent_indent="      ",
-                    )
-                )
-    lines.extend(["-" * width, " END ANALYTICS REFRESH PLAN ".center(width, "=")])
-    logger.info("%s", "\n".join(lines), extra={"plain_block": True})
+def _function_call(function: str) -> sql.Composed:
+    schema, name = function.split(".")
+    return sql.SQL("SELECT {}()").format(sql.Identifier(schema, name))
 
 
 def _refresh_functions(
-    connection,
+    connection: psycopg.Connection,
     functions: tuple[str, ...],
     *,
     progress_interval_seconds: float | None = None,
 ) -> dict[str, int]:
     counts: dict[str, int] = {}
     interval = progress_interval_seconds or _analytics_progress_interval()
-    _print_analytics_plan(functions)
+    logger.info("%s", format_analytics_plan(functions), extra={"plain_block": True})
     with connection.transaction(), connection.cursor() as cursor:
         for function in functions:
             label = function.rsplit(".", 1)[-1]
@@ -302,137 +160,34 @@ def _refresh_functions(
             )
             heartbeat.start()
             try:
-                cursor.execute(f"SELECT {function}()")  # fixed internal allow-list
+                cursor.execute(_function_call(function))
             finally:
                 done.set()
                 heartbeat.join()
-            value = cursor.fetchone()[0]
-            counts[function] = int(value or 0)
-            logger.info(
-                f"  {label}: "
-                f"{int(value or 0):,} rows in {time.monotonic() - started:.1f}s"
-            )
+            value = int(cursor.fetchone()[0] or 0)
+            counts[function] = value
+            logger.info("  %s: %s rows in %.1fs", label, f"{value:,}", time.monotonic() - started)
     return counts
 
 
-def refresh_analytics(connection, *, database_url: str) -> dict[str, int]:
+def refresh_analytics(connection: psycopg.Connection) -> dict[str, int]:
     """Build one coherent analytical generation in the caller's transaction."""
-    del database_url  # retained for CLI/API compatibility
     return _refresh_functions(connection, ANALYTICS_REFRESH_FUNCTIONS)
 
 
-def _release_status(database_url: str, release_id: uuid.UUID, stage: str) -> None:
-    with psycopg.connect(database_url) as status_connection:
-        status_connection.execute(
-            """UPDATE analytics.analytical_releases SET stage=%s WHERE id=%s""",
-            (stage, release_id),
-        )
+def format_analytics_counts(counts: dict[str, int]) -> str:
+    return ", ".join(f"{name.rsplit('.', 1)[-1]}={count}" for name, count in counts.items())
 
 
-def _start_release(connection, database_url: str) -> uuid.UUID:
-    release_id = uuid.uuid4()
-    sale_through, rent_through = connection.execute(
-        """SELECT (SELECT max(contract_date) FROM transactions),
-                  (SELECT max(contract_date) FROM rental_transactions)"""
-    ).fetchone()
-    connection.commit()
-    with psycopg.connect(database_url) as status_connection:
-        status_connection.execute(
-            """
-            UPDATE analytics.analytical_releases
-            SET status='failed',stage='superseded',failed_at=clock_timestamp(),
-                failure_message='superseded by a newer refresh'
-            WHERE status='processing'
-            """
-        )
-        status_connection.execute(
-            """
-            INSERT INTO analytics.analytical_releases(
-                id,status,stage,source_sale_through,source_rent_through
-            ) VALUES(%s,'processing','source',%s,%s)
-            """,
-            (release_id, sale_through, rent_through),
-        )
-        status_connection.execute(
-            """
-            UPDATE analytics.analytical_publication
-            SET pending_release_id=%s,updated_at=clock_timestamp()
-            WHERE singleton
-            """,
-            (release_id,),
-        )
-    return release_id
-
-
-def _update_release_source(connection, database_url: str, release_id: uuid.UUID) -> None:
-    sale_through, rent_through = connection.execute(
-        """SELECT (SELECT max(contract_date) FROM transactions),
-                  (SELECT max(contract_date) FROM rental_transactions)"""
-    ).fetchone()
-    connection.commit()
-    with psycopg.connect(database_url) as status_connection:
-        status_connection.execute(
-            """UPDATE analytics.analytical_releases
-               SET source_sale_through=%s,source_rent_through=%s,stage='geography'
-               WHERE id=%s""",
-            (sale_through, rent_through, release_id),
-        )
-
-
-def _fail_release(database_url: str, release_id: uuid.UUID, error: Exception) -> None:
-    with psycopg.connect(database_url) as status_connection:
-        status_connection.execute(
-            """
-            UPDATE analytics.analytical_releases
-            SET status='failed',stage='failed',failed_at=clock_timestamp(),
-                failure_message=left(%s,2000)
-            WHERE id=%s
-            """,
-            (str(error), release_id),
-        )
-        status_connection.execute(
-            """
-            UPDATE analytics.analytical_publication
-            SET pending_release_id=NULL,updated_at=clock_timestamp()
-            WHERE singleton AND pending_release_id=%s
-            """,
-            (release_id,),
-        )
-
-
-def _publish_release(
-    connection, release_id: uuid.UUID, model_versions: str | None
-) -> None:
-    connection.execute(
-        """
-        UPDATE analytics.analytical_releases
-        SET status='published',stage='published',published_at=clock_timestamp(),
-            analytics_sale_through=(SELECT max(contract_date) FROM analytics.sale_facts),
-            analytics_rent_through=(SELECT max(contract_date) FROM analytics.rental_facts),
-            model_versions=%s
-        WHERE id=%s
-        """,
-        (model_versions, release_id),
-    )
-    connection.execute(
-        """
-        UPDATE analytics.analytical_publication
-        SET active_release_id=%s,pending_release_id=NULL,updated_at=clock_timestamp()
-        WHERE singleton
-        """,
-        (release_id,),
-    )
-
-
-def reset_market_data(connection) -> None:
+def reset_market_data(connection: psycopg.Connection) -> None:
     """Delete market data while preserving users and installation state."""
-    tables = ", ".join(RESET_TABLES)
+    tables = sql.SQL(", ").join(sql.Identifier(*table.split(".")) for table in RESET_TABLES)
     with connection.transaction(), connection.cursor() as cursor:
-        cursor.execute(f"TRUNCATE TABLE {tables} RESTART IDENTITY CASCADE")
+        cursor.execute(sql.SQL("TRUNCATE TABLE {} RESTART IDENTITY").format(tables))
 
 
 def refresh_system(
-    connection,
+    connection: psycopg.Connection,
     *,
     output_dir: Path,
     end_year: int,
@@ -440,16 +195,10 @@ def refresh_system(
     workers: int,
     verbose: bool,
     database_url: str,
+    stop_requested: Callable[[], bool] | None = None,
 ) -> SystemRefreshResult:
     """Run source → geography → analytics; models follow MODEL_REFRESH_POLICY."""
-    acquired = connection.execute(
-        "SELECT pg_try_advisory_lock(%s)", (REFRESH_LOCK_ID,)
-    ).fetchone()[0]
-    connection.commit()
-    if not acquired:
-        raise RefreshAlreadyRunning("another data-pipeline refresh is already running")
-
-    try:
+    with maintenance_lock(connection):
         return _refresh_system_unlocked(
             connection,
             output_dir=output_dir,
@@ -458,15 +207,12 @@ def refresh_system(
             workers=workers,
             verbose=verbose,
             database_url=database_url,
+            stop_requested=stop_requested,
         )
-    finally:
-        connection.rollback()
-        connection.execute("SELECT pg_advisory_unlock(%s)", (REFRESH_LOCK_ID,))
-        connection.commit()
 
 
 def reset_and_repopulate(
-    connection,
+    connection: psycopg.Connection,
     *,
     output_dir: Path,
     end_year: int,
@@ -474,17 +220,10 @@ def reset_and_repopulate(
     verbose: bool,
     database_url: str,
 ) -> SystemRefreshResult:
-    acquired = connection.execute(
-        "SELECT pg_try_advisory_lock(%s)", (REFRESH_LOCK_ID,)
-    ).fetchone()[0]
-    connection.commit()
-    if not acquired:
-        raise RefreshAlreadyRunning("another data-pipeline refresh is already running")
-    try:
+    """Empty imported and derived market data, then run a full system refresh."""
+    with maintenance_lock(connection):
         reset_market_data(connection)
-        logger.info(
-            "Removed imported and derived market data; users and preferences were preserved."
-        )
+        logger.info("Removed imported and derived market data; users and preferences were preserved.")
         return _refresh_system_unlocked(
             connection,
             output_dir=output_dir,
@@ -494,14 +233,71 @@ def reset_and_repopulate(
             verbose=verbose,
             database_url=database_url,
         )
-    finally:
+
+
+def _sync_geographies_or_keep_existing(connection: psycopg.Connection) -> tuple[dict[str, int], str]:
+    """Refresh RPE boundaries, but never let a boundary-service outage block new GURS data.
+
+    sync_geographies is atomic (rolls back and records a failed run), so on error the
+    previously synchronised boundaries are intact. A first install has none and must fail.
+    Returns the per-level counts and the source status (``"ok"`` or the error).
+    """
+    try:
+        return sync_geographies(connection), SOURCE_OK
+    except Exception as error:
         connection.rollback()
-        connection.execute("SELECT pg_advisory_unlock(%s)", (REFRESH_LOCK_ID,))
+        existing = connection.execute("SELECT count(*) FROM analytics.geographic_units").fetchone()[0]
         connection.commit()
+        if not existing:
+            raise
+        logger.warning(
+            "Geographic boundary sync failed; keeping %s previously synchronised boundaries for this release.",
+            existing, exc_info=error,
+        )
+        return {}, f"{type(error).__name__}: {error}"[:500]
+
+
+def _sync_optional_sources(connection: psycopg.Connection, output_dir: Path) -> SourceSyncReport:
+    """Affordability, demographic and construction context; failures keep stored values."""
+    return (
+        sync_context(connection)
+        .merge(sync_demography(connection))
+        .merge(sync_construction(connection, output_dir))
+    )
+
+
+def _bootstrap_required(connection: psycopg.Connection) -> bool:
+    required = connection.execute(
+        "SELECT model_bootstrap_completed_at IS NULL FROM analytics.pipeline_state WHERE singleton"
+    ).fetchone()[0]
+    connection.commit()
+    return bool(required)
+
+
+def _published_model_versions(connection: psycopg.Connection) -> str | None:
+    return connection.execute(
+        "SELECT model_bootstrap_version FROM analytics.pipeline_state WHERE singleton"
+    ).fetchone()[0]
+
+
+def _train_models(
+    connection: psycopg.Connection, workers: int, log: logging.LoggerAdapter,
+) -> tuple[dict[str, int], str]:
+    from .model_reporting import format_model_report
+    from .modeling import refresh_models
+
+    log.info("Starting valuation-model training for the pending analytical release.")
+    results = refresh_models(connection, workers)
+    for result in results:
+        log.info("%s", format_model_report(result))
+    return (
+        {result.transaction_kind: result.rows for result in results},
+        ",".join(result.model_version for result in results),
+    )
 
 
 def _refresh_system_unlocked(
-    connection,
+    connection: psycopg.Connection,
     *,
     output_dir: Path,
     end_year: int,
@@ -509,75 +305,84 @@ def _refresh_system_unlocked(
     workers: int,
     verbose: bool,
     database_url: str,
+    stop_requested: Callable[[], bool] | None = None,
 ) -> SystemRefreshResult:
     automatic_training = model_training_enabled()
-    release_id = _start_release(connection, database_url)
+    release_id = start_release(connection, database_url)
+    log = ReleaseLogger(logger, {"release_id": release_id})
+
+    def checkpoint(next_stage: str) -> None:
+        if stop_requested is not None and stop_requested():
+            raise RefreshInterrupted(f"stop requested before the {next_stage} stage")
+
     try:
         archives = refresh_all_national(
-            connection,
-            output_dir,
-            end_year,
-            force,
-            workers,
-            verbose,
-            refresh_current_year=True,
+            connection, output_dir, end_year, force, workers, verbose, revision_years=REVISION_YEARS,
         )
-        _update_release_source(connection, database_url, release_id)
-        geography_counts = sync_geographies(connection)
-        _release_status(database_url, release_id, "analytics")
-        bootstrap_required = connection.execute(
-            """
-            SELECT model_bootstrap_completed_at IS NULL
-            FROM analytics.pipeline_state WHERE singleton
-            """
-        ).fetchone()[0]
-        connection.commit()
+        checkpoint("geography")
+        update_release_source(connection, database_url, release_id)
+        geography_counts, geography_status = _sync_geographies_or_keep_existing(connection)
+        checkpoint("context")
+        sources = {"rpe_boundaries": geography_status, **_sync_optional_sources(connection, output_dir).status()}
+        record_source_status(database_url, release_id, sources)
+        checkpoint("analytics")
+        set_release_stage(database_url, release_id, "analytics")
+        bootstrap_required = _bootstrap_required(connection)
         model_rows: dict[str, int] = {}
         with connection.transaction():
-            analytics_counts = refresh_analytics(connection, database_url=database_url)
-            logger.info(
-                "Refreshed analytics: "
-                + ", ".join(
-                    f"{name.rsplit('.', 1)[-1]}={count}"
-                    for name, count in analytics_counts.items()
-                )
-            )
-            should_train = automatic_training and (bootstrap_required or archives.imported > 0)
-            model_versions = connection.execute(
-                """SELECT model_bootstrap_version FROM analytics.pipeline_state
-                   WHERE singleton"""
-            ).fetchone()[0]
-            if should_train:
-                _release_status(database_url, release_id, "models")
-                logger.info(
-                    "Starting valuation-model training for the pending analytical release."
-                )
-                from .model_reporting import format_model_report
-                from .modeling import refresh_models
-
-                model_results = refresh_models(connection, workers)
-                for result in model_results:
-                    logger.info("%s", format_model_report(result))
-                model_rows = {
-                    result.transaction_kind: result.rows for result in model_results
-                }
-                model_versions = ",".join(
-                    result.model_version for result in model_results
-                )
+            log.info("Refreshed analytics: %s", format_analytics_counts(refresh_analytics(connection)))
+            model_versions = _published_model_versions(connection)
+            if automatic_training and (bootstrap_required or archives.imported > 0):
+                checkpoint("models")
+                set_release_stage(database_url, release_id, "models")
+                model_rows, model_versions = _train_models(connection, workers, log)
             else:
-                if automatic_training:
-                    logger.info("No new GURS archives; retaining the currently published model.")
-                logger.info(
-                    "Retaining published models (policy=%s, new archives=%s); "
+                log.info(
+                    "Retaining published models (policy=%s, new archives=%s, bootstrap required=%s); "
                     "refresh-models remains available for deliberate training.",
-                    "auto" if automatic_training else "manual", archives.imported,
+                    "auto" if automatic_training else "manual", archives.imported, bootstrap_required,
                 )
-            _publish_release(connection, release_id, model_versions)
-        return SystemRefreshResult(archives, geography_counts, model_rows)
-    except Exception as error:
+            checkpoint("publication")
+            publish_release(connection, release_id, model_versions)
+        failed = sorted(name for name, status in sources.items() if status != SOURCE_OK)
+        log.info(
+            "published (archives imported=%s, models=%s, failed optional sources=%s)",
+            archives.imported, model_versions, ", ".join(failed) or "none",
+        )
+        return SystemRefreshResult(archives, geography_counts, model_rows, sources)
+    except BaseException as error:
         connection.rollback()
-        _fail_release(database_url, release_id, error)
+        fail_release(database_url, release_id, error)
         raise
+
+
+#: Longest single sleep. The deadline is wall-clock time: Docker Desktop pauses
+#: its VM while the host sleeps and a monotonic wait does not advance then, so a
+#: single 14-day Event.wait() silently stretched into months.
+SCHEDULER_POLL_SECONDS = 300
+
+
+def wait_until(
+    deadline: datetime,
+    stop_event: Event,
+    *,
+    now: Callable[[], datetime] = utc_now,
+    poll_seconds: float = SCHEDULER_POLL_SECONDS,
+) -> None:
+    """Sleep in short slices until a wall-clock deadline or a stop request."""
+    while not stop_event.is_set():
+        remaining = (deadline - now()).total_seconds()
+        if remaining <= 0:
+            return
+        stop_event.wait(min(remaining, poll_seconds))
+
+
+def _reader_for_active_release(database_url: str) -> Callable[[], datetime | None]:
+    def read() -> datetime | None:
+        with psycopg.connect(database_url) as connection:
+            return active_release_published_at(connection)
+
+    return read
 
 
 def scheduled_refresh_loop(
@@ -591,44 +396,74 @@ def scheduled_refresh_loop(
     health_file: Path | None = None,
     stop_event: Event | None = None,
     refresh: Callable[..., SystemRefreshResult] = refresh_system,
+    active_release: Callable[[], datetime | None] | None = None,
+    now: Callable[[], datetime] = utc_now,
+    poll_seconds: float = SCHEDULER_POLL_SECONDS,
+    heartbeat_seconds: float = HEARTBEAT_SECONDS,
 ) -> None:
-    """Run immediately, then every interval; retry failures without losing last-good health."""
+    """Run immediately, then every interval; retry failures after ``retry_hours``.
+
+    Health semantics are documented in :mod:`real_estate_etl.health`.
+    """
     if interval_days < 1:
         raise ValueError("interval_days must be at least 1")
     if retry_hours < 1:
         raise ValueError("retry_hours must be at least 1")
     stop_event = stop_event or Event()
+    active_release = active_release or _reader_for_active_release(database_url)
+    health = WorkerHealth(health_file, stale_after=timedelta(days=interval_days) + STALE_SLACK, now=now)
 
-    def request_stop(_signal, _frame) -> None:
+    def request_stop(signal_number: int, _frame: object) -> None:
+        logger.info("Received signal %s; stopping after the current refresh stage.", signal_number)
         stop_event.set()
 
-    if stop_event is not None and os.getpid() == 1:
+    # Compose runs the worker under tini (init: true), so it is not PID 1; install
+    # graceful-stop handlers whenever the loop owns the main thread.
+    if current_thread() is main_thread():
         signal.signal(signal.SIGTERM, request_stop)
         signal.signal(signal.SIGINT, request_stop)
 
-    while not stop_event.is_set():
-        try:
-            with psycopg.connect(database_url) as connection:
-                refresh(
-                    connection,
-                    output_dir=output_dir,
-                    end_year=date.today().year,
-                    force=False,
-                    workers=workers,
-                    verbose=verbose,
-                    database_url=database_url,
+    with HealthHeartbeat(health, heartbeat_seconds):
+        while not stop_event.is_set():
+            health.update(refreshing=True)
+            try:
+                with psycopg.connect(database_url) as connection:
+                    refresh(
+                        connection,
+                        output_dir=output_dir,
+                        end_year=now().year,
+                        force=False,
+                        workers=workers,
+                        verbose=verbose,
+                        database_url=database_url,
+                        stop_requested=stop_event.is_set,
+                    )
+                wait = timedelta(days=interval_days)
+                health.update(last_error=None)
+                logger.info(
+                    "Scheduled refresh succeeded; next run in %s days (at %s).",
+                    interval_days, (now() + wait).isoformat(timespec="minutes"),
                 )
-            if health_file:
-                health_file.parent.mkdir(parents=True, exist_ok=True)
-                health_file.touch()
-            wait_seconds = interval_days * 24 * 60 * 60
-            logger.info(
-                "Scheduled refresh succeeded; next run in %s days.", interval_days
-            )
-        except Exception as exc:
-            logger.exception("Scheduled refresh failed: %s", exc)
-            wait_seconds = retry_hours * 60 * 60
-            logger.warning(
-                "Retrying scheduled refresh in %s hour(s).", retry_hours
-            )
-        stop_event.wait(wait_seconds)
+            except RefreshInterrupted as interrupted:
+                logger.info("Scheduled refresh stopped: %s", interrupted)
+                break
+            except Exception as exc:
+                logger.exception("Scheduled refresh failed")
+                health.update(last_error=f"{type(exc).__name__}: {exc}"[:500])
+                wait = timedelta(hours=retry_hours)
+                logger.warning(
+                    "Retrying scheduled refresh in %s hour(s) (at %s).",
+                    retry_hours, (now() + wait).isoformat(timespec="minutes"),
+                )
+            finally:
+                health.update(refreshing=False, published_at=_safe_active_release(active_release, health))
+            wait_until(now() + wait, stop_event, now=now, poll_seconds=poll_seconds)
+
+
+def _safe_active_release(read: Callable[[], datetime | None], health: WorkerHealth) -> datetime | None:
+    """Read the active release time; keep the last known value if the database is unreachable."""
+    try:
+        return read()
+    except Exception:
+        logger.exception("Could not read the active analytical release; keeping the last known health state")
+        return health.published_at

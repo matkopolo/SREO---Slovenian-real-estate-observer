@@ -17,11 +17,11 @@ pytestmark = pytest.mark.integration
 
 def test_public_source_free_text_is_not_mapped_for_persistence():
     source_columns = {
-        *TABLES["POSLI"][1],
-        *TABLES["DELISTAVB"][1],
-        *TABLES["ZEMLJISCA"][1],
-        *RENT_TABLES["POSLI"][1],
-        *RENT_TABLES["DELISTAVB"][1],
+        *TABLES["POSLI"].columns,
+        *TABLES["DELISTAVB"].columns,
+        *TABLES["ZEMLJISCA"].columns,
+        *RENT_TABLES["POSLI"].columns,
+        *RENT_TABLES["DELISTAVB"].columns,
     }
     assert source_columns.isdisjoint({
         "OPOMBE_O_PRAVNEM_POSLU",
@@ -44,7 +44,7 @@ def csv_bytes(fieldnames, rows):
 
 
 def complete_row(kind, values):
-    mapping = TABLES[kind][1]
+    mapping = TABLES[kind].columns
     return {source: values.get(source, "") for source in mapping}
 
 
@@ -98,10 +98,10 @@ def create_historical_archive(path: Path):
     ]
     codebook = [{"ID": "3", "SIFRANT": "Vrsta zemljišča", "NUMERICNA_VREDNOST": "1", "OPIS": "Test"}]
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("ETN_999_2009_KPP_2009_POSLI_test.csv", csv_bytes(TABLES["POSLI"][1], [transaction]))
+        archive.writestr("ETN_999_2009_KPP_2009_POSLI_test.csv", csv_bytes(TABLES["POSLI"].columns, [transaction]))
         archive.writestr("ETN_999_2009_KPP_sifranti_test.csv", csv_bytes(codebook[0], codebook))
-        archive.writestr("ETN_999_2009_KPP_2009_DELISTAVB_test.csv", csv_bytes(TABLES["DELISTAVB"][1], buildings))
-        archive.writestr("ETN_999_2009_KPP_2009_ZEMLJISCA_test.csv", csv_bytes(TABLES["ZEMLJISCA"][1], lands))
+        archive.writestr("ETN_999_2009_KPP_2009_DELISTAVB_test.csv", csv_bytes(TABLES["DELISTAVB"].columns, buildings))
+        archive.writestr("ETN_999_2009_KPP_2009_ZEMLJISCA_test.csv", csv_bytes(TABLES["ZEMLJISCA"].columns, lands))
 
 
 def create_national_sales_archive(path: Path):
@@ -113,9 +113,9 @@ def create_national_sales_archive(path: Path):
     land = complete_row("ZEMLJISCA", {
         "ID_POSLA": "700", "OBCINA": "TEST TOWN", "PARCELNA_STEVILKA": "1/1", "LETO": "2010",
     })
-    transaction_fields = [x for x in TABLES["POSLI"][1] if x != "RPE_OBCINE_SIFRA"]
-    building_fields = [x for x in TABLES["DELISTAVB"][1] if x != "RPE_OBCINE_SIFRA"]
-    land_fields = [x for x in TABLES["ZEMLJISCA"][1] if x != "RPE_OBCINE_SIFRA"]
+    transaction_fields = [x for x in TABLES["POSLI"].columns if x != "RPE_OBCINE_SIFRA"]
+    building_fields = [x for x in TABLES["DELISTAVB"].columns if x != "RPE_OBCINE_SIFRA"]
+    land_fields = [x for x in TABLES["ZEMLJISCA"].columns if x != "RPE_OBCINE_SIFRA"]
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("ETN_SLO_2010_KPP_KPP_POSLI_test.csv", csv_bytes(
             transaction_fields, [{key: transaction[key] for key in transaction_fields}]
@@ -129,11 +129,11 @@ def create_national_sales_archive(path: Path):
 
 
 def create_national_rent_archive(path: Path):
-    transaction_mapping = RENT_TABLES["POSLI"][1]
-    building_mapping = RENT_TABLES["DELISTAVB"][1]
-    transaction = {source: "" for source in transaction_mapping}
+    transaction_mapping = RENT_TABLES["POSLI"].columns
+    building_mapping = RENT_TABLES["DELISTAVB"].columns
+    transaction = dict.fromkeys(transaction_mapping, "")
     transaction.update({"ID_POSLA": "800", "LETO": "2013", "POGODBENA_NAJEMNINA": "500"})
-    building = {source: "" for source in building_mapping}
+    building = dict.fromkeys(building_mapping, "")
     building.update({
         "ID_POSLA": "800", "OBCINA": "TEST TOWN", "LETO": "2013",
         "POVRSINA_ODDANIH_PROSTOROV": "44.5", "GOSTINSKI_VRT": "0",
@@ -214,3 +214,35 @@ def test_import_streams_zip_members_without_zipfile_read(
     monkeypatch.setattr(zipfile.ZipFile, "read", forbid_materializing_member)
     stats = import_zip(database_connection, archive)
     assert stats.rows == 3
+
+
+def create_rent_archive_for_year(path: Path, year: int, rent: str):
+    transaction_mapping = RENT_TABLES["POSLI"].columns
+    building_mapping = RENT_TABLES["DELISTAVB"].columns
+    transaction = dict.fromkeys(transaction_mapping, "")
+    transaction.update({"ID_POSLA": "800", "LETO": str(year), "POGODBENA_NAJEMNINA": rent})
+    building = dict.fromkeys(building_mapping, "")
+    building.update({
+        "ID_POSLA": "800", "OBCINA": "TEST TOWN", "LETO": str(year),
+        "POVRSINA_ODDANIH_PROSTOROV": "44.5", "GOSTINSKI_VRT": "0",
+    })
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(f"ETN_SLO_{year}_NP_NP_POSLI_test.csv", csv_bytes(transaction_mapping, [transaction]))
+        archive.writestr(f"ETN_SLO_{year}_NP_NP_DELISTAVB_test.csv", csv_bytes(building_mapping, [building]))
+
+
+def test_transaction_republished_in_a_later_year_replaces_the_older_copy(database_connection, tmp_path):
+    connection = database_connection
+    older = tmp_path / "ETN_SLO_2013_NP_test.zip"
+    newer = tmp_path / "ETN_SLO_2014_NP_test.zip"
+    create_rent_archive_for_year(older, 2013, "500")
+    create_rent_archive_for_year(newer, 2014, "520")
+    import_zip(connection, older)
+
+    stats = import_zip(connection, newer)
+
+    assert stats.superseded_transactions == 1
+    assert connection.execute(
+        "SELECT dataset_year, contract_rent FROM rental_transactions WHERE transaction_id=800"
+    ).fetchall() == [(2014, 520)]
+    assert connection.execute("SELECT count(*) FROM rental_building_parts").fetchone()[0] == 1

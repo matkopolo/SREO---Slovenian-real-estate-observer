@@ -3,104 +3,158 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
+	"reflect"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/affordability"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/analytics"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/construction"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/demography"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/economics"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/geography"
-	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/identity"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/metrics"
 )
 
 type databasePinger interface {
 	Ping(context.Context) error
 }
 
+// Dependencies are everything the HTTP API needs. Every store is required.
 type Dependencies struct {
-	Logger           *slog.Logger
-	Database         databasePinger
-	Geographies      geography.Store
-	Statistics       analytics.StatisticsStore
-	Rentals          analytics.RentalStatisticsStore
-	Transactions     analytics.TransactionDetailStore
-	Histories        analytics.HistoryStore
-	Distributions    analytics.DistributionStore
-	Buildings        analytics.BuildingStore
-	Anomalies        analytics.AnomalyStore
-	Identities       identity.Store
-	Models           analytics.ModelStore
-	Releases         analytics.ReleaseStore
-	Maps             analytics.MapStore
-	Economics        economics.Store
+	Logger *slog.Logger
+	// Database is pinged by the readiness check; use a pool reserved for it.
+	Database      databasePinger
+	Geographies   geography.Store
+	Statistics    analytics.StatisticsStore
+	Rentals       analytics.RentalStatisticsStore
+	Transactions  analytics.TransactionDetailStore
+	Histories     analytics.HistoryStore
+	Distributions analytics.DistributionStore
+	Buildings     analytics.BuildingStore
+	Anomalies     analytics.AnomalyStore
+	Models        analytics.ModelStore
+	Releases      analytics.ReleaseStore
+	// ActiveRelease names the active analytical release; the analytics ETags derive from it.
+	ActiveRelease analytics.ActiveReleaseStore
+	Maps          analytics.MapStore
+	Economics     economics.Store
+	Affordability affordability.Store
+	Construction  construction.Store
+	Demography    demography.Store
+	Recent        analytics.RecentStore
+	// Metrics receives the request metrics and is served at GET /metrics (outside /api/, so the
+	// frontend's proxy never exposes it).
+	Metrics *metrics.Registry
+	// RequestTimeout is each request's deadline; zero means none.
+	RequestTimeout   time.Duration
 	AllowedOrigins   []string
 	Environment      string
 	ApplicationName  string
 	ApplicationBuild string
+	// Now replaces time.Now (tests of year boundaries).
+	Now func() time.Time
 }
 
 type server struct {
-	logger           *slog.Logger
-	database         databasePinger
-	geographies      geography.Store
-	statistics       analytics.StatisticsStore
-	rentals          analytics.RentalStatisticsStore
-	transactions     analytics.TransactionDetailStore
-	histories        analytics.HistoryStore
-	distributions    analytics.DistributionStore
-	buildings        analytics.BuildingStore
-	anomaliesStore   analytics.AnomalyStore
-	identities       identity.Store
-	models           analytics.ModelStore
-	releases         analytics.ReleaseStore
-	maps             analytics.MapStore
-	economics        economics.Store
-	environment      string
-	applicationName  string
-	applicationBuild string
+	database           databasePinger
+	geographies        geography.Store
+	statistics         analytics.StatisticsStore
+	rentals            analytics.RentalStatisticsStore
+	transactions       analytics.TransactionDetailStore
+	histories          analytics.HistoryStore
+	distributions      analytics.DistributionStore
+	buildings          analytics.BuildingStore
+	anomaliesStore     analytics.AnomalyStore
+	models             analytics.ModelStore
+	releases           analytics.ReleaseStore
+	activeRelease      analytics.ActiveReleaseStore
+	maps               analytics.MapStore
+	economics          economics.Store
+	affordabilityStore affordability.Store
+	construction       construction.Store
+	demography         demography.Store
+	recent             analytics.RecentStore
+	environment        string
+	applicationName    string
+	applicationBuild   string
+	now                func() time.Time
+	// instance identifies this build and process in release ETags.
+	instance string
 }
 
-func New(dependencies Dependencies) http.Handler {
-	s := &server{
-		logger:           dependencies.Logger,
-		database:         dependencies.Database,
-		geographies:      dependencies.Geographies,
-		statistics:       dependencies.Statistics,
-		rentals:          dependencies.Rentals,
-		transactions:     dependencies.Transactions,
-		histories:        dependencies.Histories,
-		distributions:    dependencies.Distributions,
-		buildings:        dependencies.Buildings,
-		anomaliesStore:   dependencies.Anomalies,
-		identities:       dependencies.Identities,
-		models:           dependencies.Models,
-		releases:         dependencies.Releases,
-		maps:             dependencies.Maps,
-		economics:        dependencies.Economics,
-		environment:      dependencies.Environment,
-		applicationName:  dependencies.ApplicationName,
-		applicationBuild: dependencies.ApplicationBuild,
+// New returns the API handler. It fails when a dependency is missing, so handlers never
+// check for nil stores.
+func New(dependencies Dependencies) (http.Handler, error) {
+	if err := dependencies.validate(); err != nil {
+		return nil, err
 	}
-
-	router := s.routes()
-	return middleware(dependencies.Logger, dependencies.AllowedOrigins, router)
+	now := dependencies.Now
+	if now == nil {
+		now = time.Now
+	}
+	s := &server{
+		database:           dependencies.Database,
+		geographies:        dependencies.Geographies,
+		statistics:         dependencies.Statistics,
+		rentals:            dependencies.Rentals,
+		transactions:       dependencies.Transactions,
+		histories:          dependencies.Histories,
+		distributions:      dependencies.Distributions,
+		buildings:          dependencies.Buildings,
+		anomaliesStore:     dependencies.Anomalies,
+		models:             dependencies.Models,
+		releases:           dependencies.Releases,
+		activeRelease:      dependencies.ActiveRelease,
+		maps:               dependencies.Maps,
+		economics:          dependencies.Economics,
+		affordabilityStore: dependencies.Affordability,
+		construction:       dependencies.Construction,
+		demography:         dependencies.Demography,
+		recent:             dependencies.Recent,
+		environment:        dependencies.Environment,
+		applicationName:    dependencies.ApplicationName,
+		applicationBuild:   dependencies.ApplicationBuild,
+		now:                now,
+		instance:           digest([]byte(dependencies.ApplicationBuild + "|" + time.Now().UTC().Format(time.RFC3339Nano)))[:8],
+	}
+	api := instrument(newHTTPMetrics(dependencies.Metrics),
+		middleware(dependencies.Logger, dependencies.AllowedOrigins, dependencies.RequestTimeout, recordRoute(s.routes())))
+	root := http.NewServeMux()
+	root.Handle("GET /metrics", dependencies.Metrics)
+	root.Handle("/", api)
+	return root, nil
 }
 
-func (s *server) live(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+// validate reports every nil interface or pointer field of the dependencies.
+func (dependencies Dependencies) validate() error {
+	var missing []error
+	value := reflect.ValueOf(dependencies)
+	for index := range value.NumField() {
+		field := value.Field(index)
+		if (field.Kind() == reflect.Interface || field.Kind() == reflect.Pointer) && field.IsNil() {
+			missing = append(missing, fmt.Errorf("httpapi: dependency %s is missing", value.Type().Field(index).Name))
+		}
+	}
+	return errors.Join(missing...)
+}
+
+func (s *server) live(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, r, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *server) ready(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	if err := s.database.Ping(ctx); err != nil {
-		s.logger.Warn("readiness check failed", "error", err)
+		requestLog(r).Warn("readiness check failed", "error", err)
 		writeError(w, r, http.StatusServiceUnavailable, "not_ready", "database is unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
+	writeJSON(w, r, http.StatusOK, map[string]string{
 		"status":      "ok",
 		"application": s.applicationName,
 		"build":       s.applicationBuild,
@@ -108,8 +162,8 @@ func (s *server) ready(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *server) meta(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+func (s *server) meta(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, r, http.StatusOK, map[string]any{
 		"apiVersion":       "v1",
 		"transactionKinds": []string{"sale", "rent"},
 		"intervals":        []string{"month", "quarter", "year"},
@@ -121,132 +175,10 @@ func (s *server) meta(w http.ResponseWriter, _ *http.Request) {
 func (s *server) dataStatus(w http.ResponseWriter, r *http.Request) {
 	status, err := s.releases.DataStatus(r.Context())
 	if err != nil {
-		s.logger.Error("load analytical release status", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "data_status_failed", "data status is unavailable")
+		s.fail(w, r, "load the data status", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, status)
-}
-
-func (s *server) listGeographies(w http.ResponseWriter, r *http.Request) {
-	level := r.URL.Query().Get("level")
-	if level != "" && !validGeographyLevel(level) {
-		writeError(w, r, http.StatusBadRequest, "invalid_level", "unsupported geography level")
-		return
-	}
-
-	var parentID *int64
-	if value := r.URL.Query().Get("parentId"); value != "" {
-		parsed, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || parsed < 1 {
-			writeError(w, r, http.StatusBadRequest, "invalid_parent_id", "parentId must be a positive integer")
-			return
-		}
-		parentID = &parsed
-	}
-
-	units, err := s.geographies.List(r.Context(), geography.Filter{Level: level, ParentID: parentID})
-	if err != nil {
-		s.logger.Error("list geographies", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not load geographies")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": units, "count": len(units)})
-}
-
-func (s *server) geographyChildren(w http.ResponseWriter, r *http.Request) {
-	id, ok := geographyID(w, r)
-	if !ok {
-		return
-	}
-	units, err := s.geographies.Children(r.Context(), id)
-	if errors.Is(err, geography.ErrNotFound) {
-		writeError(w, r, http.StatusNotFound, "geography_not_found", "geography was not found")
-		return
-	}
-	if err != nil {
-		s.logger.Error("list geography children", "error", err, "geography_id", id)
-		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not load geography children")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": units, "count": len(units)})
-}
-
-func (s *server) getGeography(w http.ResponseWriter, r *http.Request) {
-	id, ok := geographyID(w, r)
-	if !ok {
-		return
-	}
-	unit, err := s.geographies.Get(r.Context(), id)
-	if errors.Is(err, geography.ErrNotFound) {
-		writeError(w, r, http.StatusNotFound, "geography_not_found", "geography was not found")
-		return
-	}
-	if err != nil {
-		s.logger.Error("get geography", "error", err, "geography_id", id)
-		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not load geography")
-		return
-	}
-	writeJSON(w, http.StatusOK, unit)
-}
-
-func (s *server) geographyBoundary(w http.ResponseWriter, r *http.Request) {
-	id, ok := geographyID(w, r)
-	if !ok {
-		return
-	}
-	tolerance, valid := boundaryTolerance(r.URL.Query().Get("detail"))
-	if !valid {
-		writeError(w, r, http.StatusBadRequest, "invalid_detail", "detail must be low, medium, or full")
-		return
-	}
-	boundary, err := s.geographies.Boundary(r.Context(), id, tolerance)
-	if errors.Is(err, geography.ErrNotFound) {
-		writeError(w, r, http.StatusNotFound, "geography_not_found", "geography was not found")
-		return
-	}
-	if err != nil {
-		s.logger.Error("get geography boundary", "error", err, "geography_id", id)
-		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not load geography boundary")
-		return
-	}
-	writeGeoJSON(w, http.StatusOK, map[string]any{
-		"type":       "Feature",
-		"id":         boundary.Unit.ID,
-		"properties": boundary.Unit,
-		"geometry":   boundary.Geometry,
-	})
-}
-
-func geographyID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id < 1 {
-		writeError(w, r, http.StatusBadRequest, "invalid_geography_id", "geography id must be a positive integer")
-		return 0, false
-	}
-	return id, true
-}
-
-func boundaryTolerance(detail string) (float64, bool) {
-	switch detail {
-	case "", "medium":
-		return 0.0001, true
-	case "low":
-		return 0.001, true
-	case "full":
-		return 0, true
-	default:
-		return 0, false
-	}
-}
-
-func validGeographyLevel(level string) bool {
-	switch level {
-	case "country", "statistical_region", "municipality", "city_district", "local_community", "settlement":
-		return true
-	default:
-		return false
-	}
+	writeJSON(w, r, http.StatusOK, status)
 }
 
 var _ databasePinger = (*pgxpool.Pool)(nil)

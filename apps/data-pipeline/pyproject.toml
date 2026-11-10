@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "real-estate-data-pipeline"
 version = "0.1.0"
 description = "National Slovenian real-estate BUY and RENT ingestion pipeline"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.27,<1",
     "psycopg[binary]==3.2.9",
@@ -30,9 +30,14 @@ real-estate-etl = "real_estate_etl.cli:main"
 include = ["real_estate_etl*"]
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py311"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
-ignore = ["E501"]
+select = ["E", "F", "I", "UP", "B", "SIM", "DTZ", "G", "BLE", "S608", "PT", "C4", "PERF", "RUF", "T20"]
+# RUF001/RUF003: Slovenian names and the en dash/middle dot in log text are intentional.
+ignore = ["RUF001", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixture rows and JSON-stat payloads read better on one line.
+"tests/**" = ["S608", "E501"]

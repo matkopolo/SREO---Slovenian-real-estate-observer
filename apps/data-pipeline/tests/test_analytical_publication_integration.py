@@ -4,6 +4,8 @@ import uuid
 import psycopg
 import pytest
 
+pytestmark = pytest.mark.integration
+
 
 def test_active_release_switch_is_invisible_until_commit():
     database_url = os.getenv("TEST_DATABASE_URL")

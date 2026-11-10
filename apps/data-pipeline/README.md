@@ -1,10 +1,16 @@
 # Data pipeline worker
 
-Production deployment uses [K3s/CloudNativePG](../../docs/k3s-deployment.md).
+Run the worker through Docker Compose; no local Python environment is required.
 `MODEL_REFRESH_POLICY=manual` disables automatic model training during scheduled
-refresh and initial import; use an explicit `refresh-models` Job. The default
-`auto` preserves Compose's initial/new-archive training behavior. Manual analytics
-and model commands share the scheduler's PostgreSQL advisory lock.
+refresh and initial import; use an explicit `docker compose run --rm pipeline-worker refresh-models` command. The default
+`auto` preserves Compose's initial/new-archive training behavior.
+
+Every command that writes to the database (imports, syncs, analytics, models,
+refresh and reset, including the per-municipality diagnostics) takes the
+scheduler's PostgreSQL advisory lock and fails fast with "already running"
+instead of interleaving with another refresh. `fetch` and `fetch-national` only
+download and need no database. Downloads go to `--output-dir`, which defaults to
+`$RAW_DATA_DIR` or `/data/raw` (the `pipeline_data` volume in the image).
 
 Detailed definitions for quality populations, robust cohort outliers,
 duplicate signals, valuation-model selection, rolling temporal validation,
@@ -31,19 +37,33 @@ Compose starts `pipeline-worker` with:
 real-estate-etl schedule --interval-days 14
 ```
 
-It runs once immediately, writes its health marker after the required
-source/geography/analytics chain succeeds, then waits 14 days. A new database
-also performs the initial model bootstrap before becoming healthy. Failures
-retry after one hour. A PostgreSQL session advisory lock prevents a scheduled
-run, manual refresh, and reset from executing concurrently.
+It runs once immediately, then every 14 days; failures retry after one hour. A
+PostgreSQL session advisory lock prevents a scheduled run, manual refresh, and
+reset from executing concurrently. On shutdown (SIGTERM) the refresh stops at the
+next stage boundary and marks its release failed instead of being killed
+mid-transaction.
+
+Health (`--health-file`): a background heartbeat rewrites the file every minute
+while the worker is healthy, and removes it while unhealthy. Healthy means the
+process is running **and** either a refresh is in progress (including the first
+import on an empty database) or a published release exists that is younger than
+`--interval-days` plus two days. A failed refresh therefore keeps the worker
+healthy while the last good release is current. `real-estate-etl healthcheck
+--health-file <path>` also fails when the heartbeat is older than five minutes.
+The API does not depend on this: it reads readiness from the publication tables.
 
 Each incremental run:
 
 - reads successful national product-years from `source_files`;
 - imports only missing BUY years from 2007 and RENT years from 2013;
-- retrieves the current-year products again to detect revised archives;
+- downloads the current and previous year again (GURS keeps adding late
+  registrations), skips unchanged archives by checksum, and removes the
+  superseded local copies;
 - keeps valid ZIPs in the `pipeline_data` Docker volume;
-- refreshes GURS RPE boundaries;
+- refreshes GURS RPE boundaries and the optional context sources (SURS, Banka
+  Slovenije, ECB, GURS buildings). A failing source keeps its stored values; its
+  error is stored in `analytics.analytical_releases.details->'sources'` and listed
+  in the "published" log line;
 - refreshes all deterministic analytics in dependency order inside one
   publication transaction;
 - retrains sale and rental models when an archive checksum changed, while
@@ -54,7 +74,8 @@ Each incremental run:
 `analytics.analytical_publication` identifies the active and pending releases.
 During processing, `/api/v1/data-status` exposes both the published analytical
 cutoff and the newer GURS source cutoff. A failed refresh rolls back derived
-changes and leaves the active release untouched.
+changes and leaves the active release untouched. Every release log line carries
+`release=<uuid>`, matching `analytics.analytical_releases.id`.
 
 Before every SQL analytics function starts, the worker prints a short statement
 of what it derives and whether the operation is non-destructive. In particular,
@@ -204,7 +225,16 @@ training:
 docker compose run --rm pipeline-worker refresh-models --workers 6
 ```
 
-## Optional local development
+## Tests
+
+Docker-only, using the image's `test` target (installs `.[dev,ml]` and `tests/`):
+
+```bash
+docker build --target test -t real-estate-data-pipeline:test apps/data-pipeline
+docker run --rm real-estate-data-pipeline:test
+```
+
+Or with a local virtual environment (Python 3.11+):
 
 ```bash
 python3 -m venv .venv
@@ -213,6 +243,8 @@ cd apps/data-pipeline
 ../../.venv/bin/ruff check .
 ../../.venv/bin/pytest -q
 ```
+
+`pyproject.toml` is the only dependency list.
 
 Database integration tests require `TEST_DATABASE_URL` to point to a disposable
 PostGIS database with **all** `database/migrations/*.sql` files applied in order
@@ -223,3 +255,122 @@ Python tests and then runs the Go tests against that schema. For changes to
 database setup or publication, verify this fresh-database sequence before
 pushing; tests against an already populated development database can miss
 missing migrations or incorrect setup order.
+
+## Importing GURS archives from the CLI
+
+The normal runtime does not need a host Python installation. Contributors who
+want IDE debugging and local pytest execution can optionally create `.venv`:
+
+```bash
+make setup
+```
+
+The following low-level commands use that optional development environment. Outside the container, point downloads at a writable directory first:
+
+```bash
+export RAW_DATA_DIR=data/raw
+```
+
+### Load downloaded national samples
+
+```bash
+.venv/bin/real-estate-etl sync-reference-data
+.venv/bin/real-estate-etl import data/raw/ETN_SLO_2007_KPP.zip
+.venv/bin/real-estate-etl import data/raw/ETN_SLO_2013_NP.zip
+```
+
+### Fetch one national dataset
+
+Download national BUY or RENT data for one year:
+
+```bash
+.venv/bin/real-estate-etl fetch-national --type sales --year 2026
+.venv/bin/real-estate-etl fetch-national --type rent --year 2026
+```
+
+Import a downloaded archive:
+
+```bash
+.venv/bin/real-estate-etl import data/raw/ETN_SLO_2026_KPP_YYYYMMDD.zip
+```
+
+### Import all national BUY and RENT history
+
+The primary command downloads and imports every national yearly dataset:
+
+```bash
+make import-data
+```
+
+For 2007–2026 there are up to 34 product-years:
+
+- 20 national BUY archives for 2007–2026
+- 14 national RENT archives for 2013–2026
+
+The newest product-year may be listed by GURS before its ZIP is ready. Such a
+`WARNING`/missing-size response is reported as `unavailable`, does not fail the
+run, and is checked again by the next scheduled refresh.
+
+The command skips national dataset/year combinations already recorded in `source_files`, so it is safe to stop and restart. To retrieve current source versions again and replace existing snapshots, add `--force`:
+
+```bash
+.venv/bin/real-estate-etl refresh-all-data --force
+```
+
+To stop at a specific year, use `--end-year`.
+
+Downloads use up to six parallel workers by default while database imports remain serial to avoid contention on shared reference and codebook tables. The importer detects the machine's logical CPU-thread count and will not allow a worker count above it. Select a different count with:
+
+```bash
+make import-data WORKERS=8
+```
+
+The startup message prints both the selected worker count and the detected logical CPU-thread count. Use fewer workers for a slower connection or to reduce load on the source API.
+
+For troubleshooting, enable detailed per-table row counts, codebook decisions, archive paths, retries, and final timings:
+
+```bash
+make import-data-verbose WORKERS=8
+```
+
+Without `--verbose`, the importer prints concise download/completion progress plus warnings and the final summary.
+
+The national source is preferred over municipality archives. A comparison of BUY 2007 showed that the national archive contained every unique transaction from all 212 municipality archives plus six additional transactions, while avoiding duplicated cross-municipality rows. The older `fetch`, `refresh`, and `refresh-all-sales` commands remain available only for targeted municipality diagnostics and fallback use.
+
+The download/import pipeline is bounded to twice the worker count, so it does not queue thousands of archives in memory. Each worker keeps a reusable HTTP connection. PostgreSQL imports use `COPY`, and identical codebook CSVs are imported only once by checksum.
+
+All HTTP calls (GURS, RPE, SURS, Banka Slovenije, ECB) go through `real_estate_etl/http_client.py`: one timeout policy, status checks, and up to five attempts with exponential backoff for transient errors only (connection resets, timeouts, HTTP 408/425/429 and 5xx). Client errors such as 400 or 404 fail immediately. Each archive retry requests a fresh download token. Downloads stream to a `.part` file that is validated and renamed, and removed on any failure, so no truncated archive is left behind. An exhausted retry still stops safely; rerunning the command reuses completed ZIPs and skips committed database snapshots.
+
+At the end, the command reports total elapsed time and cumulative stage timings:
+
+```text
+Finished: imported=..., already_imported=..., unavailable=..., elapsed=...,
+download_worker_time=..., member_import=..., other_database=...
+```
+
+`download_worker_time` is cumulative across parallel workers, so it can be greater than wall-clock `elapsed` time. `member_import` is CSV parsing plus the PostgreSQL `COPY` it streams into; `other_database` is source registration, snapshot deletion and codebooks.
+
+## Source-data rules
+
+Building, parcel, and rented-space tables preserve every CSV source row, including historical unregistered records without complete cadastral identifiers or cadastral municipality codes. Reimporting a national dataset/year replaces its prior database snapshot before loading the new archive.
+
+National BUY transaction rows do not contain `RPE_OBCINE_SIFRA`. Their locations are represented by the associated building-part and parcel rows, which contain municipality and cadastral municipality information. This also correctly supports transactions involving properties in more than one municipality.
+
+Historical cadastral municipality codes found in source archives are retained even when they are no longer returned by the current cadastral-municipality API endpoint.
+
+Source-system zero-date sentinels such as `00.00.0000` are stored as SQL `NULL` rather than treated as valid calendar dates.
+
+## Library choices
+
+- **[HTTPX](https://www.python-httpx.org/)** provides connection pooling, streaming downloads, and explicit timeout/status handling.
+- **[Tenacity](https://tenacity.readthedocs.io/en/stable/)** provides bounded exponential retry behavior for transient transport and server failures.
+- **psycopg 3** streams rows through PostgreSQL `COPY`; ZIP members and
+  codebooks are processed as streams or bounded batches. SQLAlchemy and pandas
+  are intentionally not used because they would add memory and abstraction
+  overhead to the bulk-loading path.
+- **pytest** covers conversion, retry, resume, historical edge cases, and isolated PostgreSQL integration.
+- **[Ruff](https://docs.astral.sh/ruff/)** enforces imports, correctness rules, modernization, and style locally and in GitHub Actions.
+
+The package installs a `real-estate-etl` executable, so developers do not need to manage `PYTHONPATH` manually.
+
+The PostgreSQL tables remain in `database/migrations`, not Python. CSV mappings are intentionally kept as one declarative registry rather than one file per table: they are source-to-destination translation rules, and keeping BUY and RENT mappings together makes schema drift comparisons and validation easier. If the number of source products grows substantially, that registry can be moved intact into `mappings.py` without changing the importer.

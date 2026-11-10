@@ -1,6 +1,6 @@
-# Real-estate API
+# SREO API
 
-Go API for Slovenian real-estate geographic and market analytics. The durable
+Read-only Go API for Slovenian real-estate geographic and market analytics. The durable
 architecture reference is [../../docs/real-estate-api.md](../../docs/real-estate-api.md),
 the statistical definitions are in
 [../../docs/statistical-methodology.md](../../docs/statistical-methodology.md),
@@ -40,22 +40,38 @@ split by capability; `internal/httpapi/routes.go` contains the complete route
 registry and is checked against OpenAPI. See the repository
 [development guidelines](../../docs/development-guidelines.md).
 
-The API fails fast when `DATABASE_URL` is missing or PostgreSQL is unavailable. Configuration is environment-based; see the root `.env.example` and `internal/config`.
+The API fails fast when `DATABASE_URL` is missing or PostgreSQL is unavailable. Configuration is environment-based; see the root `.env.example` and `internal/config`:
 
-Docker uses the dedicated `real_estate_api` PostgreSQL login. It has `SELECT`
-access to source and analytical data plus narrowly scoped writes for identities,
-sessions, preferences, and authenticated anomaly-review metadata. It cannot
-modify imported transactions or run migrations and analytical refreshes; those
-remain database-owner operations. Replace all development credentials outside
-local environments.
+| Variable | Default | Meaning |
+|---|---|---|
+| `DATABASE_MAX_CONNECTIONS` | `10` | main pool size (readiness uses one extra connection of its own) |
+| `DATABASE_STATEMENT_TIMEOUT` | `15s` | PostgreSQL `statement_timeout` of every API connection |
+| `API_REQUEST_TIMEOUT` | `20s` | deadline of each request's context; must be below the 30 s write timeout |
+| `API_ALLOWED_ORIGINS` | empty | comma-separated CORS origins; empty means same-origin only |
+
+Docker uses the dedicated `real_estate_api` PostgreSQL login. It is read-only
+(`SELECT` plus the read-only analytics functions, `default_transaction_read_only`).
+It cannot modify data or run migrations and analytical refreshes; those remain
+database-owner operations. Replace all development credentials outside local
+environments.
+
+Every request runs on a context with the request deadline, and every log line of
+a request carries its `request_id` (a valid client `X-Request-ID` of 1–64
+`[A-Za-z0-9._-]` characters, otherwise a generated one, echoed in the response
+and in error bodies). Handlers map errors through one function
+(`internal/httpapi/response.go`): known "not found"/"unavailable" errors keep
+their status, deadlines become 504, everything else a logged 500.
 
 The development container has a 512 MB ceiling. It does not load transactions or property points into memory; PostgreSQL/PostGIS executes analytical and spatial queries. The database container has a 4 GB development ceiling, while Docker Desktop should be allocated 6–8 GB overall.
 
 ## Implemented routes
 
 - `GET /health/live`: process liveness; does not depend on PostgreSQL.
-- `GET /health/ready`: readiness including PostgreSQL.
-- `GET /api/v1/health`: versioned readiness endpoint.
+- `GET /health/ready`: readiness including PostgreSQL (through a reserved connection).
+- `GET /metrics`: Prometheus metrics (requests and durations by route pattern and
+  status, requests in flight, connection-pool statistics, cache hits and misses of the
+  CPI tables, the address index and the active release id, Go runtime). It is outside
+  `/api/`, so the frontend's nginx does not proxy it; the port is bound to 127.0.0.1.
 - `GET /api/v1/meta`: supported transaction, interval, geography, and property dimensions.
 - `GET /api/v1/data-status`: active analytical cutoff, pending GURS source
   cutoff, processing stage, and last failed release where applicable.
@@ -63,6 +79,7 @@ The development container has a 512 MB ceiling. It does not load transactions or
 - `GET /api/v1/geographies/{id}`: metadata and WGS84 bounds for one unit.
 - `GET /api/v1/geographies/{id}/children`: geographic hierarchy traversal.
 - `GET /api/v1/geographies/{id}/boundary?detail=low|medium|full`: topology-preserving WGS84 GeoJSON boundary.
+- `GET /api/v1/geographies/boundaries?level=...&detail=low|medium`: all regions or municipalities, or finer units in a `bbox` (at most 1,200).
 - `GET /api/v1/statistics/overview`: sale medians, averages, and explicit usable sample sizes.
 - `GET /api/v1/statistics/timeseries`: monthly, quarterly, or yearly sale statistics.
 - `GET /api/v1/statistics/outliers`: paginated, auditable statistical outlier evaluations.
@@ -81,15 +98,11 @@ The development container has a 512 MB ceiling. It does not load transactions or
 - `GET /api/v1/rentals/statistics/distribution`: rental percentiles and chart-ready histogram.
 - `GET /api/v1/buildings/{cadastralCode}/{buildingNumber}/statistics`: combined building sale/rental history.
 - `GET /api/v1/buildings/search?q=...`: address/cadastral building search for map navigation.
-- `GET /api/v1/anomalies` and `/summary`: ranked multi-signal review queue.
-- `PATCH /api/v1/anomalies/{kind}/{id}/review`: authenticated human review decision.
-- `POST /api/v1/auth/register`, `/login`, and `/logout`: opaque bearer sessions.
-- `GET /api/v1/users/me`: authenticated user profile.
-- `GET|PUT /api/v1/users/me/preferences`: saved frontend and analysis preferences.
+- `GET /api/v1/anomalies` and `/summary`: ranked multi-signal anomaly signals (read-only).
 - `GET /api/v1/indices`: national repeat-sales and constant-quality hedonic indices.
 - `GET /api/v1/valuations/{kind}/{id}`: model estimate, empirical range, diagnostics, and reliability warning.
 - `GET /api/v1/map/clusters`: zoom-dependent GeoJSON clusters inside a required WGS84 bbox.
-- `GET /api/v1/map/geographies`: named sale summaries for country, region, municipality, city district, local community, or settlement.
+- `GET /api/v1/map/geographies`: named sale summaries for country, region, municipality, city district, local community, or settlement (at most 1,200 units, most active first).
 - `GET /api/v1/map/properties`: at most 500 individual GeoJSON sale points inside a required bbox.
 
 Statistics accept inclusive `from`/`to` contract dates, `propertyGroup`, and
@@ -119,15 +132,8 @@ few extreme values do not destroy chart resolution; `belowBoundCount` and
 The anomaly queue combines named hard-rule flags, robust cohort/MAD evidence,
 possible-duplicate and spatial checks, cross-fitted hedonic residual ranks, and
 Isolation Forest ranks. All component scores and versions remain visible.
-Machine scores create a review queue; they do not prove an error or fraud and
-do not delete source rows. Authenticated reviews survive analytical refreshes.
-
-Passwords use adaptive bcrypt hashes. Login returns a random 256-bit opaque
-bearer token; PostgreSQL stores only its SHA-256 hash, and sessions expire after
-30 days. The API database role cannot modify imported transactions or derived
-facts. Its writes are limited to identities, sessions, preferences, and the
-anomaly-review columns. Production deployments must replace development
-credentials, use TLS, and apply edge rate limiting to authentication routes.
+Machine scores rank signals for inspection; they do not prove an error or fraud and
+do not delete source rows. The API does not record reviews.
 
 `/api/v1/indices` exposes annual matched-pair median indices and monthly
 constant-quality hedonic indices. `/api/v1/valuations/{kind}/{id}` exposes an
@@ -159,8 +165,11 @@ with expanding-window temporal folds, reserves the latest complete year as the
 final holdout, performs building-first grouped robustness validation with a
 municipality fallback, trains deterministic Isolation Forest models, and
 appends a hedonic-index vintage. The calculations run in
-PostgreSQL/PostGIS and the offline worker; the API never caches the full
-transaction or geography dataset in application memory.
+PostgreSQL/PostGIS and the offline worker. The API keeps only small derived
+data in memory: the address search index (rebuilt when a new release is
+published), the SURS demographic series (10 minutes) and the SURS CPI table
+(6 hours, last good copy kept when SURS fails), each loaded once, off the
+request path, by `internal/memo`.
 Rental amounts are treated as monthly, and only homogeneous market-rent
 packages passing explicit quality and robust comparable-cohort rules are
 representative. Raw source observations are never removed.
@@ -179,8 +188,14 @@ The model population stays strict. See [methodology](../../docs/statistical-meth
 - one shared PostgreSQL/PostGIS database, with API-derived objects isolated in the `analytics` schema;
 - source tables are never mutated by the API;
 - explicit OpenAPI contract and versioned routes;
-- bounded connection pool and request/server timeouts;
+- bounded connection pool, per-request deadlines, PostgreSQL statement timeout and bounded responses;
 - graceful shutdown and fail-fast startup;
 - structured JSON logs, request IDs, panic recovery, CORS allowlist, and security headers;
-- small handlers backed by repository interfaces for isolated testing;
+- small handlers backed by narrow repository interfaces for isolated testing; the
+  `analytics` package has one repository per area (sale statistics, rental statistics,
+  distributions, map, transactions, buildings, valuations, releases) sharing one SQL filter
+  helper (`sqlfilter.go`);
+- HTTP caching: analytics answers carry a weak ETag tied to the active release (304 without
+  querying), other answers an ETag hashed from their body (`internal/httpapi/caching.go`);
+- response bodies are validated against `openapi.yaml` in tests, so contract drift fails CI;
 - no ORM: spatial and analytical SQL remains visible and reviewable.

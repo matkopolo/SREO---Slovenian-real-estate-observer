@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
 )
 
 var ErrNotFound = errors.New("geography not found")
@@ -33,18 +33,23 @@ type Store interface {
 	Get(context.Context, int64) (Unit, error)
 	Children(context.Context, int64) ([]Unit, error)
 	Boundary(context.Context, int64, float64) (Boundary, error)
+	Boundaries(context.Context, string, float64, *[4]float64) ([]Boundary, error)
+	Lineage(context.Context, int64) ([]Unit, error)
 }
 
+// MaxBoundaries caps one Boundaries response.
+const MaxBoundaries = 1200
+
 type Repository struct {
-	pool  *pgxpool.Pool
+	pool  database.Querier
 	table string
 }
 
-func NewRepository(pool *pgxpool.Pool) *Repository {
+func NewRepository(pool database.Querier) *Repository {
 	return NewRepositoryWithSchema(pool, "analytics")
 }
 
-func NewRepositoryWithSchema(pool *pgxpool.Pool, schema string) *Repository {
+func NewRepositoryWithSchema(pool database.Querier, schema string) *Repository {
 	return &Repository{
 		pool:  pool,
 		table: pgx.Identifier{schema, "geographic_units"}.Sanitize(),
@@ -115,6 +120,43 @@ func (r *Repository) Children(ctx context.Context, parentID int64) ([]Unit, erro
 	return r.List(ctx, Filter{ParentID: &parentID})
 }
 
+// Boundaries lists the units of a level with their (simplified) WGS84 geometry, at most
+// MaxBoundaries; with bbox (west, south, east, north) only those intersecting it, nearest to
+// its centre first.
+func (r *Repository) Boundaries(ctx context.Context, level string, tolerance float64, bbox *[4]float64) ([]Boundary, error) {
+	var west, south, east, north *float64
+	if bbox != nil {
+		west, south, east, north = &bbox[0], &bbox[1], &bbox[2], &bbox[3]
+	}
+	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
+		SELECT id, level, code, composite_code, name, parent_id, gurs_eid,
+		       ARRAY[ST_XMin(geometry_wgs84), ST_YMin(geometry_wgs84), ST_XMax(geometry_wgs84), ST_YMax(geometry_wgs84)]::float8[],
+		       ST_AsGeoJSON(CASE WHEN $2::float8 > 0 THEN ST_SimplifyPreserveTopology(geometry_wgs84, $2)
+		                         ELSE geometry_wgs84 END, 6)::jsonb
+		FROM %s WHERE level = $1
+		  AND ($3::float8 IS NULL OR geometry_wgs84 && ST_MakeEnvelope($3, $4, $5, $6, 4326))
+		-- Nearest to the view centre first, so a cap drops outlines at the edges, not every name after "P".
+		ORDER BY CASE WHEN $3::float8 IS NULL THEN 0
+		              ELSE ST_Distance(ST_PointOnSurface(geometry_wgs84), ST_SetSRID(ST_MakePoint(($3 + $5) / 2, ($4 + $6) / 2), 4326)) END,
+		         name, id
+		LIMIT %d`, r.table, MaxBoundaries), level, tolerance, west, south, east, north)
+	if err != nil {
+		return nil, fmt.Errorf("list geography boundaries: %w", err)
+	}
+	defer rows.Close()
+	var boundaries []Boundary
+	for rows.Next() {
+		var boundary Boundary
+		unit := &boundary.Unit
+		if err := rows.Scan(&unit.ID, &unit.Level, &unit.Code, &unit.CompositeCode, &unit.Name, &unit.ParentID,
+			&unit.GURSEID, &unit.Bounds, &boundary.Geometry); err != nil {
+			return nil, fmt.Errorf("scan geography boundary: %w", err)
+		}
+		boundaries = append(boundaries, boundary)
+	}
+	return boundaries, rows.Err()
+}
+
 func (r *Repository) Boundary(ctx context.Context, id int64, tolerance float64) (Boundary, error) {
 	unit, err := r.Get(ctx, id)
 	if err != nil {
@@ -133,4 +175,30 @@ func (r *Repository) Boundary(ctx context.Context, id int64, tolerance float64) 
 		return Boundary{}, fmt.Errorf("get geography boundary: %w", err)
 	}
 	return Boundary{Unit: unit, Geometry: geometry}, nil
+}
+
+// Lineage returns the unit and its ancestors, the unit first, in one query.
+func (r *Repository) Lineage(ctx context.Context, id int64) ([]Unit, error) {
+	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
+		WITH RECURSIVE lineage AS (
+			SELECT id, level, code, composite_code, name, parent_id, gurs_eid, 0 AS depth FROM %[1]s WHERE id = $1
+			UNION ALL
+			SELECT parent.id, parent.level, parent.code, parent.composite_code, parent.name, parent.parent_id,
+			       parent.gurs_eid, lineage.depth + 1
+			FROM %[1]s parent JOIN lineage ON parent.id = lineage.parent_id
+			WHERE lineage.depth < 10
+		)
+		SELECT id, level, code, composite_code, name, parent_id, gurs_eid, NULL::float8[] AS bounds
+		FROM lineage ORDER BY depth`, r.table), id)
+	if err != nil {
+		return nil, fmt.Errorf("geography lineage: %w", err)
+	}
+	units, err := pgx.CollectRows(rows, pgx.RowToStructByName[Unit])
+	if err != nil {
+		return nil, fmt.Errorf("collect geography lineage: %w", err)
+	}
+	if len(units) == 0 {
+		return nil, ErrNotFound
+	}
+	return units, nil
 }

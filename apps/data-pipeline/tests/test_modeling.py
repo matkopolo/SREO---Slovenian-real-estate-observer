@@ -1,15 +1,29 @@
 from datetime import date, timedelta
 from threading import Lock
 from time import sleep
+from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 from real_estate_etl.model_validation import (
+    final_holdout_split,
     interval_half_width,
     percentile_scores,
     temporal_folds,
-    temporal_split_indices,
 )
+
+
+def holdout_split(dates, as_of=None):
+    """Latest-complete-year split with the small minima the tests use."""
+    _folds, _skipped, holdout = temporal_folds(
+        dates, as_of=as_of, min_training_rows=10, min_calibration_rows=10, min_validation_rows=10,
+    )
+    if holdout is None:
+        raise ValueError("temporal validation requires complete calendar years")
+    return final_holdout_split(
+        dates, holdout, min_training_rows=10, min_calibration_rows=10, min_holdout_rows=10,
+    )
 
 
 def test_model_refresh_marks_first_install_bootstrap_only_after_both_kinds(monkeypatch, caplog):
@@ -112,9 +126,9 @@ def test_percentile_scores_handle_empty_input():
 
 def test_temporal_split_is_deterministic_disjoint_and_has_no_future_leakage():
     dates = [date(year, 1, 1) + timedelta(days=index) for year in range(2019, 2026) for index in range(12)]
-    first = temporal_split_indices(dates, as_of=date(2026, 8, 1))
-    second = temporal_split_indices(dates, as_of=date(2026, 8, 1))
-    assert all(np.array_equal(left, right) for left, right in zip(first, second))
+    first = holdout_split(dates, as_of=date(2026, 8, 1))
+    second = holdout_split(dates, as_of=date(2026, 8, 1))
+    assert all(np.array_equal(left, right) for left, right in zip(first, second, strict=True))
     training, calibration, test = first
     assert set(training).isdisjoint(calibration)
     assert set(training).isdisjoint(test)
@@ -128,8 +142,8 @@ def test_temporal_split_is_deterministic_disjoint_and_has_no_future_leakage():
 
 
 def test_temporal_split_rejects_small_population():
-    with np.testing.assert_raises_regex(ValueError, "no earlier calibration year"):
-        temporal_split_indices([date(2025, 1, 1)] * 29)
+    with pytest.raises(ValueError, match="no earlier calibration year"):
+        holdout_split([date(2025, 1, 1)] * 29, as_of=date(2026, 7, 1))
 
 
 def test_temporal_split_uses_latest_complete_year_and_prior_calibration_year():
@@ -139,7 +153,7 @@ def test_temporal_split_uses_latest_complete_year_and_prior_calibration_year():
         *[date(2025, 6, 1)] * 10,
         *[date(2026, 1, 1)] * 10,
     ]
-    training, calibration, test = temporal_split_indices(
+    training, calibration, test = holdout_split(
         dates, as_of=date(2026, 7, 1)
     )
     assert {dates[index].year for index in training} == {2023}
@@ -178,3 +192,81 @@ def test_interval_coverage_is_evaluated_on_separate_test_values():
     test_actual = np.asarray([0.0, 0.1, 1.0, -1.0])
     covered = np.abs(test_actual) <= width
     assert covered.tolist() == [True, True, False, False]
+
+
+class RecordingConnection:
+    """Records transaction boundaries the way psycopg nests them."""
+
+    def __init__(self):
+        self.events: list[str] = []
+        self.cursor_mock = MagicMock()
+
+    def transaction(self):
+        connection = self
+
+        class Transaction:
+            def __enter__(self):
+                connection.events.append("begin")
+
+            def __exit__(self, exc_type, exc, traceback):
+                connection.events.append("rollback" if exc_type else "commit")
+                return False
+
+        return Transaction()
+
+    def cursor(self):
+        cursor = self.cursor_mock
+
+        class Cursor:
+            def __enter__(self):
+                return cursor
+
+            def __exit__(self, *_args):
+                return False
+
+        return Cursor()
+
+
+def test_model_refresh_is_atomic_when_rent_fails(monkeypatch):
+    from real_estate_etl import modeling
+
+    connection = RecordingConnection()
+
+    def refresh_kind(conn, kind, _workers):
+        conn.events.append(kind)
+        if kind == "rent":
+            raise RuntimeError("rent model failed")
+        return modeling.ModelResult("sale", 10, "sale-v", 1.0, {})
+
+    monkeypatch.setattr(modeling, "_refresh_kind", refresh_kind)
+    with pytest.raises(RuntimeError, match="rent model failed"):
+        modeling.refresh_models(connection, workers=1)
+
+    # Sale work is inside the same outer transaction, which is rolled back.
+    assert connection.events == ["begin", "sale", "rent", "rollback"]
+    connection.cursor_mock.execute.assert_not_called()
+
+
+def test_model_refresh_publishes_inside_the_outer_transaction(monkeypatch):
+    from real_estate_etl import modeling
+
+    connection = RecordingConnection()
+    monkeypatch.setattr(
+        modeling, "_refresh_kind",
+        lambda conn, kind, _workers: conn.events.append(kind) or modeling.ModelResult(kind, 1, f"{kind}-v", 1.0, {}),
+    )
+    modeling.refresh_models(connection, workers=1)
+    assert connection.events == ["begin", "sale", "rent", "commit"]
+    assert connection.cursor_mock.executemany.call_args.args[1] == [
+        ("sale", "sale", "sale-v"), ("rent", "rent", "rent-v"),
+    ]
+
+
+def test_feature_columns_are_addressed_by_name():
+    from real_estate_etl.model_features import CATEGORICAL_COLUMNS, FEATURE_INDEX, NUMERIC_COLUMNS
+    from real_estate_etl.modeling import FEATURE_SQL, MODEL_FEATURES, TRAINING_COLUMNS
+
+    assert list(FEATURE_SQL) == MODEL_FEATURES
+    assert sorted(NUMERIC_COLUMNS + CATEGORICAL_COLUMNS) == list(range(len(MODEL_FEATURES)))
+    assert [FEATURE_INDEX["property_group"], FEATURE_INDEX["municipality_id"]] == CATEGORICAL_COLUMNS
+    assert TRAINING_COLUMNS[2:2 + len(MODEL_FEATURES)] == tuple(MODEL_FEATURES)

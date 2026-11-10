@@ -1,0 +1,78 @@
+/* Value check: steps, the type chips, the purchase list (cards on a phone), the answer and the forms. */
+.value-check .money, .value-check .when { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.value-check .waterfall strong, .value-check .estimate-head span { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.value-step { margin: 0; font-size: 0.9375rem; font-weight: 700; font-family: inherit; line-height: 1.3; scroll-margin-top: 12px; }
+.value-check .steps > li { scroll-margin-top: 12px; }
+.value-step:focus { outline: none; }
+.value-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Every property type, as chips that wrap but never break a word. */
+.value-types { display: flex; flex-wrap: wrap; gap: 6px; }
+.value-types button {
+  min-height: 44px; padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text);
+  font: inherit; font-size: 0.875rem; white-space: nowrap; cursor: pointer;
+}
+.value-types button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+
+/* The purchase list: a table on wide screens, two-line cards under 600 px. */
+.value-pick td, .value-pick th { white-space: nowrap; font-variant-numeric: tabular-nums; vertical-align: middle; }
+.value-pick td.pick-area, .value-pick td.pick-price { text-align: right; }
+.value-pick td.pick-price small { display: block; color: var(--muted); font-size: 0.7188rem; white-space: normal; }
+.value-pick tr.atypical .money { color: var(--muted); }
+.value-pick .pick-action { text-align: right; }
+.value-pick .pick-action button { white-space: nowrap; }
+@media (max-width: 600px) {
+  .value-pick-scroll { overflow: visible; border: 0; border-radius: 0; }
+  .value-pick, .value-pick tbody { display: block; width: 100%; }
+  .value-pick thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .value-pick tr {
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "price area action" "date date action"; align-items: center; gap: 2px 8px;
+    margin: 0 0 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+  }
+  .value-pick tr > * { padding: 0; border: 0; text-align: left; }
+  .value-pick .pick-price { grid-area: price; font-size: 1.0625rem; font-weight: 650; }
+  .value-pick .pick-price small { font-weight: 400; }
+  .value-pick .pick-area { grid-area: area; color: var(--muted); }
+  .value-pick td.pick-area, .value-pick td.pick-price { text-align: left; }
+  .value-pick .pick-area::before { content: "· "; }
+  .value-pick th.pick-date { grid-area: date; font-weight: 400; color: var(--muted); }
+  .value-pick .pick-action { grid-area: action; justify-self: end; text-align: right; }
+}
+
+/* The answer. */
+.value-answer h2 .value-likely { display: block; margin-top: 4px; font-size: 1rem; font-weight: 500; color: var(--muted); }
+.value-range, .value-own { margin: 0; }
+.value-own { font-size: 0.9062rem; }
+.value-caveat { margin: 0; padding: 6px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); font-size: 0.8438rem; }
+
+/* Forms: 48 px fields, checkbox rows and one primary action. */
+.value-check .calc-inputs { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 13em), 1fr)); gap: 12px 16px; align-items: end; }
+.value-check .calc-inputs input[type="number"], .value-check .calc-inputs input[type="date"], .value-check .calc-inputs input[type="text"] {
+  box-sizing: border-box; display: block; width: 100%; min-height: 48px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--text); font: inherit; font-size: 1rem; font-variant-numeric: tabular-nums;
+}
+.value-check .calc-inputs .check, .value-condition {
+  box-sizing: border-box; display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 6px 12px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 0.9062rem; cursor: pointer;
+}
+.value-check .calc-inputs .check input, .value-condition input { flex: none; width: 22px; height: 22px; margin: 0; accent-color: var(--accent); }
+.value-condition:has(input:checked) { border-color: var(--accent); }
+.value-primary {
+  grid-column: 1 / -1; width: 100%; min-height: 48px; padding: 10px 16px; border: 0; border-radius: 8px;
+  background: var(--accent); color: var(--accent-ink); font: inherit; font-size: 1rem; font-weight: 650; cursor: pointer;
+}
+.value-primary:disabled { opacity: .5; cursor: default; }
+.value-primary:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+/* "Hiša" in a block of flats (and similar): the warning with its one-click switch. */
+.value-type-warning { margin-top: 8px; }
+.value-type-warning .link { font-weight: 600; }
+
+/* Sale price presets from the estimate: chips that wrap, 44 px tall. */
+.value-presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.value-presets button {
+  min-height: 44px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text);
+  font: inherit; font-size: 0.8438rem; cursor: pointer;
+}
+.value-presets button .money { font-weight: 650; }
+.value-presets button[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }

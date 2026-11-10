@@ -1,13 +1,16 @@
 package httpapi
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/analytics"
 )
+
+// maxPageOffset bounds offset on every paged list: deeper pages are slow and never needed.
+const maxPageOffset = 100000
 
 func (s *server) statisticsOverview(w http.ResponseWriter, r *http.Request) {
 	filter, ok := statisticsFilter(w, r)
@@ -15,16 +18,11 @@ func (s *server) statisticsOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.statistics.Overview(r.Context(), filter)
-	if errors.Is(err, analytics.ErrGeographyNotFound) {
-		writeError(w, r, http.StatusNotFound, "geography_not_found", "geography was not found")
-		return
-	}
 	if err != nil {
-		s.logger.Error("overview statistics", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not calculate overview statistics")
+		s.fail(w, r, "calculate overview statistics", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, r, http.StatusOK, result)
 }
 
 func (s *server) statisticsTimeSeries(w http.ResponseWriter, r *http.Request) {
@@ -32,29 +30,16 @@ func (s *server) statisticsTimeSeries(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	interval := r.URL.Query().Get("interval")
-	if interval == "" {
-		interval = "year"
-	}
-	if interval != "month" && interval != "quarter" && interval != "year" {
-		writeError(w, r, http.StatusBadRequest, "invalid_interval", "interval must be month, quarter, or year")
+	interval, ok := intervalParameter(w, r)
+	if !ok {
 		return
 	}
 	items, err := s.statistics.TimeSeries(r.Context(), filter, interval)
-	if errors.Is(err, analytics.ErrGeographyNotFound) {
-		writeError(w, r, http.StatusNotFound, "geography_not_found", "geography was not found")
-		return
-	}
 	if err != nil {
-		s.logger.Error("time-series statistics", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not calculate time-series statistics")
+		s.fail(w, r, "calculate time-series statistics", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"interval": interval,
-		"items":    items,
-		"count":    len(items),
-	})
+	writeJSON(w, r, http.StatusOK, map[string]any{"interval": interval, "items": items, "count": len(items)})
 }
 
 func (s *server) statisticsOutliers(w http.ResponseWriter, r *http.Request) {
@@ -62,27 +47,17 @@ func (s *server) statisticsOutliers(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit, ok := boundedInteger(w, r, "limit", 50, 1, 100)
-	if !ok {
-		return
-	}
-	offset, ok := boundedInteger(w, r, "offset", 0, 0, 1000000)
+	limit, offset, ok := pageParameters(w, r, 50, 100)
 	if !ok {
 		return
 	}
 	items, total, err := s.statistics.Outliers(r.Context(), filter, limit, offset)
-	if errors.Is(err, analytics.ErrGeographyNotFound) {
-		writeError(w, r, http.StatusNotFound, "geography_not_found", "geography was not found")
-		return
-	}
 	if err != nil {
-		s.logger.Error("list statistical outliers", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not load statistical outliers")
+		s.fail(w, r, "load statistical outliers", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"items": items, "count": len(items), "total": total,
-		"limit": limit, "offset": offset,
+	writeJSON(w, r, http.StatusOK, map[string]any{
+		"items": items, "count": len(items), "total": total, "limit": limit, "offset": offset,
 	})
 }
 
@@ -91,13 +66,8 @@ func (s *server) transactionExtremes(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	kind := r.URL.Query().Get("transactionKind")
-	if kind == "" {
-		kind = "sale"
-	}
-	if kind != "sale" && kind != "rent" {
-		writeError(w, r, http.StatusBadRequest, "invalid_transaction_kind",
-			"transactionKind must be sale or rent")
+	kind, ok := transactionKindParameter(w, r)
+	if !ok {
 		return
 	}
 	limit, ok := boundedInteger(w, r, "limit", 3, 1, 10)
@@ -105,32 +75,57 @@ func (s *server) transactionExtremes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, err := s.statistics.TransactionExtremes(r.Context(), kind, filter, limit)
-	if errors.Is(err, analytics.ErrGeographyNotFound) {
-		writeError(w, r, http.StatusNotFound, "geography_not_found", "geography was not found")
-		return
-	}
 	if err != nil {
-		s.logger.Error("transaction extremes", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed",
-			"could not calculate transaction extremes")
+		s.fail(w, r, "calculate transaction extremes", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"items": items, "count": len(items), "population": "representative",
-	})
+	writeJSON(w, r, http.StatusOK, map[string]any{"items": items, "count": len(items), "population": "representative"})
+}
+
+func (s *server) recentTransactions(w http.ResponseWriter, r *http.Request) {
+	filter, ok := statisticsFilter(w, r)
+	if !ok {
+		return
+	}
+	kind, ok := transactionKindParameter(w, r)
+	if !ok {
+		return
+	}
+	limit, offset, ok := pageParameters(w, r, 10, 100)
+	if !ok {
+		return
+	}
+	sort := r.URL.Query().Get("sort")
+	if sort == "" {
+		sort = "date"
+	}
+	if sort != "date" && sort != "price" && sort != "perSqm" && sort != "area" {
+		writeError(w, r, http.StatusBadRequest, "invalid_sort", "sort must be date, price, perSqm or area")
+		return
+	}
+	order := r.URL.Query().Get("order")
+	if order != "" && order != "asc" && order != "desc" {
+		writeError(w, r, http.StatusBadRequest, "invalid_order", "order must be asc or desc")
+		return
+	}
+	street := strings.TrimSpace(r.URL.Query().Get("street"))
+	if len(street) > 120 {
+		writeError(w, r, http.StatusBadRequest, "invalid_street", "street is too long")
+		return
+	}
+	page := analytics.RecentPage{Limit: limit, Offset: offset, Sort: sort, Descending: order != "asc", Street: street}
+	items, total, err := s.recent.RecentTransactions(r.Context(), kind, filter, page)
+	if err != nil {
+		s.fail(w, r, "load recent transactions", err)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{"items": items, "count": len(items), "total": total, "offset": offset, "transactionKind": kind})
 }
 
 func statisticsFilter(w http.ResponseWriter, r *http.Request) (analytics.StatisticsFilter, bool) {
 	var filter analytics.StatisticsFilter
 	var ok bool
-	if filter.FromDate, ok = optionalDate(w, r, "from"); !ok {
-		return filter, false
-	}
-	if filter.ToDate, ok = optionalDate(w, r, "to"); !ok {
-		return filter, false
-	}
-	if filter.FromDate != nil && filter.ToDate != nil && filter.FromDate.After(*filter.ToDate) {
-		writeError(w, r, http.StatusBadRequest, "invalid_date_range", "from must not be after to")
+	if filter.FromDate, filter.ToDate, ok = dateRange(w, r); !ok {
 		return filter, false
 	}
 	if filter.MinArea, ok = optionalPositiveFloat(w, r, "minArea"); !ok {
@@ -159,15 +154,65 @@ func statisticsFilter(w http.ResponseWriter, r *http.Request) (analytics.Statist
 			"landScope must be strict, broad, all, agricultural, forest, unverified, mixed, or other")
 		return filter, false
 	}
-	if value := r.URL.Query().Get("geographyId"); value != "" {
-		parsed, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || parsed < 1 {
-			writeError(w, r, http.StatusBadRequest, "invalid_geography_id", "geographyId must be a positive integer")
-			return filter, false
-		}
-		filter.GeographyID = &parsed
+	if filter.GeographyID, ok = optionalGeographyID(w, r); !ok {
+		return filter, false
 	}
 	return filter, true
+}
+
+// dateRange reads the optional from/to dates and checks their order.
+func dateRange(w http.ResponseWriter, r *http.Request) (*time.Time, *time.Time, bool) {
+	from, ok := optionalDate(w, r, "from")
+	if !ok {
+		return nil, nil, false
+	}
+	to, ok := optionalDate(w, r, "to")
+	if !ok {
+		return nil, nil, false
+	}
+	if from != nil && to != nil && from.After(*to) {
+		writeError(w, r, http.StatusBadRequest, "invalid_date_range", "from must not be after to")
+		return nil, nil, false
+	}
+	return from, to, true
+}
+
+func intervalParameter(w http.ResponseWriter, r *http.Request) (string, bool) {
+	interval := r.URL.Query().Get("interval")
+	if interval == "" {
+		interval = "year"
+	}
+	if interval != "month" && interval != "quarter" && interval != "year" {
+		writeError(w, r, http.StatusBadRequest, "invalid_interval", "interval must be month, quarter, or year")
+		return "", false
+	}
+	return interval, true
+}
+
+// transactionKindParameter reads transactionKind (sale or rent, default sale).
+func transactionKindParameter(w http.ResponseWriter, r *http.Request) (string, bool) {
+	kind := r.URL.Query().Get("transactionKind")
+	if kind == "" {
+		kind = "sale"
+	}
+	if kind != "sale" && kind != "rent" {
+		writeError(w, r, http.StatusBadRequest, "invalid_transaction_kind", "transactionKind must be sale or rent")
+		return "", false
+	}
+	return kind, true
+}
+
+// pageParameters reads limit (1..maxLimit) and offset (0..maxPageOffset).
+func pageParameters(w http.ResponseWriter, r *http.Request, defaultLimit, maxLimit int) (int, int, bool) {
+	limit, ok := boundedInteger(w, r, "limit", defaultLimit, 1, maxLimit)
+	if !ok {
+		return 0, 0, false
+	}
+	offset, ok := boundedInteger(w, r, "offset", 0, 0, maxPageOffset)
+	if !ok {
+		return 0, 0, false
+	}
+	return limit, offset, true
 }
 
 func optionalPositiveFloat(w http.ResponseWriter, r *http.Request, name string) (*float64, bool) {

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingRegressor
@@ -13,7 +14,8 @@ from sklearn.linear_model import ElasticNet, Ridge
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.pipeline import Pipeline
 
-from .model_features import preprocessor
+from .formatting import format_duration
+from .model_features import feature_preprocessor
 from .model_validation import (
     NOMINAL_INTERVAL_COVERAGE,
     final_holdout_split,
@@ -22,6 +24,7 @@ from .model_validation import (
     regression_metrics,
     temporal_folds,
 )
+from .settings import MODEL_RANDOM_SEED
 
 RIDGE_ALPHA_GRID = [0.01, 0.03, 0.1, 0.3, 1.0, 2.0, 5.0, 10.0, 30.0, 100.0]
 ELASTIC_NET_GRID = [
@@ -47,7 +50,7 @@ class SelectionSettings:
     min_calibration_rows: int = 30
     min_validation_rows: int = 30
     nominal_coverage: float = NOMINAL_INTERVAL_COVERAGE
-    random_seed: int = 20260723
+    random_seed: int = MODEL_RANDOM_SEED
     detailed_progress: bool = False
 
 
@@ -63,7 +66,7 @@ def candidate_configurations() -> list[dict[str, Any]]:
 def build_pipeline(configuration: dict[str, Any], seed: int) -> Pipeline:
     estimator = build_estimator(configuration, seed)
     return Pipeline([
-        ("features", preprocessor(list(range(6)), [6, 7], dense=True)),
+        ("features", feature_preprocessor(dense=True)),
         ("regression", estimator),
     ])
 
@@ -137,7 +140,7 @@ def select_configuration(candidates: list[dict[str, Any]]) -> dict[str, Any]:
         improvement = (ridge_mae - best) / ridge_mae
         consistent = all(
             nonlinear["mae_amount_per_sqm"] < linear["mae_amount_per_sqm"]
-            for nonlinear, linear in zip(winner["folds"], ridge["folds"])
+            for nonlinear, linear in zip(winner["folds"], ridge["folds"], strict=True)
         )
         if improvement < PRACTICAL_NONLINEAR_MAE_IMPROVEMENT or not consistent:
             winner = ridge
@@ -181,7 +184,7 @@ def optimize_model(
     preprocessing_seconds = 0.0
     for fold_number, fold in enumerate(folds, start=1):
         preprocessing_started = time.monotonic()
-        fold_preprocessor = preprocessor(list(range(6)), [6, 7], dense=True)
+        fold_preprocessor = feature_preprocessor(dense=True)
         training_features = fold_preprocessor.fit_transform(features[fold.training])
         calibration_features = fold_preprocessor.transform(features[fold.calibration])
         validation_features = fold_preprocessor.transform(features[fold.validation])
@@ -215,9 +218,9 @@ def optimize_model(
                 "name": fold.name, "train_years": list(fold.train_years),
                 "calibration_year": fold.calibration_year,
                 "validation_year": fold.validation_year,
-                "training_rows": int(len(fold.training)),
-                "calibration_rows": int(len(fold.calibration)),
-                "validation_rows": int(len(fold.validation)),
+                "training_rows": len(fold.training),
+                "calibration_rows": len(fold.calibration),
+                "validation_rows": len(fold.validation),
                 **regression_metrics(target[fold.validation], predicted),
                 **interval_metrics(target[fold.validation], predicted, half_width),
                 "baseline": regression_metrics(
@@ -242,22 +245,30 @@ def optimize_model(
                     f"({100 * completed_candidate_fits / total_candidate_fits:.1f}%): "
                     f"candidate {candidate_number}/{len(candidates)}, "
                     f"fold {fold_number}/{len(folds)}; "
-                    f"elapsed={_duration(elapsed)}, ETA={_duration(remaining)}"
+                    f"elapsed={format_duration(elapsed)}, ETA={format_duration(remaining)}"
                 )
-    for configuration, results in zip(candidates, candidate_results):
+    for configuration, results in zip(candidates, candidate_results, strict=True):
         evaluated.append({"configuration": configuration, "folds": results,
                           "aggregate": _aggregate(results)})
     progress(
         f"shared fold preprocessing: {len(folds)} fits instead of "
-        f"{total_candidate_fits}; elapsed={_duration(preprocessing_seconds)}"
+        f"{total_candidate_fits}; elapsed={format_duration(preprocessing_seconds)}"
     )
     selected = select_configuration(evaluated)
     progress(f"selected: {_configuration_label(selected['configuration'])}")
-    training, calibration, holdout = final_holdout_split(
-        dates, holdout_year, min_training_rows=settings.min_training_rows,
-        min_calibration_rows=settings.min_calibration_rows,
-        min_holdout_rows=settings.min_validation_rows,
-    )
+    try:
+        training, calibration, holdout = final_holdout_split(
+            dates, holdout_year, min_training_rows=settings.min_training_rows,
+            min_calibration_rows=settings.min_calibration_rows,
+            min_holdout_rows=settings.min_validation_rows,
+        )
+    except ValueError as error:
+        # Valid folds do not guarantee a large enough final calibration/holdout year.
+        # Return a status so the caller uses its sparse-group fallback instead of
+        # aborting the whole model refresh for every property group.
+        progress(f"selection unavailable: {error}")
+        return {"status": "insufficient_final_holdout", "reason": str(error),
+                "skipped_folds": skipped, "final_holdout_year": holdout_year}
     final_model = build_pipeline(selected["configuration"], settings.random_seed)
     progress(f"final holdout: fitting pre-{holdout_year} training population")
     holdout_prediction, training_seconds, prediction_seconds = _timed_fit_predict(
@@ -271,8 +282,8 @@ def optimize_model(
         **regression_metrics(target[holdout], holdout_prediction),
         **interval_metrics(target[holdout], holdout_prediction, half_width),
         "nominal_interval_coverage": settings.nominal_coverage,
-        "calibration_rows": int(len(calibration)),
-        "holdout_rows": int(len(holdout)),
+        "calibration_rows": len(calibration),
+        "holdout_rows": len(holdout),
         "holdout_year": holdout_year,
         "training_seconds": training_seconds,
         "prediction_seconds": prediction_seconds,
@@ -326,17 +337,6 @@ def _configuration_label(configuration: dict[str, Any]) -> str:
     return f"{configuration['family']}({parameters})"
 
 
-def _duration(seconds: float) -> str:
-    rounded = max(0, round(seconds))
-    minutes, seconds = divmod(rounded, 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours}h {minutes}m {seconds:02d}s"
-    if minutes:
-        return f"{minutes}m {seconds:02d}s"
-    return f"{seconds}s"
-
-
 def grouped_robustness(features, target, groups, configuration, settings):
     valid = np.asarray([bool(value) for value in groups])
     distinct = sorted(set(groups[valid]))
@@ -351,7 +351,7 @@ def grouped_robustness(features, target, groups, configuration, settings):
     )
     return {
         "status": "evaluated", "held_out_group_count": len(set(local_groups[validation])),
-        "held_out_row_count": int(len(validation)),
+        "held_out_row_count": len(validation),
         "groups_disjoint": set(local_groups[training]).isdisjoint(local_groups[validation]),
         **regression_metrics(local_target[validation], predicted),
         "training_seconds": training_seconds, "prediction_seconds": prediction_seconds,

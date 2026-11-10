@@ -1,0 +1,64 @@
+/* Transaction inspector sections (TransactionDetails.tsx). Uses the shared tokens from styles.css. */
+.td-facts dd { font-size: 0.875rem; }
+.td-note { margin-top: 8px !important; }
+.td-maps { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
+.td-maps a { display: inline-flex; align-items: center; min-height: 44px; color: var(--text); text-decoration-color: var(--accent); text-underline-offset: 3px; font-size: 0.8438rem; }
+.td-maps a:hover { color: var(--accent); }
+.td-maps .muted { flex: 1 1 200px; min-width: 0; }
+
+.td-package { display: grid; gap: 6px; margin-top: 12px; min-width: 0; }
+.td-package-note { padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: 8px; background: var(--surface-raised); font-size: 0.7812rem; overflow-wrap: break-word; }
+.td-package-note strong { color: var(--text); }
+.td-components li strong, .td-events li strong, .td-pairs li strong { font-weight: 600; overflow-wrap: break-word; }
+.td-price { color: var(--muted); font-weight: 400; }
+
+.td-warning { padding: 10px 12px; border: 1px solid var(--warn); border-radius: 8px; color: var(--text); font-size: 0.7812rem; margin-bottom: 8px !important; }
+.td-warning strong { color: var(--warn); }
+.td-verdict { font-size: 0.8125rem; }
+.td-reasons { margin: 4px 0 0; padding-left: 18px; font-size: 0.7812rem; color: var(--text); }
+.td-reasons li + li { margin-top: 2px; }
+
+.td-subtitle { margin: 14px 0 4px; font-size: 0.8125rem; font-weight: 600; color: var(--text); }
+.td-events li strong { display: flex; flex-wrap: wrap; align-items: center; gap: 0 4px; }
+.td-events .chip { margin-left: 4px; }
+.td-current { box-shadow: inset 3px 0 0 var(--accent); padding-left: 10px !important; }
+.td-events .td-current strong { min-height: 44px; }
+.td-pairs + .muted { margin-top: 6px !important; }
+
+.td-comparable-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-width: 0; }
+.td-diff { font-variant-numeric: tabular-nums; font-size: 0.875rem; white-space: nowrap; }
+
+/* Sale header: a readable title, the address below, then one verdict. */
+.td-panel { min-width: 0; }
+.td-panel header h2 { margin: 2px 0 0; font-size: 1.25rem; line-height: 1.25; overflow-wrap: break-word; }
+.td-address { margin: 4px 0 0 !important; font-size: 0.875rem; color: var(--text); overflow-wrap: break-word; }
+.td-key-facts { margin-top: 12px; }
+.td-key-facts dd { white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.td-verdict-box { display: block; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px;
+  background: var(--surface-raised); min-width: 0; }
+.td-verdict-line { margin: 0; font-size: 0.9375rem; line-height: 1.4; color: var(--text); overflow-wrap: break-word; }
+.td-verdict-meta { margin: 4px 0 0; font-size: 0.7812rem; color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: break-word; }
+.td-verdict-caveat { margin: 8px 0 0; font-size: 0.7812rem; color: var(--text); }
+/* Dot-on-range: the track and its labels sit in normal flow, so nothing is drawn over text. */
+.td-range { display: block; margin-top: 12px; padding: 0 6px; }
+.td-range-track { position: relative; height: 8px; border-radius: 999px; background: var(--line); }
+.td-range-middle { position: absolute; top: 0; bottom: 0; left: 25%; width: 50%; border-radius: 999px; background: color-mix(in srgb, var(--accent) 30%, transparent); }
+.td-range-median { position: absolute; top: -3px; bottom: -3px; left: 50%; width: 2px; margin-left: -1px; background: var(--muted); }
+.td-range-dot { position: absolute; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 2px solid var(--surface-raised, #fff); border-radius: 50%;
+  background: var(--accent); box-sizing: border-box; }
+.td-range-labels { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 0.7188rem; color: var(--muted); }
+.td-range-note { margin: 4px 0 0; font-size: 0.75rem; color: var(--muted); }
+
+.td-value-link { margin: 12px 0 0 !important; }
+.td-value-link a { display: inline-flex; align-items: center; min-height: 44px; font-weight: 600; color: var(--accent); text-underline-offset: 3px; overflow-wrap: break-word; }
+
+/* Collapsed explanations: "Kako smo to izračunali" and "Podatki iz registra". */
+.td-how, .td-register { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.td-how > summary, .td-register > summary { display: flex; align-items: center; min-height: 44px; padding: 0 12px; cursor: pointer; font-size: 0.8438rem; font-weight: 600; color: var(--text); }
+.td-how-body, .td-register > dl, .td-register > p { padding: 0 12px 12px; }
+.td-how-body p { margin: 6px 0 0; font-size: 0.8125rem; line-height: 1.45; overflow-wrap: break-word; }
+.td-how-body .td-subtitle { margin-top: 12px; }
+.td-benchmarks li strong { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; font-weight: 600; }
+.td-register-facts { margin-top: 4px; }
+.td-register-facts dd { font-size: 0.8125rem; font-weight: 500; }

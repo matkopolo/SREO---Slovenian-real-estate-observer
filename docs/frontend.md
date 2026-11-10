@@ -1,198 +1,184 @@
-# Frontend architecture
+# Frontend architecture (`apps/observer`)
 
 ## Purpose
 
-`apps/web` is the Slovenian-language **DOMOGLASNIK** dashboard. It is
-a Next.js/React/TypeScript client for exploring sale and rental markets; it
-does not calculate authoritative statistics locally. Values, publication
-status, transaction composition, quality evidence, and geography come from
-`real-estate-api`.
+`apps/observer` is the SREO web frontend: a React 19 + TypeScript single-page app
+with a MapLibre map, built by Vite and served by nginx. The interface is
+Slovenian by default with a full English translation. It never calculates
+authoritative statistics itself: market figures, publication state, quality
+evidence and geography all come from `real-estate-api`. There are no accounts and
+no write requests; the frontend only reads.
 
-## User workflow
+In Compose it is the `observer` service at <http://localhost:3000> (and `:3100`,
+kept so earlier links work), bound to loopback only.
 
-### Recent local price rankings and map navigation
+## Pages and views
 
-The selection inspector shows up to ten highest and ten lowest **total amounts**
-from representative transactions, including date, area and amount/m². Rent amounts
-are monthly. These are actual GURS agreements, not asking prices or a valuation.
-Area/geography selection uses that area. A selected transaction or building uses
-its source municipality, not the building-only cohort. Without a known municipality
-the property view does not silently substitute a national ranking.
+| Address | Page | Code |
+|---|---|---|
+| `#` / `#?…` | **Trg po območjih** (Market by area): the map, the area panel, sales lists, building evidence, transaction details, rent, value check | `views/ExplorerView.tsx`, `components/ExplorerMap.tsx`, `AreaPanel.tsx`, `AreaModules.tsx`, `SalesList.tsx`, `BuildingEvidence.tsx`, `TransactionDetails.tsx`, `RentSection.tsx`, `ValueCheck.tsx` |
+| `#trendi?g=…` | **Trendi** (Trends): prices over time, and distribution with extreme sales | `views/TimeView.tsx`, `views/MarketView.tsx` (lazy-loaded) |
+| `#o-podatkih` | **O podatkih** (About the data): sources, methodology and data quality | `views/QualityView.tsx` (lazy-loaded) |
 
-Start with the last three calendar months ending at the earlier of today and the
-selected end-year's December 31. If fewer than ten distinct transactions exist,
-expand to six, twelve, twenty-four months, then all selected years (at most five
-requests, duplicate windows removed). The exact range and expansion are visible.
-Keep geography, property group, min/max area and land scope unchanged. Fewer than
-ten is valid; the same transaction can occur in both lists. This is **price ranking
-within a recent window**, not ten records selected by date and then sorted.
+`components/App.tsx` owns the masthead, page switch, language switch, data-status
+banner (`DataStatusBanner.tsx`, from `/api/v1/data-status`) and the source footer.
+`ErrorBoundary.tsx` and `LoadState.tsx` give every view the same loading, empty
+and failure states.
 
-Opening a transaction centers its recorded coordinates at building zoom; opening
-a building from the inspector uses its recorded building coordinates. Selecting
-a municipality/district from any context control fits that area's actual bounds,
-including zooming back out from a property. Cancelled/stale lookups never move the
-camera. Missing coordinates/bounds produce an explicit notice, not a guessed point.
+## State lives in the address
 
-### Land browsing versus model population
+The hash is the application state, so every view can be shared, reloaded and
+navigated with Back/Forward. `src/url-state.ts` is the only module that reads or
+writes it:
 
-Sale → Zemljišča exposes separate land categories: all, verified buildable (ETN
-1/2), unverified building land (ETN 3), agricultural (ETN 7/8), forest (ETN 9),
-mixed-category contracts, and other/unknown uses. The legacy broad (ETN 1/2/3)
-scope remains supported for saved URLs, but is not offered as a new category.
-The land selector occupies a dedicated full-width toolbar row, stacking inside
-the mobile filter panel. Short option labels keep the native control readable;
-its linked description retains the full ETN-code and population explanation.
-Agricultural and forest filters require all parcels to belong to that category.
-A contract with agricultural and forest parcels (or a known category plus an
-unknown parcel) belongs to mixed, not to either pure category. Entire package
-amounts remain intact and are never allocated proportionally between land uses.
-All includes every land-only agreement already stored by the pipeline. There is
-no land rental option. The scope persists in shareable URLs and is passed through
-market summaries, map features, trends/distribution, geography comparisons,
-outliers and recent/full-period price rankings. Area constraints now also flow
-through the detailed workspace instead of being lost there.
+- `parseHash()` turns `#?g=133&b=1734-1710&posel=985416&vrsta=hise&obdobje=3&sloj=rentPrice&3d=1`
+  into an `ExplorerState` (area `g`, building `b`, opened sale `posel` or rental
+  `najem`, property type `vrsta`, land use `raba`, size band `m2`, street `ulica`,
+  period `obdobje` or `od`/`do`, map layer `sloj`, `3d`, `vrednost`).
+- `toHash()` writes the canonical form back; defaults and invalid parts are left
+  out, so equal states always have equal addresses.
+- URL words (page ids, parameter names, slugs) are Slovenian in both languages,
+  so a link works whichever language the reader uses.
+- `translateLegacyHash()` in `App.tsx` maps addresses from earlier versions
+  (`#pregled`, `#posli`, `#dokazi`, `#kakovost`, `#cas`, `#trg`) onto the current
+  ones. Keep it when renaming anything in the address.
 
-Publication/quality rules still apply. Mixed-use all-land medians are descriptive,
-not a valuation of agricultural or buildable land. Existing valuation models and
-national land indices remain based on the strict buildable population; they are
-not retrained or broadened by the browsing filter. Anomaly summaries retain their
-existing transaction-kind-wide scope.
+The interface language is the only state outside the hash: `?lang=en`, then the
+saved choice (`localStorage` key `sreo-language`), then Slovenian.
 
-### Product/repository naming
+## Data loading
 
-The frontend title/wordmark and documentation use DOMOGLASNIK. Runtime service,
-database, volume, image and Go module names stay stable. GitHub repository renaming
-requires an account administrator's Settings → General action. Do not change the
-Git remote until that rename has succeeded; then verify SSH access, documentation
-links and GHCR workflow package access. Rebranding must not rename Compose volumes.
+- **One API client.** `src/api.ts` `api(path, { params, query }, signal)` is the
+  only way the frontend talks to the API. `path` must be a path from the OpenAPI
+  contract (checked by `tsc`), and the response type comes from the contract.
+  `coverage.test.ts` reads the literal paths passed to `api()` and fails when a
+  GET data endpoint of the contract is unused, when a used path is not in the
+  contract, or when an `api.ts` loader is not used by any view.
+- **Generated types.** `src/generated/api-schema.d.ts` is generated from
+  `apps/real-estate-api/openapi/openapi.yaml` with `npm run generate:api-types`
+  (`make web-generate-api-types`). CI fails if the committed file differs from
+  the contract (`make web-contract-drift`).
+- **Shared requests.** Identical GETs share one in-flight request and its answer
+  for 60 seconds; a shared request is aborted only when every caller has aborted.
+  Failures are never cached.
+- **One loading hook.** `hooks/useLoad.ts` loads by key: a new key aborts the
+  previous request, a late answer can never overwrite a newer one, and failures
+  are shown with a retry instead of loading forever.
+- **Independent parts.** Optional statistics fail on their own and show "—", so
+  one unavailable figure never blanks a view.
+- **Same origin.** Requests go to `/api/…` on the page's own origin. In Compose,
+  nginx (`apps/observer/nginx.conf`) proxies `/api/` to `real-estate-api:8080`,
+  resolving the service per request so an API restart needs no nginx restart. In
+  development, Vite proxies `/api` to `OBSERVER_API` (default
+  `http://localhost:8080`).
 
-## Available features
+## Map
 
-The dashboard provides:
+`components/ExplorerMap.tsx` uses MapLibre GL with the OpenFreeMap "liberty" style
+(`https://tiles.openfreemap.org/styles/liberty`, OpenMapTiles schema, OpenStreetMap
+data). No map token is needed. Place labels prefer `name:sl`. Area shapes, metric
+colours, optional 3D extrusion and sale/rental points are SREO layers drawn on top;
+`map-zoom.ts` decides which geography level a zoom shows. Map attribution
+(OpenFreeMap, OpenMapTiles, OpenStreetMap contributors) must stay visible; see
+[data licensing](data-licensing-privacy.md).
 
-- sale/rent mode switching;
-- date, property group, and inclusive minimum/maximum area filters;
-- semantic MapLibre navigation from country and statistical regions through
-  municipalities/local areas to property/building points;
-- street/satellite basemaps, clustering, address search, boundary selection,
-  and building-grouped transactions; address results show the active market's
-  transaction count within the selected year range and offer an explicit
-  one-click filter suggestion when the building has no matching transactions
-  but another property group or mode does;
-- a market snapshot with explicit median terminology, transaction depth,
-  representative share, eligible population, and excluded outliers;
-- price/rent trends, year-over-year context, distributions and percentiles;
-- a shared trend card with tabs for median amount per m², transaction volume,
-  and official Slovenian inflation, selectable by month, quarter, or year;
-- geography comparisons, highest/lowest representative transactions,
-  anomaly context, indices, and model valuation context;
-- detailed sale/rental package composition and building history;
-- building-first direct comparables ranked by year and relative area;
-- nearby and small-area comparisons matched by floor area and construction
-  year, with their actual matching tolerances displayed in the card;
-- broad market medians and model estimates kept visually separate from direct
-  and physically matched evidence.
-- a separate current-market estimate range showing its weighted P25–median–P75
-  range, actual adaptive radius, comparable count, physical tolerances,
-  location adjustment, confidence and limitations;
-- a transaction inspector with progressively disclosed `Pregled`, `Primerljivi
-  posli`, `Podrobnosti`, and `Kakovost in model` tabs. Direct observed evidence
-  precedes wider benchmarks and the trained model.
+Automated DOM tests do not render WebGL. After map, chart or layout changes,
+check the page in a real browser at desktop and phone widths.
 
-Filters define one market population for dashboard and map requests and are
-stored in URL query parameters so an analysis can be refreshed or shared.
-Selecting another building closes the previous selection. Thin or suppressed
-cells are shown honestly rather than replaced with a fabricated median.
+## Fonts and styling
 
-Transaction values reported by ETN, calculations made by the application, and
-statistical model estimates have separate provenance labels. The persistent
-footer provides GURS/ETN/RPE attribution, the active ETN period, a CC BY 4.0
-link, non-endorsement wording, valuation limitations, and the privacy/data
-minimization statement. These disclosures must remain visible in any public or
-commercial deployment.
+Fraunces (display) and Instrument Sans (text) are self-hosted from
+`public/fonts/` under the SIL Open Font License (licence files next to the fonts)
+and declared in `src/fonts.css`. No font or script is loaded from a third-party
+CDN. Global tokens and layout are in `src/styles.css`; component styles sit next
+to their components (`components/*.css`).
 
-## Structure
+## Translations (i18n)
 
-- `app/` contains the Next.js entry point and three ordered style layers:
-  `globals.css` holds legacy-compatible structural foundations,
-  `redesign.css` owns reusable semantic components and responsive data
-  preservation, and `atlas.css` owns the final cartographic composition. Old
-  viewport rules must not hide analytical fields and are removed rather than
-  counteracted in a later layer.
-- `components/dashboard/market-dashboard.tsx` owns URL/filter/selection state
-  and request cancellation.
-- `filter-bar.tsx` owns primary/secondary market controls and the accessible
-  mobile filter sheet, including focus restoration and Escape handling.
-- `slovenia-map.tsx` owns MapLibre sources, semantic zoom, clusters,
-  boundaries, search, and selection.
-- `market-snapshot.tsx` renders the selected population's primary evidence.
-- `context-panel.tsx` loads selection data and delegates transaction rendering
-  to `components/dashboard/inspector/`; reusable evidence primitives live in
-  `components/ui/`.
-- trend, distribution, and analytics-workspace components render focused
-  analytical views. Detailed analytics fetch only the active tab and cache
-  previously loaded tab/filter combinations.
-- `lib/api.ts` is the typed HTTP boundary; `lib/types.ts` contains UI-facing
-  domain types and generated OpenAPI types live under `lib/generated`.
-- colocated Vitest/Testing Library tests characterize components; pure display
-  and map-popup helpers have focused unit tests.
+Slovenian is the source language. Every visible text is written in Slovenian in
+the code and wrapped in a translation call. English lives in a dictionary that
+maps each Slovenian template to its English template.
 
-## API and failure behavior
+| File | Role |
+|---|---|
+| `src/i18n/index.tsx` | `t()`, `tx()`, `Name`, `LANG`, `LOCALE`, `setLanguage()` |
+| `src/i18n/en/*.ts` | English dictionary, one file per area of the interface: `common`, `explorer`, `area`, `value`, `sale`, `pages` |
+| `src/i18n/en.ts` | Merges the dictionary files into `EN` |
+| `src/i18n/GLOSSARY.md` | Required English term for every domain word, plus tone rules |
+| `src/i18n/scan.ts`, `src/i18n/i18n.test.ts` | Static translation audit, run by `npm test` |
 
-`NEXT_PUBLIC_API_URL` selects the backend (default local value
-`http://localhost:8080`). Requests use abort signals to prevent stale filter
-responses from overwriting a newer selection. API errors and unavailable
-statistics produce visible states. The frontend never replaces unavailable
-live statistics with demo values.
+**API.**
 
-Refreshes are local to the affected panel. Existing successful data remains
-readable while a newer request is running. Suppressed periods create gaps in
-price lines, and suppressed distributions do not render synthetic histograms.
+- `t("Mediana cene {noun} v {period}", { noun, period })` returns a string.
+  `{name}` placeholders are filled after translation, so the English template can
+  reorder them.
+- `tx("· Vir GURS ETN, {licence}, obdelano", { licence: <abbr>…</abbr> })` is the
+  same, but placeholders may be React nodes (links, `<strong>`, `<Term>`); it
+  returns a fragment.
+- `<Name>` wraps a register name (place, street, address, municipality). It is
+  shown unchanged in both languages and marked `lang="sl"`.
+- `LOCALE` (`sl-SI` or `en-GB`) is used for every number and date format.
+- Plurals and Slovenian noun cases come from `plural.ts` and `nouns.ts`: pass the
+  inflected word in as a placeholder rather than building sentences from pieces.
+- The language is fixed for a page load; switching reloads the page at the same
+  address.
 
-The checked-in TypeScript transport schema is generated from
-`apps/real-estate-api/openapi/openapi.yaml`. CI fails on contract drift.
+**The audit** (`i18n.test.ts`) fails when:
 
-## Map behavior
+1. a `t("…")`/`tx("…")` literal has no English entry;
+2. an English entry has different `{placeholders}` from its Slovenian key;
+3. a key is defined differently in two dictionary files;
+4. an English entry still contains Slovenian letters (č, š, ž);
+5. visible Slovenian is left outside `t()`/`tx()`: JSX text, user-facing
+   attributes (`aria-label`, `title`, `placeholder`, …), or string literals with
+   Slovenian letters or words.
 
-The frontend requests bounded GeoJSON rather than loading Slovenia's complete
-transaction history into browser memory. At broad zoom it requests named
-administrative summaries; at intermediate zoom it requests server-side grid
-clusters; at close zoom it requests capped individual points. Multiple
-transactions at the same cadastral building are presented together.
+A line that processes data but never shows it (URL slugs, matching register
+spellings) can opt out with a trailing `// i18n-ignore` comment and a reason.
+Never use it for text a user reads. In the running app, a missing English entry
+falls back to Slovenian and is logged once as `[i18n] missing English for: …`.
 
-Map points represent GURS property centroids. They may differ from postal
-entrances and are omitted if coordinates are unavailable.
+**Adding or changing a text:**
 
-## Development and verification
+1. Write the Slovenian text in the code inside `t("…")`, or `tx("…")` when it
+   contains elements. Keep the whole sentence in one template, with placeholders
+   for values.
+2. Add `"<Slovenian template>": "<English template>"` to the matching
+   `src/i18n/en/<area>.ts` file, using the terms in `GLOSSARY.md` and the same
+   placeholders. When you change a Slovenian text, its key changes too: update or
+   move the English entry, and remove the old one.
+3. New domain term? Add it to `GLOSSARY.md` first.
+4. Run `make web-test` (or `npm test`). The audit lists every missing key,
+   placeholder mismatch and leftover Slovenian string with its file and line.
+5. Check the screen in both languages (`?lang=en` and `?lang=sl`).
 
-Sales include a **Zgodovina** inspector tab: recorded component/parcel events,
-conservative resale comparisons, land-type changes, on-demand monthly inflation
-adjustment and a separately entered cost/tax scenario. Area resale interval
-summaries load only when opened. Valid building and transaction coordinates
-provide an external Google Maps link. See [property history](property-history.md)
-for navigation, matching safeguards and limitations. Existing filters, model
-output and repeat-sale index definitions are unchanged.
+## Development and checks
 
 ```bash
-make web-up
-make web-lint
-make web-typecheck
-make web-test
-make web-build
-make web-generate-api-types
-make web-contract-drift
+make web-setup          # npm ci into the node_modules Docker volume
+make web-typecheck      # tsc --noEmit
+make web-lint           # ESLint
+make web-test           # Vitest, including the i18n audit and API coverage test
+make web-contract-drift # regenerate API types and fail on a diff
+make web-up             # build and start the observer image (and its dependencies)
 ```
 
-Open <http://localhost:3000>. A local Node installation is optional because
-the Make targets execute in Docker. UI changes should include an interaction
-test, API-boundary changes an API helper/contract test, and map behavior a
-focused map/helper test where practical.
+All `web-*` targets run Node in a container (`node:22-bookworm-slim`). For a
+local dev server with hot reload, run `npm run dev` in `apps/observer` (port
+5174, proxying `/api` to the API on `:8080`). The production build
+(`tsc && vite build`) happens inside `apps/observer/Dockerfile`; CI builds the
+image once and runs `nginx -t` against it.
 
-To rebuild only the frontend without starting the scheduled pipeline workflow:
+Tests use Vitest with jsdom and Testing Library (`*.test.ts(x)` next to the
+code). `App.test.tsx` covers the main journeys (area drill-down, buildings,
+earlier links, history and Back, property types); the component tests cover
+their loading, failure and empty states.
 
-```bash
-docker compose up -d --build --force-recreate --no-deps web
-```
+## Provenance and attribution in the interface
 
-`docker compose up --wait web` includes Compose dependencies and can recreate
-`pipeline-worker`; that worker performs a refresh immediately when it starts.
+The masthead names the source (GURS ETN, CC BY 4.0, processed) and links to
+**O podatkih**. The footer on the Trends and About pages lists every source:
+GURS (ETN, RPE, Kataster nepremičnin), SURS, Banka Slovenije, ECB, OpenFreeMap and
+OpenStreetMap contributors, and states that the figures are informative and are
+not an official valuation or a loan offer. These disclosures must stay visible in
+any public deployment; see [data licensing and privacy](data-licensing-privacy.md).

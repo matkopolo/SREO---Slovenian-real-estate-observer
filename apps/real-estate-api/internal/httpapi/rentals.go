@@ -1,11 +1,6 @@
 package httpapi
 
-import (
-	"errors"
-	"net/http"
-
-	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/analytics"
-)
+import "net/http"
 
 func (s *server) rentalOverview(w http.ResponseWriter, r *http.Request) {
 	filter, ok := statisticsFilter(w, r)
@@ -13,10 +8,11 @@ func (s *server) rentalOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.rentals.RentalOverview(r.Context(), filter)
-	if rentalError(w, r, s, err) {
+	if err != nil {
+		s.fail(w, r, "calculate rental overview", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, r, http.StatusOK, result)
 }
 
 func (s *server) rentalTimeSeries(w http.ResponseWriter, r *http.Request) {
@@ -24,20 +20,16 @@ func (s *server) rentalTimeSeries(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	interval := r.URL.Query().Get("interval")
-	if interval == "" {
-		interval = "year"
-	}
-	if interval != "month" && interval != "quarter" && interval != "year" {
-		writeError(w, r, http.StatusBadRequest, "invalid_interval",
-			"interval must be month, quarter, or year")
+	interval, ok := intervalParameter(w, r)
+	if !ok {
 		return
 	}
 	items, err := s.rentals.RentalTimeSeries(r.Context(), filter, interval)
-	if rentalError(w, r, s, err) {
+	if err != nil {
+		s.fail(w, r, "calculate rental time series", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, r, http.StatusOK, map[string]any{
 		"interval": interval, "items": items, "count": len(items),
 	})
 }
@@ -47,38 +39,19 @@ func (s *server) rentalOutliers(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit, ok := boundedInteger(w, r, "limit", 50, 1, 100)
+	limit, offset, ok := pageParameters(w, r, 50, 100)
 	if !ok {
 		return
 	}
-	offset, ok := boundedInteger(w, r, "offset", 0, 0, 1000000)
-	if !ok {
+	items, total, err := s.rentals.RentalOutliers(r.Context(), filter, limit, offset)
+	if err != nil {
+		s.fail(w, r, "load rental outliers", err)
 		return
 	}
-	items, total, err := s.rentals.RentalOutliers(
-		r.Context(), filter, limit, offset)
-	if rentalError(w, r, s, err) {
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, r, http.StatusOK, map[string]any{
 		"items": items, "count": len(items), "total": total,
 		"limit": limit, "offset": offset,
 	})
-}
-
-func rentalError(w http.ResponseWriter, r *http.Request, s *server, err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, analytics.ErrGeographyNotFound) {
-		writeError(w, r, http.StatusNotFound, "geography_not_found",
-			"geography was not found")
-		return true
-	}
-	s.logger.Error("rental analytics", "error", err)
-	writeError(w, r, http.StatusInternalServerError, "query_failed",
-		"could not calculate rental analytics")
-	return true
 }
 
 func (s *server) rentalMapClusters(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +69,8 @@ func (s *server) rentalMapClusters(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := s.rentals.RentalClusters(
 		r.Context(), filter, bounds, clusterGridSize(zoom))
-	if rentalError(w, r, s, err) {
+	if err != nil {
+		s.fail(w, r, "load rental map clusters", err)
 		return
 	}
 	features := make([]map[string]any, 0, len(items))
@@ -114,7 +88,7 @@ func (s *server) rentalMapClusters(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	}
-	writeGeoJSON(w, http.StatusOK, map[string]any{
+	writeGeoJSON(w, r, http.StatusOK, map[string]any{
 		"type": "FeatureCollection", "features": features,
 		"count": len(features), "zoom": zoom,
 	})
@@ -134,7 +108,8 @@ func (s *server) rentalMapProperties(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, err := s.rentals.RentalPropertyPoints(r.Context(), filter, bounds, limit)
-	if rentalError(w, r, s, err) {
+	if err != nil {
+		s.fail(w, r, "load rental map properties", err)
 		return
 	}
 	features := make([]map[string]any, 0, len(items))
@@ -147,7 +122,7 @@ func (s *server) rentalMapProperties(w http.ResponseWriter, r *http.Request) {
 			"properties": item,
 		})
 	}
-	writeGeoJSON(w, http.StatusOK, map[string]any{
+	writeGeoJSON(w, r, http.StatusOK, map[string]any{
 		"type": "FeatureCollection", "features": features,
 		"count": len(features), "limit": limit,
 	})

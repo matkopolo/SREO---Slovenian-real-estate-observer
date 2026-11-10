@@ -42,28 +42,28 @@
       "problemMatcher": []
     },
     {
-      "label": "Web: Start",
+      "label": "Observer: Start",
       "type": "shell",
       "command": "make web-up",
       "group": "build",
       "problemMatcher": []
     },
     {
-      "label": "Web: Test",
+      "label": "Observer: Test",
       "type": "shell",
       "command": "make web-test",
       "group": "test",
       "problemMatcher": []
     },
     {
-      "label": "Web: Lint",
+      "label": "Observer: Lint",
       "type": "shell",
       "command": "make web-lint",
       "group": "test",
       "problemMatcher": []
     },
     {
-      "label": "Web: Logs",
+      "label": "Observer: Logs",
       "type": "shell",
       "command": "make web-logs",
       "isBackground": true,
@@ -72,14 +72,14 @@
     {
       "label": "Pipeline: Lint",
       "type": "shell",
-      "command": "make lint",
+      "command": "make pipeline-lint",
       "group": "test",
       "problemMatcher": []
     },
     {
-      "label": "Pipeline: Test",
+      "label": "Pipeline: Unit tests",
       "type": "shell",
-      "command": "make test",
+      "command": "make test-unit",
       "group": {
         "kind": "test",
         "isDefault": true

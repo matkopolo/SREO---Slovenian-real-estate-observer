@@ -1,3 +1,5 @@
+import pytest
+
 from real_estate_etl.geography import BoundaryCollection, iter_collection_pages, normalized_feature
 
 
@@ -36,12 +38,8 @@ def test_iter_collection_pages_rejects_cycle():
 
     iterator = iter_collection_pages(fetch, collection)
     next(iterator)
-    try:
+    with pytest.raises(ValueError, match="Pagination cycle"):
         next(iterator)
-    except ValueError as exc:
-        assert "Pagination cycle" in str(exc)
-    else:
-        raise AssertionError("expected pagination cycle error")
 
 
 def test_normalized_feature_preserves_parent_and_properties():
@@ -64,9 +62,5 @@ def test_normalized_feature_preserves_parent_and_properties():
 
 def test_normalized_feature_rejects_non_polygon():
     collection = BoundaryCollection("TEST", "municipality", "EID_OBCINA")
-    try:
+    with pytest.raises(ValueError, match="Unsupported geometry"):
         normalized_feature(feature(geometry_type="Point"), collection)
-    except ValueError as exc:
-        assert "Unsupported geometry" in str(exc)
-    else:
-        raise AssertionError("expected unsupported geometry error")
