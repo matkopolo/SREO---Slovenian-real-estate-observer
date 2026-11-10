@@ -88,6 +88,29 @@ type CurrentMarketEstimate struct {
 	Confidence                string   `json:"confidence"`
 	Warnings                  []string `json:"warnings"`
 	MethodologyVersion        string   `json:"methodologyVersion"`
+	// Comparables are the agreements the estimate rests on, nearest first, with their place on
+	// the map, so a reader can see what the subject was compared with; the subject's own
+	// position is the centre of the search.
+	Comparables      []MarketComparable `json:"comparables"`
+	SubjectLongitude float64            `json:"subjectLongitude"`
+	SubjectLatitude  float64            `json:"subjectLatitude"`
+}
+
+// MarketComparable is one agreement behind the current-market estimate.
+type MarketComparable struct {
+	TransactionID             int64   `json:"transactionId"`
+	ContractDate              string  `json:"contractDate"`
+	AmountPerSQM              float64 `json:"amountPerSqm"`
+	Area                      float64 `json:"area"`
+	DistanceMeters            int     `json:"distanceMeters"`
+	ConstructionYear          *int    `json:"constructionYear"`
+	Longitude                 float64 `json:"longitude"`
+	Latitude                  float64 `json:"latitude"`
+	Settlement                *string `json:"settlement"`
+	Street                    *string `json:"street"`
+	HouseNumber               *string `json:"houseNumber"`
+	CadastralMunicipalityCode *int32  `json:"cadastralMunicipalityCode"`
+	BuildingNumber            *string `json:"buildingNumber"`
 }
 
 // ContextValuation is the public, decision-useful subset of the model result.
@@ -520,7 +543,12 @@ func loadCurrentMarketEstimate(
 	if profile.constructionYearTolerance > 0 {
 		ageTolerance = &profile.constructionYearTolerance
 	}
+	comparables, subjectAt, err := loadMarketComparables(ctx, tx, input, selected)
+	if err != nil {
+		return nil, err
+	}
 	return &CurrentMarketEstimate{
+		Comparables: comparables, SubjectLongitude: subjectAt[0], SubjectLatitude: subjectAt[1],
 		LowerTotal: lower * input.area, CentralTotal: central * input.area, UpperTotal: upper * input.area,
 		UnadjustedLowerTotal: unadjustedLower * input.area, UnadjustedCentralTotal: unadjustedCentral * input.area,
 		UnadjustedUpperTotal: unadjustedUpper * input.area,
@@ -586,6 +614,63 @@ func queryCurrentCandidates(
 		result = append(result, candidate)
 	}
 	return result, rows.Err()
+}
+
+// loadMarketComparables returns the chosen comparables, in their order (nearest first), with
+// their WGS84 position, address and building from the facts table, and the subject's own
+// position (the centre of the search): one query over the ids.
+func loadMarketComparables(
+	ctx context.Context, tx database.Querier, input currentMarketQuery, selected []marketCandidate,
+) ([]MarketComparable, [2]float64, error) {
+	result := make([]MarketComparable, 0, len(selected))
+	ids := make([]int64, 0, len(selected))
+	for _, candidate := range selected {
+		ids = append(ids, candidate.transactionID)
+	}
+	parts := map[string]string{"sale": "building_parts", "rent": "rental_building_parts"}[input.transactionKind]
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
+		SELECT fact.transaction_id,
+		  ST_X(ST_Transform(fact.location,4326))::float8, ST_Y(ST_Transform(fact.location,4326))::float8,
+		  fact.cadastral_municipality_code, fact.building_number, a.settlement, a.street, a.house_number
+		FROM %s fact
+		LEFT JOIN LATERAL (
+		  SELECT settlement, street, house_number::text || coalesce(nullif(trim(house_number_suffix::text), ''), '') house_number
+		  FROM %s p WHERE p.transaction_id = fact.transaction_id ORDER BY (street IS NULL) LIMIT 1) a ON true
+		WHERE (fact.transaction_id = ANY($1) OR fact.transaction_id = $2) AND fact.location IS NOT NULL`,
+		input.subjectTable, parts), ids, input.subjectID)
+	if err != nil {
+		return nil, [2]float64{}, fmt.Errorf("load market comparables: %w", err)
+	}
+	defer rows.Close()
+	places := make(map[int64]MarketComparable, len(ids))
+	for rows.Next() {
+		var place MarketComparable
+		if err := rows.Scan(&place.TransactionID, &place.Longitude, &place.Latitude, &place.CadastralMunicipalityCode,
+			&place.BuildingNumber, &place.Settlement, &place.Street, &place.HouseNumber); err != nil {
+			return nil, [2]float64{}, fmt.Errorf("scan market comparable: %w", err)
+		}
+		places[place.TransactionID] = place
+	}
+	if err := rows.Err(); err != nil {
+		return nil, [2]float64{}, fmt.Errorf("load market comparables: %w", err)
+	}
+	subject, ok := places[input.subjectID]
+	if !ok {
+		return nil, [2]float64{}, fmt.Errorf("load market comparables: subject %d has no location", input.subjectID)
+	}
+	for _, candidate := range selected {
+		place, ok := places[candidate.transactionID]
+		if !ok {
+			return nil, [2]float64{}, fmt.Errorf("load market comparables: comparable %d has no row", candidate.transactionID)
+		}
+		place.ContractDate = candidate.contractDate.Format("2006-01-02")
+		place.AmountPerSQM = candidate.amountPerSQM
+		place.Area = candidate.area
+		place.DistanceMeters = int(math.Round(candidate.distance))
+		place.ConstructionYear = candidate.constructionYear
+		result = append(result, place)
+	}
+	return result, [2]float64{subject.Longitude, subject.Latitude}, nil
 }
 
 // signatureLoader returns the loadSignatures callback of selectCurrentCandidates: it computes

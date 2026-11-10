@@ -1,14 +1,17 @@
 import { lazy, Suspense, useMemo, useRef, useState } from "react";
-import { bboxOf, loadBuilding, loadNewBuilding, type Bbox, type Segment } from "../api";
+import { bboxOf, loadBuilding, loadNewBuilding, type Bbox, type MarketComparable, type Segment } from "../api";
 import { AreaPanel } from "../components/AreaPanel";
 import { SLOVENIA, type Scope } from "../components/AreaModules";
+import { addressLabel } from "../components/AreaSearch";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { LoadFailed } from "../components/LoadState";
-import { ValueCheck } from "../components/ValueCheck";
+import { ValueCheck, type ShownComparables } from "../components/ValueCheck";
+import { radiusBbox } from "../components/map-geometry";
 import { BUILDING_ZOOM } from "../components/map-zoom";
-import type { MapView } from "../components/ExplorerMap";
+import type { MapComparablePoint, MapRadius, MapView } from "../components/ExplorerMap";
+import { dateCompact, sqm } from "../format";
 import { ExplorerBar } from "../explorer/ExplorerBar";
-import { MapLegend, type MapLevel, type Scale } from "../explorer/MapLegend";
+import { ComparablesLegend, MapLegend, type MapLevel, type Scale } from "../explorer/MapLegend";
 import { agreementPoints, areaPaint, buildingPoints, containsPoint, finePaint, typedLabel } from "../explorer/paint";
 import { useAreaChain, useGeographyLists, useShapes, type GeographyLists } from "../explorer/useAreas";
 import { FINE_LAYERS, FINE_ZOOM, REGION_ZOOM, useChoropleth, usePeriodWindows, useSubAreas, useViewLayers } from "../explorer/useMapLayers";
@@ -64,8 +67,23 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
 
   // ------------------------------------------------------------ map data
   const [view, setView] = useState<MapView>();
+  // The value check's evidence on the map: the comparables behind the estimate, their search circle, and the list's hovered row.
+  const [reported, setComparables] = useState<ShownComparables | null>(null);
+  const [highlight, setHighlight] = useState<number | null>(null);
+  // Only while the value check is open: everything else about the map follows this one value.
+  const comparables = state.value && reported?.comparables.length ? reported : null;
+  const comparablesShown = comparables != null;
+  const comparableDots = useMemo<MapComparablePoint[]>(() => (comparables?.comparables ?? []).map((item) => ({
+    id: item.transactionId, lon: item.longitude, lat: item.latitude,
+    label: [addressLabel(item), t("Prodaja {date}: {value}", { date: dateCompact(item.contractDate), value: METRICS.salePrice.format(item.amountPerSqm) }), sqm(item.area)].filter(Boolean).join(" · ") })),
+    [comparables]);
+  const radius = useMemo<MapRadius | null>(() => comparables ? { center: comparables.center, meters: comparables.radiusMeters } : null, [comparables]);
+  // A comparable opens as a sale page (its own building), leaving the value check; "Nazaj" returns.
+  const openComparable = (item: MarketComparable) => navigate({ value: false, selected: { kind: "sale", id: item.transactionId },
+    building: item.cadastralMunicipalityCode != null && item.buildingNumber ? { ko: item.cadastralMunicipalityCode, st: item.buildingNumber } : undefined });
   const choropleth = useChoropleth(cutoff, state.years, layer, segment, windows);
-  const { fine, buildings, agreements, newBuildings } = useViewLayers({ view, cutoff, years: state.years, layer, group: state.group, segment, windows, buildingWindows: period?.buildings });
+  // Under the comparables the map draws no buildings or sales, so it does not load them either.
+  const { fine, buildings, agreements, newBuildings } = useViewLayers({ view: comparablesShown ? undefined : view, cutoff, years: state.years, layer, group: state.group, segment, windows, buildingWindows: period?.buildings });
   const subAreas = useSubAreas(municipalityId, municipalShapes, cutoff, state.years, segment, windows);
   const sub = subAreas.sub?.owner === municipalityId ? subAreas.sub : undefined;
   const building = useLoad(state.building ? `building-${state.building.ko}-${state.building.st}` : null, (signal) => loadBuilding(state.building!.ko, state.building!.st, signal));
@@ -106,20 +124,23 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
     return longitude != null && latitude != null ? [longitude - 0.003, latitude - 0.002, longitude + 0.003, latitude + 0.002] : null;
   }, [building.data]);
   const focus = useMemo<Bbox | null>(() => {
+    // The value check: the whole search circle, so the circle is the frame and every similar sale (inside it) is in view.
+    if (comparables) return radiusBbox(comparables.center, comparables.radiusMeters * 1.15); // room for the credit and the strip under the circle
     if (state.building && buildingBox) return buildingBox;
     if (!unit) return null;
     const shape = unit.level === "statistical_region" ? regionShapes.find((item) => item.id === unit.id)
       : unit.level === "municipality" ? municipalShapes.find((item) => item.id === unit.id) : sub?.shapes.find((item) => item.id === unit.id);
     return bboxOf(shape?.geometry) ?? (unit.bounds as Bbox | undefined) ?? null;
-  }, [buildingBox, municipalShapes, regionShapes, state.building, sub, unit]);
+  }, [buildingBox, comparables, municipalShapes, regionShapes, state.building, sub, unit]);
   // The opened sale (its own point) or else the opened building: a ring on the map.
   const selectedId = state.selected?.id;
   const marker = useMemo<[number, number] | null>(() => {
+    if (comparables) return comparables.center;
     const point = selectedId != null ? agreements.find((item) => item.id === selectedId) : undefined;
     if (point) return point.at;
     if ((state.building || selectedId != null) && buildingBox) return [(buildingBox[0] + buildingBox[2]) / 2, (buildingBox[1] + buildingBox[3]) / 2];
     return null;
-  }, [agreements, buildingBox, selectedId, state.building]);
+  }, [agreements, buildingBox, comparables, selectedId, state.building]);
 
   // ------------------------------------------------------------ lists for the panel
   const names = useMemo(() => new Map(municipalShapes.map((shape) => [shape.id, shape.name])), [municipalShapes]);
@@ -201,7 +222,8 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
             <ValueCheck building={state.building} transactionId={state.selected?.kind === "sale" ? state.selected.id : undefined} municipalityId={municipalityId}
               cutoff={cutoff} municipalities={municipalities}
               onBuilding={(ko, st) => navigate({ building: ko ? { ko, st } : undefined, selected: undefined })}
-              onTransaction={(id) => navigate({ selected: id ? { kind: "sale", id } : undefined })}/>
+              onTransaction={(id) => navigate({ selected: id ? { kind: "sale", id } : undefined })}
+              onComparables={setComparables} onHighlight={setHighlight} onComparable={openComparable}/>
           </ErrorBoundary> // i18n-ignore (code, not text)
           : state.building || state.selected
           ? <ErrorBoundary name="building" resetKey={`building-${state.building?.ko ?? ""}-${state.building?.st ?? ""}-${selectedId ?? ""}`}>
@@ -225,9 +247,11 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
           <Suspense fallback={<p className="fallback" role="status">{t("Nalagam zemljevid …")}</p>}><ExplorerMap
             municipalities={mapLevel === "statistical_region" ? regionShapes : municipalShapes} regions={regionShapes}
             paint={mapLevel === "statistical_region" ? regionPaint : paint}
-            subAreas={mapLevel === "fine" && fine.shapes.length ? fine.shapes : sub?.shapes ?? []} subPaint={mapLevel === "fine" && fine.shapes.length ? fineAreaPaint : subPaint}
-            buildings={buildingDots} agreements={agreementDots} selected={municipalityId ?? null}
+            subAreas={comparablesShown ? [] : mapLevel === "fine" && fine.shapes.length ? fine.shapes : sub?.shapes ?? []} subPaint={mapLevel === "fine" && fine.shapes.length ? fineAreaPaint : subPaint}
+            buildings={comparablesShown ? [] : buildingDots} agreements={comparablesShown ? [] : agreementDots} selected={municipalityId ?? null}
             selectedSub={scope.level === "city_district" ? scope.id ?? null : (unit?.level === "settlement" ? unit.id : null)} focus={focus} marker={marker}
+            comparables={comparableDots} highlight={highlight} radius={radius}
+            onComparable={(id) => { const item = comparables?.comparables.find((entry) => entry.transactionId === id); if (item) openComparable(item); }}
             onArea={openArea} onSubArea={openArea}
             onBuilding={(key) => { const [ko, ...rest] = key.split("-"); navigate({ building: { ko: Number(ko), st: rest.join("-") }, selected: undefined }); }}
             onAgreement={(id) => {
@@ -239,7 +263,8 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
         </ErrorBoundary>
         {inView && <button type="button" className="map-chip" onClick={() => openArea(inView.id)}>
           {tx("V pogledu: {area} · {open}", { area: proper(inView.name), open: <strong>{t("Odpri →")}</strong> })}</button>}
-        {!(state.value && !state.building) && <MapLegend layer={layer} layers={layers} group={state.group} band={band} windows={windows} level={mapLevel}
+        {comparables ? <ComparablesLegend count={comparables.comparables.length} radiusMeters={comparables.radiusMeters} trusted={comparables.trusted}/>
+        : !(state.value && !state.building) && <MapLegend layer={layer} layers={layers} group={state.group} band={band} windows={windows} level={mapLevel}
           street={streetLevel} land={landPoints} buildingSpan={buildingSpan}
           scales={{ municipal: municipalScale, region: regionScale, fine: fineScale, buildings: buildingScale }}
           pooled={{ municipal: shown.some((item) => item.pooled), fine: fine.values.some((item) => item.pooled) }} fineShown={fine.shapes.length > 0}

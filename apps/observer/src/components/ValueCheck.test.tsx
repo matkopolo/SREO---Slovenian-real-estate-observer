@@ -11,7 +11,7 @@ const building = { cadastralMunicipalityCode: 1734, buildingNumber: "1710", cons
   saleTransactions: [{ transactionId: 14, contractDate: "2021-06-30", propertyGroup: "apartment", area: 61, amount: 130000, amountPerSqm: 2131, representative: true }],
   rentalTransactions: [] };
 const overview = { transactionCount: 5685, pricePerSqmSampleSize: 5245, medianPricePerSqm: 2965.78, isPublishable: true };
-const market = { lowerTotal: 266375, centralTotal: 289052, upperTotal: 313826, comparableCount: 85, maximumRadiusMeters: 10000,
+const market = { lowerTotal: 266375, centralTotal: 289052, upperTotal: 313826, comparableCount: 85, maximumRadiusMeters: 10000, comparables: [], subjectLongitude: 14.51, subjectLatitude: 46.09,
   areaTolerancePercent: 15, constructionYearTolerance: 8, confidence: "moderate" };
 let context: Record<string, unknown>;
 let propertyGroup: string;
@@ -71,6 +71,54 @@ it("leads with the similar-sales value, explains my purchase with the sale page'
   expect(similar).toHaveTextContent(/slabše stanje: ocena na spodnji četrtini \(266\.000\s€\) namesto na mediani \(289\.000\s€\)/);
   expect(screen.getByLabelText("Prodajna cena (€)")).toHaveValue("266.000");      // the sale scenario uses the headline, formatted
   expect(similar).toHaveTextContent("iz širše okolice, zato lahko odstopajo od cen v vaši soseski");
+});
+
+it("lists the sales behind the estimate for the map and reports the hovered row", async () => {
+  const onComparables = vi.fn();
+  const onHighlight = vi.fn();
+  const comparable = { transactionId: 501, contractDate: "2026-03-02", amountPerSqm: 3100, area: 58, distanceMeters: 640, constructionYear: 1982, longitude: 14.52, latitude: 46.1,
+    settlement: "LJUBLJANA", street: "DUNAJSKA CESTA", houseNumber: "223", cadastralMunicipalityCode: 1734, buildingNumber: "1711" };
+  context = { ...context, currentMarketEstimate: { ...market, comparables: [comparable, { ...comparable, transactionId: 502, distanceMeters: 1800, street: null, houseNumber: "7", settlement: "ČRNUČE" }] } };
+  render(<ValueCheck building={{ ko: 1734, st: "1710" }} transactionId={14} municipalityId={133} cutoff="2026-06-30" municipalities={[...municipalities]}
+    onBuilding={() => undefined} onTransaction={() => undefined} onComparables={onComparables} onHighlight={onHighlight}/>);
+  await screen.findByRole("heading", { level: 2, name: /^Ocena danes/ });
+  await waitFor(() => expect(onComparables).toHaveBeenLastCalledWith({ comparables: [expect.objectContaining({ transactionId: 501 }), expect.objectContaining({ transactionId: 502 })], center: [14.51, 46.09], radiusMeters: 10000, trusted: true }));
+  expect(screen.getByText("Primerljive prodaje na zemljevidu (2)")).toBeInTheDocument();
+  const link = screen.getByRole("link", { name: /Dunajska cesta 223/i });
+  expect(link).toHaveAttribute("href", expect.stringMatching(/posel=501/));
+  const row = link.closest("li")!;
+  expect(row).toHaveTextContent(/3\.?100\s€\/m² · 58\sm² · 640\sm$/);
+  expect(screen.getByRole("link", { name: /Črnuče 7/i }).closest("li")).toHaveTextContent(/1,8\skm$/);
+  fireEvent.mouseEnter(row);
+  expect(onHighlight).toHaveBeenLastCalledWith(501);
+  fireEvent.mouseLeave(row);
+  expect(onHighlight).toHaveBeenLastCalledWith(null);
+});
+
+it("opens a comparable through the same path as its dot on the map", async () => {
+  const onComparable = vi.fn();
+  const comparable = { transactionId: 501, contractDate: "2026-03-02", amountPerSqm: 3100, area: 58, distanceMeters: 640, longitude: 14.52, latitude: 46.1, settlement: "LJUBLJANA", street: "DUNAJSKA CESTA", houseNumber: "223", cadastralMunicipalityCode: 1734, buildingNumber: "1711" };
+  context = { ...context, currentMarketEstimate: { ...market, comparables: [comparable] } };
+  render(<ValueCheck building={{ ko: 1734, st: "1710" }} transactionId={14} municipalityId={133} cutoff="2026-06-30" municipalities={[...municipalities]}
+    onBuilding={() => undefined} onTransaction={() => undefined} onComparable={onComparable}/>);
+  await screen.findByRole("heading", { level: 2, name: /^Ocena danes/ });
+  const link = await screen.findByRole("link", { name: /Dunajska cesta 223/i });
+  fireEvent.click(link);
+  expect(onComparable).toHaveBeenCalledWith(expect.objectContaining({ transactionId: 501 }));
+  expect(link).toHaveAttribute("href", expect.stringMatching(/posel=501/));  // a middle click or a copied link still works
+});
+
+it("still shows the similar sales when the estimate does not rest on them, worded so", async () => {
+  const onComparables = vi.fn();
+  const comparable = { transactionId: 501, contractDate: "2026-03-02", amountPerSqm: 3100, area: 58, distanceMeters: 12640, longitude: 14.52, latitude: 46.1, settlement: "LJUBLJANA", street: "DUNAJSKA CESTA", houseNumber: "223" };
+  context = { ...context, currentMarketEstimate: { ...market, confidence: "very_low", comparableCount: 7, maximumRadiusMeters: 20000, comparables: [comparable] } };
+  render(<ValueCheck building={{ ko: 1734, st: "1710" }} transactionId={14} municipalityId={133} cutoff="2026-06-30" municipalities={[...municipalities]}
+    onBuilding={() => undefined} onTransaction={() => undefined} onComparables={onComparables} onHighlight={() => undefined}/>);
+  await screen.findByRole("heading", { level: 2, name: /^Ocena danes/ });
+  await waitFor(() => expect(onComparables).toHaveBeenLastCalledWith({ comparables: [expect.objectContaining({ transactionId: 501 })], center: [14.51, 46.09], radiusMeters: 20000, trusted: false }));
+  expect(screen.getByText("Podobne prodaje v okolici na zemljevidu (1)")).toBeInTheDocument();
+  expect(screen.getByText(/Ocena ne temelji na njih/)).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /Dunajska cesta 223/i }).closest("li")).toHaveTextContent(/12,6\skm$/);
 });
 
 it("falls back to the municipal band when similar sales are not trusted, and never to the national index", async () => {

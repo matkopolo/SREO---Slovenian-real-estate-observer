@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { PeriodWindows, PropertyGroup } from "../api";
-import { date, decimal1, integer } from "../format";
+import { date, decimal1, integer, upTo1 } from "../format";
 import { Name, t, tx } from "../i18n";
 import { METRICS, type MetricId } from "../metrics";
 import { NOUNS, type Band } from "../nouns";
@@ -35,6 +35,33 @@ function Ramp({ ramp }: { ramp: RampSpec }) {
  * (regions, municipalities, districts and settlements, or the buildings at street zoom) and a "?" with the one-line
  * explanation. The map keeps its full height; the map's own controls move up by the strip's height (--strip).
  */
+/** Reports the strip's height to the map column (--strip), so the map's own controls (zoom, credit) sit above it. */
+function useStripHeight() {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const strip = ref.current;
+    if (!strip || typeof ResizeObserver === "undefined") return;
+    const column = strip.parentElement;
+    const observer = new ResizeObserver(() => column?.style.setProperty("--strip", `${strip.offsetHeight}px`));
+    observer.observe(strip);
+    return () => { observer.disconnect(); column?.style.removeProperty("--strip"); };
+  }, []);
+  return ref;
+}
+
+/** The value check's map: the similar sales as dots, the property's ring and the dashed search circle. */
+export function ComparablesLegend({ count, radiusMeters, trusted }: { count: number; radiusMeters: number; trusted: boolean }) {
+  const ref = useStripHeight();
+  return <div className="map-strip comparables-strip" ref={ref} role="note">
+    <ul className="ramp-keys">
+      <li><i className="key-dot"/>{trusted ? t("primerljive prodaje ({count})", { count }) : t("podobne prodaje v okolici ({count})", { count })}</li>
+      <li><i className="key-ring"/>{t("vaša nepremičnina")}</li>
+      <li><svg className="key-dash" width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18" y2="3" stroke="#d9480f" strokeWidth="2" strokeDasharray="4 3"/></svg>{t("iskalni polmer {distance} km", { distance: upTo1(radiusMeters / 1000) })}</li>
+    </ul>
+    <p className="strip-note">{trusted ? t("Pike so prodaje, na katerih temelji ocena. Kliknite piko za podrobnosti prodaje.") : t("Pike so podobne prodaje v okolici; kliknite piko za podrobnosti prodaje.")}</p>
+  </div>;
+}
+
 export function MapLegend({ layer, layers, group, band, windows, level, street, land, buildingSpan, scales, pooled, fineShown, sub, onLayer }: {
   layer: MetricId; layers: MetricId[]; group: PropertyGroup; band?: Band; windows?: PeriodWindows; level: MapLevel;
   /** Street zoom: buildings (or land sales) instead of areas. */
@@ -52,15 +79,7 @@ export function MapLegend({ layer, layers, group, band, windows, level, street, 
   const rent = layer === "rentPrice";
   const [help, setHelp] = useState(false);
   const helpId = useId();
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const strip = ref.current;
-    if (!strip || typeof ResizeObserver === "undefined") return;
-    const column = strip.parentElement;
-    const observer = new ResizeObserver(() => column?.style.setProperty("--strip", `${strip.offsetHeight}px`));
-    observer.observe(strip);
-    return () => { observer.disconnect(); column?.style.removeProperty("--strip"); };
-  }, []);
+  const ref = useStripHeight();
 
   const span = windows && (rent ? windows.rents : windows.sales).current;
   const shown = street ? (land ? t("Prikaz: prodana zemljišča ({period})", { period: buildingSpan }) : rent ? t("Prikaz: stavbe s najemi ({period})", { period: buildingSpan }) : t("Prikaz: stavbe s prodajami ({period})", { period: buildingSpan }))

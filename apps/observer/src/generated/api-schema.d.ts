@@ -1834,6 +1834,28 @@ export interface components {
             confidence: "moderate" | "low" | "very_low";
             warnings: string[];
             methodologyVersion: string;
+            /** @description The agreements the estimate rests on, nearest first, with their place on the map. */
+            comparables: components["schemas"]["MarketComparable"][];
+            /** @description The subject's position (WGS84) */
+            subjectLongitude: number;
+            subjectLatitude: number;
+        };
+        MarketComparable: {
+            /** Format: int64 */
+            transactionId: number;
+            /** Format: date */
+            contractDate: string;
+            amountPerSqm: number;
+            area: number;
+            distanceMeters: number;
+            constructionYear?: number | null;
+            longitude: number;
+            latitude: number;
+            settlement?: string | null;
+            street?: string | null;
+            houseNumber?: string | null;
+            cadastralMunicipalityCode?: number | null;
+            buildingNumber?: string | null;
         };
         ErrorResponse: {
             error: {

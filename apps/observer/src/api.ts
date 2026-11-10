@@ -17,6 +17,8 @@ export type MarketIndex = Schemas["MarketIndex"];
 export type BuildingStatistics = Schemas["BuildingStatistics"];
 export type SaleTransaction = Schemas["SaleTransactionDetail"];
 export type RentalTransaction = Schemas["RentalTransactionDetail"];
+/** One agreement behind the current-market estimate, with its place on the map. */
+export type MarketComparable = Schemas["MarketComparable"];
 export type TransactionContext = Schemas["TransactionContext"];
 export type PropertyHistory = Schemas["PropertyHistory"];
 export type Valuation = Schemas["ValuationPrediction"];

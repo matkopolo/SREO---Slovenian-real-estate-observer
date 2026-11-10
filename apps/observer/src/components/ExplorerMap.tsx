@@ -8,6 +8,7 @@ import type { FeatureCollection, Geometry } from "geojson";
 import type { Bbox, MunicipalityShape } from "../api";
 import { t } from "../i18n";
 import { WITHHELD } from "../metrics";
+import { circlePolygon } from "./map-geometry";
 import { AGREEMENT_ZOOM, BUILDING_ZOOM } from "./map-zoom";
 
 /** Street basemap (OpenFreeMap "liberty", OpenStreetMap data); area colours fade as the user zooms into streets. */
@@ -18,6 +19,11 @@ const SLOVENIA: LngLatBoundsLike = [[13.3, 45.4], [16.65, 46.9]];
 export interface AreaPaint { color: string; name: string; value: string; label: string; pooled?: boolean }
 export interface MapBuildingPoint { key: string; lon: number; lat: number; color: string; radius: number; label: string }
 export interface MapAgreementPoint { id: number; lon: number; lat: number; color: string; label: string }
+/** One sale a value estimate rests on. */
+export interface MapComparablePoint { id: number; lon: number; lat: number; label: string }
+/** The circle the comparables were searched in: around the subject, in metres. */
+export interface MapRadius { center: [number, number]; meters: number }
+const NO_COMPARABLES: MapComparablePoint[] = [];
 export interface MapView { bbox: Bbox; zoom: number; /** Moved by the user (drag, wheel, buttons), not by a fit to the selected area. */ byUser?: boolean }
 
 type Collection = FeatureCollection<Geometry, Record<string, unknown>>;
@@ -38,7 +44,7 @@ const MUTED_OPACITY: maplibregl.ExpressionSpecification = ["interpolate", ["line
  * measure, buildings from street zoom and single agreements at the closest zoom. Clicks drill down.
  */
 export default function ExplorerMap({ municipalities, regions, paint, subAreas, subPaint, buildings, agreements, selected, selectedSub = null, focus, marker = null,
-  onArea, onSubArea, onBuilding, onAgreement, onView }: {
+  comparables = NO_COMPARABLES, highlight = null, radius = null, onArea, onSubArea, onBuilding, onAgreement, onComparable, onView }: {
   municipalities: MunicipalityShape[]; regions: MunicipalityShape[]; paint: Map<number, AreaPaint>; // i18n-ignore: TypeScript generics, not JSX text
   subAreas: MunicipalityShape[]; subPaint: Map<number, AreaPaint>;
   buildings: MapBuildingPoint[]; agreements: MapAgreementPoint[];
@@ -47,7 +53,12 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
   selectedSub?: number | null;
   /** The opened building or sale: drawn as a ring so it stays findable among the other points. */
   marker?: [number, number] | null;
+  /** The sales a value estimate rests on, as dots; one is highlighted from the panel's list. */
+  comparables?: MapComparablePoint[]; highlight?: number | null;
+  /** The circle those sales were searched in. */
+  radius?: MapRadius | null;
   onArea: (id: number) => void; onSubArea: (id: number) => void; onBuilding: (key: string) => void; onAgreement: (id: number) => void;
+  onComparable?: (id: number) => void;
   onView: (view: MapView) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
@@ -56,8 +67,8 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
   // The map's listeners are registered once; they call the latest callbacks.
-  const handlers = useRef({ onArea, onSubArea, onBuilding, onAgreement, onView });
-  useLayoutEffect(() => { handlers.current = { onArea, onSubArea, onBuilding, onAgreement, onView }; });
+  const handlers = useRef({ onArea, onSubArea, onBuilding, onAgreement, onComparable, onView });
+  useLayoutEffect(() => { handlers.current = { onArea, onSubArea, onBuilding, onAgreement, onComparable, onView }; });
 
   useEffect(() => {
     if (!host.current || map.current) return;
@@ -92,7 +103,7 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
           }
         }
         const empty = collection([]);
-        for (const id of ["areas", "regions", "sub", "buildings", "agreements", "marker"]) instance.addSource(id, { type: "geojson", data: empty, promoteId: "id" });
+        for (const id of ["areas", "regions", "sub", "buildings", "agreements", "radius", "comparables", "marker"]) instance.addSource(id, { type: "geojson", data: empty, promoteId: "id" });
         // Area fills fade as the user zooms into streets, so the basemap takes over; pooled (3 or 5 years) values are drawn lighter.
         instance.addLayer({ id: "areas-fill", type: "fill", source: "areas", paint: { "fill-color": AREA_COLOR, "fill-opacity": AREA_OPACITY } });
         instance.addLayer({ id: "areas-line", type: "line", source: "areas", paint: {
@@ -115,6 +126,13 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
         // Single sales: loaded only from AGREEMENT_ZOOM for buildings, from street zoom for land (no buildings).
         instance.addLayer({ id: "agreements", type: "circle", source: "agreements", minzoom: BUILDING_ZOOM, paint: {
           "circle-color": ["get", "color"], "circle-radius": 7, "circle-stroke-color": "#0f2a33", "circle-stroke-width": 1.5 } });
+        // A value estimate's evidence: the search circle and the comparables, one highlighted from the panel's list.
+        instance.addLayer({ id: "radius-line", type: "line", source: "radius", paint: { "line-color": "#d9480f", "line-width": 2.2, "line-dasharray": [2, 1.5], "line-opacity": 0.95 } });
+        instance.addLayer({ id: "comparables", type: "circle", source: "comparables", paint: {
+          "circle-color": "#0f6d61", "circle-radius": 6, "circle-stroke-color": "#ffffff", "circle-stroke-width": 1.5, "circle-opacity": 0.92 } });
+        // The highlighted comparable is drawn again on top, so a neighbouring dot never covers it.
+        instance.addLayer({ id: "comparables-highlight", type: "circle", source: "comparables", filter: ["==", ["get", "id"], -1], paint: {
+          "circle-color": "#0f6d61", "circle-radius": 9, "circle-stroke-color": "#ffffff", "circle-stroke-width": 4 } });
         instance.addLayer({ id: "marker-halo", type: "circle", source: "marker", paint: {
           "circle-radius": 15, "circle-color": "rgba(0,0,0,0)", "circle-stroke-color": "#ffffff", "circle-stroke-width": 5 } });
         instance.addLayer({ id: "marker-ring", type: "circle", source: "marker", paint: {
@@ -123,16 +141,16 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
         // One rule for hover and click: the nearest dot within 14 px wins (agreement over building), else the area under the pointer.
         const pick = (point: { x: number; y: number }) => {
           const box: [[number, number], [number, number]] = [[point.x - 14, point.y - 14], [point.x + 14, point.y + 14]];
-          const dots = instance.queryRenderedFeatures(box, { layers: ["agreements", "buildings"].filter((id) => instance.getLayer(id)) });
+          const dots = instance.queryRenderedFeatures(box, { layers: ["comparables", "agreements", "buildings"].filter((id) => instance.getLayer(id)) });
           const distance = (feature: MapGeoJSONFeature) => {
             const [lon, lat] = (feature.geometry as unknown as { coordinates: [number, number] }).coordinates;
             const projected = instance.project([lon, lat]);
-            return (projected.x - point.x) ** 2 + (projected.y - point.y) ** 2 - (feature.layer.id === "agreements" ? 50 : 0);
+            return (projected.x - point.x) ** 2 + (projected.y - point.y) ** 2 - (feature.layer.id === "agreements" || feature.layer.id === "comparables" ? 50 : 0);
           };
           return [...dots].sort((a, b) => distance(a) - distance(b))[0]
             ?? instance.queryRenderedFeatures([point.x, point.y], { layers: ["sub-fill", "areas-fill"].filter((id) => instance.getLayer(id)) })[0];
         };
-        const SOURCES: Record<string, string> = { "areas-fill": "areas", "sub-fill": "sub", buildings: "buildings", agreements: "agreements" };
+        const SOURCES: Record<string, string> = { "areas-fill": "areas", "sub-fill": "sub", buildings: "buildings", agreements: "agreements", comparables: "comparables" };
         let hovered: { source: string; id: string | number } | undefined;
         const clearHover = () => {
           if (hovered) instance.setFeatureState({ source: hovered.source, id: hovered.id }, { hover: false });
@@ -155,7 +173,8 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
           const hit = pick(event.point);
           if (!hit) return;
           const id = hit.properties?.id;
-          if (hit.layer.id === "agreements") handlers.current.onAgreement(Number(id));
+          if (hit.layer.id === "comparables") handlers.current.onComparable?.(Number(id));
+          else if (hit.layer.id === "agreements") handlers.current.onAgreement(Number(id));
           else if (hit.layer.id === "buildings") handlers.current.onBuilding(String(id));
           else if (hit.layer.id === "sub-fill") handlers.current.onSubArea(Number(id));
           else handlers.current.onArea(Number(id));
@@ -224,6 +243,25 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
     (instance.getSource("agreements") as GeoJSONSource).setData(collection(agreements.map((item) => ({ type: "Feature",
       geometry: { type: "Point", coordinates: [item.lon, item.lat] }, properties: { id: item.id, color: item.color, label: item.label } }))));
   }, [agreements, ready]);
+
+  useEffect(() => {
+    const instance = map.current;
+    if (!ready || !instance) return;
+    (instance.getSource("comparables") as GeoJSONSource).setData(collection(comparables.map((item) => ({ type: "Feature",
+      geometry: { type: "Point", coordinates: [item.lon, item.lat] }, properties: { id: item.id, label: item.label } }))));
+  }, [comparables, ready]);
+
+  useEffect(() => {
+    const instance = map.current;
+    if (!ready || !instance) return;
+    instance.setFilter("comparables-highlight", ["==", ["get", "id"], highlight ?? -1]);
+  }, [highlight, ready]);
+
+  useEffect(() => {
+    const instance = map.current;
+    if (!ready || !instance) return;
+    (instance.getSource("radius") as GeoJSONSource).setData(collection(radius ? [{ type: "Feature", geometry: circlePolygon(radius.center, radius.meters), properties: { id: 1 } }] : []));
+  }, [radius, ready]);
 
   useEffect(() => {
     const instance = map.current;

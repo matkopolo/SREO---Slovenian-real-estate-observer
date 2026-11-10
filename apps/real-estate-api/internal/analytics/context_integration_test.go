@@ -116,6 +116,30 @@ func TestCurrentMarketCandidatesUseCompositionAndExcludeNearDuplicates(t *testin
 			t.Fatalf("composition mismatch: got %q want %q", candidate.packageSignature, signature)
 		}
 	}
+	// The chosen comparables come back in the same order, each with a WGS84 position inside Slovenia.
+	comparables, subjectAt, err := loadMarketComparables(ctx, tx, currentMarketQuery{
+		subjectTable: "analytics.sale_facts", transactionKind: "sale", subjectID: subjectID,
+	}, candidates)
+	if err != nil {
+		t.Fatalf("load comparables: %v", err)
+	}
+	if subjectAt[0] < 13 || subjectAt[0] > 17 || subjectAt[1] < 45 || subjectAt[1] > 47 {
+		t.Fatalf("subject at %v is outside Slovenia", subjectAt)
+	}
+	if len(comparables) != len(candidates) {
+		t.Fatalf("comparables=%d want=%d", len(comparables), len(candidates))
+	}
+	for index, comparable := range comparables {
+		if comparable.TransactionID != candidates[index].transactionID {
+			t.Fatalf("comparable %d is %d, want %d", index, comparable.TransactionID, candidates[index].transactionID)
+		}
+		if comparable.Longitude < 13 || comparable.Longitude > 17 || comparable.Latitude < 45 || comparable.Latitude > 47 {
+			t.Fatalf("comparable %d at %f,%f is outside Slovenia", comparable.TransactionID, comparable.Longitude, comparable.Latitude)
+		}
+		if comparable.Area != 50 || comparable.ContractDate == "" || comparable.CadastralMunicipalityCode == nil {
+			t.Fatalf("comparable %d lacks its facts: %+v", comparable.TransactionID, comparable)
+		}
+	}
 	// Any composition adds the mismatched fixture (and any real sale nearby), never the
 	// subject or its near duplicate.
 	mixed := currentMarketTier(all, signature, false, time.Now().Year(), 1000)
