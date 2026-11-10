@@ -5,9 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
-	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/memo"
 )
 
 var ErrGeographyNotFound = errors.New("geography not found")
@@ -96,23 +93,7 @@ type OutlierRecord struct {
 	RuleVersion               string   `json:"ruleVersion"`
 }
 
-// StatisticsRepository answers every analytics query from the published fact tables.
-type StatisticsRepository struct {
-	db     database.Querier
-	now    func() time.Time
-	levels geographyLevels
-	// search is the in-memory address index of SearchBuildings, reloaded per release.
-	search *memo.Value[*releaseIndex]
-}
-
-// NewStatisticsRepository returns a repository reading through db (a pool, or a test transaction).
-func NewStatisticsRepository(db database.Querier) *StatisticsRepository {
-	r := &StatisticsRepository{db: db, now: time.Now, levels: geographyLevels{byID: map[int64]string{}}}
-	r.search = newAddressIndexCache(r)
-	return r
-}
-
-func (r *StatisticsRepository) Overview(ctx context.Context, filter StatisticsFilter) (Overview, error) {
+func (r *SaleStatisticsRepository) Overview(ctx context.Context, filter StatisticsFilter) (Overview, error) {
 	var args queryArgs
 	where, err := r.factFilter(ctx, "fact", filter, &args)
 	if err != nil {
@@ -155,7 +136,7 @@ func (r *StatisticsRepository) Overview(ctx context.Context, filter StatisticsFi
 	return result, nil
 }
 
-func (r *StatisticsRepository) TimeSeries(
+func (r *SaleStatisticsRepository) TimeSeries(
 	ctx context.Context,
 	filter StatisticsFilter,
 	interval string,
@@ -230,7 +211,7 @@ func applyPublicationPolicy(sampleSize int64, publishable *bool, reason **string
 	*reason = &value
 }
 
-func (r *StatisticsRepository) Outliers(
+func (r *SaleStatisticsRepository) Outliers(
 	ctx context.Context,
 	filter StatisticsFilter,
 	limit, offset int,
@@ -292,7 +273,7 @@ func (r *StatisticsRepository) Outliers(
 
 // MunicipalityMedians returns the representative median EUR/m2 of every municipality with
 // agreements matching the filter: one grouped scan of the facts, without geometry work.
-func (r *StatisticsRepository) MunicipalityMedians(ctx context.Context, filter StatisticsFilter) ([]GeographyMedian, error) {
+func (r *SaleStatisticsRepository) MunicipalityMedians(ctx context.Context, filter StatisticsFilter) ([]GeographyMedian, error) {
 	var args queryArgs
 	where, err := r.factFilter(ctx, "fact", filter, &args)
 	if err != nil {

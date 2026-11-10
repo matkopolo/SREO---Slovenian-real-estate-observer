@@ -40,14 +40,14 @@ type DistributionStore interface {
 	RentalDistribution(context.Context, StatisticsFilter, string, int) (Distribution, error)
 }
 
-func (r *StatisticsRepository) SaleDistribution(
+func (r *DistributionRepository) SaleDistribution(
 	ctx context.Context, filter StatisticsFilter, metric string, bins int,
 ) (Distribution, error) {
 	column := map[string]string{"price": "price", "pricePerSqm": "price_per_sqm"}[metric]
 	return r.distribution(ctx, filter, saleFactsTable(filter), column, metric, bins)
 }
 
-func (r *StatisticsRepository) RentalDistribution(
+func (r *DistributionRepository) RentalDistribution(
 	ctx context.Context, filter StatisticsFilter, metric string, bins int,
 ) (Distribution, error) {
 	column := map[string]string{
@@ -57,7 +57,7 @@ func (r *StatisticsRepository) RentalDistribution(
 	return r.distribution(ctx, filter, "analytics.rental_facts", column, metric, bins)
 }
 
-func (r *StatisticsRepository) distribution(
+func (r *DistributionRepository) distribution(
 	ctx context.Context, filter StatisticsFilter, table, column, metric string, bins int,
 ) (Distribution, error) {
 	var args queryArgs

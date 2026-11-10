@@ -84,7 +84,7 @@ type BuildingStore interface {
 	SearchBuildings(context.Context, string, int, BuildingFilter) (BuildingSearch, error)
 }
 
-func (r *StatisticsRepository) BuildingStatistics(
+func (r *BuildingRepository) BuildingStatistics(
 	ctx context.Context, cadastralCode int32, buildingNumber string,
 	filter BuildingFilter,
 ) (BuildingStatistics, error) {
@@ -196,7 +196,7 @@ func (r *StatisticsRepository) BuildingStatistics(
 	return result, rentalRows.Err()
 }
 
-func (r *StatisticsRepository) loadBuildingSummary(
+func (r *BuildingRepository) loadBuildingSummary(
 	ctx context.Context, table, amount, perSQM string, code int32,
 	number string, filter BuildingFilter, result *BuildingMarketSummary,
 ) error {
@@ -223,7 +223,7 @@ func (r *StatisticsRepository) loadBuildingSummary(
 	return nil
 }
 
-func (r *StatisticsRepository) loadBuildingHistory(
+func (r *BuildingRepository) loadBuildingHistory(
 	ctx context.Context, table, amount, perSQM string, code int32, number string,
 	filter BuildingFilter,
 ) ([]BuildingYearPoint, error) {

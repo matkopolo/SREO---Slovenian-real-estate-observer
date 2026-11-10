@@ -30,7 +30,7 @@ func TestStatisticsRepositoryIntegration(t *testing.T) {
 		t.Skip("sale facts are empty; synthetic refresh is covered by TestSaleFactsIntegration")
 	}
 
-	repository := NewStatisticsRepository(pool)
+	repository := newAllRepositories(pool)
 	from := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2023, 12, 31, 0, 0, 0, 0, time.UTC)
 	overview, err := repository.Overview(ctx, StatisticsFilter{
@@ -277,7 +277,7 @@ func TestGeographySummariesIntegration(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	defer pool.Close()
-	repository := NewStatisticsRepository(pool)
+	repository := newAllRepositories(pool)
 	var expected int
 	if err := pool.QueryRow(context.Background(), `
 		SELECT count(DISTINCT statistical_region_id)
@@ -388,7 +388,7 @@ func TestStrictLandPopulationIntegration(t *testing.T) {
 		t.Fatalf("all=%d strict=%d violations=%d", allLand, strictLand, violations)
 	}
 
-	repository := NewStatisticsRepository(pool)
+	repository := newAllRepositories(pool)
 	strictOverview, err := repository.Overview(
 		ctx, StatisticsFilter{PropertyGroup: "land"})
 	if err != nil {

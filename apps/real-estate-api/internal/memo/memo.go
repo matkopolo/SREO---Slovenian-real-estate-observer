@@ -40,6 +40,23 @@ type Value[T any] struct {
 
 	mu       sync.Mutex
 	inflight chan struct{}
+
+	hits, misses, loads, failures atomic.Uint64
+}
+
+// Stats count how a Value has been used since it was created.
+type Stats struct {
+	// Hits are Get calls answered at once with a loaded value (fresh or stale).
+	Hits uint64
+	// Misses are Get calls that had no loaded value: they waited for a load or got its error.
+	Misses uint64
+	// Loads and Failures count finished loads by outcome.
+	Loads, Failures uint64
+}
+
+// Stats returns the usage counters.
+func (v *Value[T]) Stats() Stats {
+	return Stats{Hits: v.hits.Load(), Misses: v.misses.Load(), Loads: v.loads.Load(), Failures: v.failures.Load()}
 }
 
 type state[T any] struct {
@@ -72,11 +89,13 @@ func (v *Value[T]) Get(ctx context.Context) (T, error) {
 	current := v.state.Load()
 	now := v.options.Now()
 	if current.ok {
+		v.hits.Add(1)
 		if v.options.TTL > 0 && now.Sub(current.loadedAt) >= v.options.TTL && v.mayRetry(current, now) {
 			v.start()
 		}
 		return current.value, nil
 	}
+	v.misses.Add(1)
 	if current.err != nil && !v.mayRetry(current, now) {
 		var zero T
 		return zero, current.err
@@ -138,11 +157,13 @@ func (v *Value[T]) run() {
 	value, err := v.safeLoad(ctx, previous)
 	now := v.options.Now()
 	if err != nil {
+		v.failures.Add(1)
 		next := *previous // keep the last good value
 		next.err, next.failedAt = err, now
 		v.state.Store(&next)
 		return
 	}
+	v.loads.Add(1)
 	v.state.Store(&state[T]{value: value, ok: true, loadedAt: now})
 }
 

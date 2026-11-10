@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/construction"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/economics"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/geography"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/metrics"
 )
 
 type fakeDatabase struct{ err error }
@@ -69,6 +69,15 @@ type fakeModels struct{ err error }
 type fakeReleases struct {
 	status analytics.DataStatus
 	err    error
+}
+
+type fakeActiveRelease struct {
+	id  string
+	err error
+}
+
+func (store fakeActiveRelease) ActiveReleaseID(context.Context) (string, error) {
+	return store.id, store.err
 }
 
 func (store fakeReleases) DataStatus(context.Context) (analytics.DataStatus, error) {
@@ -350,6 +359,8 @@ func testDependencies() Dependencies {
 		Anomalies:        fakeAnomalies{},
 		Models:           fakeModels{},
 		Releases:         fakeReleases{status: analytics.DataStatus{Status: "current"}},
+		ActiveRelease:    fakeActiveRelease{id: "release-1"},
+		Metrics:          metrics.NewRegistry(),
 		Maps:             fakeMaps{},
 		Economics:        fakeEconomics{},
 		Affordability:    fakeAffordability{},
@@ -381,5 +392,3 @@ func newTestHandler(databaseError error, store fakeGeographies) http.Handler {
 		d.Geographies = store
 	})
 }
-
-var errTestDatabase = errors.New("database unavailable")

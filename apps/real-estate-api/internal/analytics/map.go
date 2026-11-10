@@ -108,7 +108,7 @@ const geographyLabelPointExpression = `ST_Transform(
 	4326
 )`
 
-func (r *StatisticsRepository) GeographySummaries(
+func (r *MapRepository) GeographySummaries(
 	ctx context.Context,
 	filter StatisticsFilter,
 	bounds Bounds,
@@ -184,7 +184,7 @@ func (r *StatisticsRepository) GeographySummaries(
 	return items, rows.Err()
 }
 
-func (r *StatisticsRepository) Clusters(
+func (r *MapRepository) Clusters(
 	ctx context.Context,
 	filter StatisticsFilter,
 	bounds Bounds,
@@ -236,7 +236,7 @@ func (r *StatisticsRepository) Clusters(
 	return items, nil
 }
 
-func (r *StatisticsRepository) PropertyPoints(
+func (r *MapRepository) PropertyPoints(
 	ctx context.Context,
 	filter StatisticsFilter,
 	bounds Bounds,
@@ -285,7 +285,7 @@ func (r *StatisticsRepository) PropertyPoints(
 
 // BuildingSummaries groups sale (kind "sale") or rental (kind "rent") agreements by building inside
 // the bounds; the median uses representative agreements only. Busiest buildings come first.
-func (r *StatisticsRepository) BuildingSummaries(
+func (r *MapRepository) BuildingSummaries(
 	ctx context.Context, filter StatisticsFilter, bounds Bounds, kind string, limit int,
 ) ([]BuildingSummary, error) {
 	var args queryArgs

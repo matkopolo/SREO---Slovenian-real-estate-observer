@@ -16,6 +16,7 @@ import (
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/demography"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/economics"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/geography"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/metrics"
 )
 
 type databasePinger interface {
@@ -37,12 +38,17 @@ type Dependencies struct {
 	Anomalies     analytics.AnomalyStore
 	Models        analytics.ModelStore
 	Releases      analytics.ReleaseStore
+	// ActiveRelease names the active analytical release; the analytics ETags derive from it.
+	ActiveRelease analytics.ActiveReleaseStore
 	Maps          analytics.MapStore
 	Economics     economics.Store
 	Affordability affordability.Store
 	Construction  construction.Store
 	Demography    demography.Store
 	Recent        analytics.RecentStore
+	// Metrics receives the request metrics and is served at GET /metrics (outside /api/, so the
+	// frontend's proxy never exposes it).
+	Metrics *metrics.Registry
 	// RequestTimeout is each request's deadline; zero means none.
 	RequestTimeout   time.Duration
 	AllowedOrigins   []string
@@ -65,6 +71,7 @@ type server struct {
 	anomaliesStore     analytics.AnomalyStore
 	models             analytics.ModelStore
 	releases           analytics.ReleaseStore
+	activeRelease      analytics.ActiveReleaseStore
 	maps               analytics.MapStore
 	economics          economics.Store
 	affordabilityStore affordability.Store
@@ -75,6 +82,8 @@ type server struct {
 	applicationName    string
 	applicationBuild   string
 	now                func() time.Time
+	// instance identifies this build and process in release ETags.
+	instance string
 }
 
 // New returns the API handler. It fails when a dependency is missing, so handlers never
@@ -99,6 +108,7 @@ func New(dependencies Dependencies) (http.Handler, error) {
 		anomaliesStore:     dependencies.Anomalies,
 		models:             dependencies.Models,
 		releases:           dependencies.Releases,
+		activeRelease:      dependencies.ActiveRelease,
 		maps:               dependencies.Maps,
 		economics:          dependencies.Economics,
 		affordabilityStore: dependencies.Affordability,
@@ -109,8 +119,14 @@ func New(dependencies Dependencies) (http.Handler, error) {
 		applicationName:    dependencies.ApplicationName,
 		applicationBuild:   dependencies.ApplicationBuild,
 		now:                now,
+		instance:           digest([]byte(dependencies.ApplicationBuild + "|" + time.Now().UTC().Format(time.RFC3339Nano)))[:8],
 	}
-	return middleware(dependencies.Logger, dependencies.AllowedOrigins, dependencies.RequestTimeout, s.routes()), nil
+	api := instrument(newHTTPMetrics(dependencies.Metrics),
+		middleware(dependencies.Logger, dependencies.AllowedOrigins, dependencies.RequestTimeout, recordRoute(s.routes())))
+	root := http.NewServeMux()
+	root.Handle("GET /metrics", dependencies.Metrics)
+	root.Handle("/", api)
+	return root, nil
 }
 
 // validate reports every nil interface or pointer field of the dependencies.

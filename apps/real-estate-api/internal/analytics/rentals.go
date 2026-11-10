@@ -81,7 +81,7 @@ type RentalStatisticsStore interface {
 	RentalPropertyPoints(context.Context, StatisticsFilter, Bounds, int) ([]RentalPropertyPoint, error)
 }
 
-func (r *StatisticsRepository) RentalClusters(
+func (r *RentalStatisticsRepository) RentalClusters(
 	ctx context.Context, filter StatisticsFilter, bounds Bounds, gridSize float64,
 ) ([]Cluster, error) {
 	var args queryArgs
@@ -124,7 +124,7 @@ func (r *StatisticsRepository) RentalClusters(
 	return items, rows.Err()
 }
 
-func (r *StatisticsRepository) RentalPropertyPoints(
+func (r *RentalStatisticsRepository) RentalPropertyPoints(
 	ctx context.Context, filter StatisticsFilter, bounds Bounds, limit int,
 ) ([]RentalPropertyPoint, error) {
 	var args queryArgs
@@ -163,7 +163,7 @@ func (r *StatisticsRepository) RentalPropertyPoints(
 	return items, rows.Err()
 }
 
-func (r *StatisticsRepository) RentalOverview(
+func (r *RentalStatisticsRepository) RentalOverview(
 	ctx context.Context, filter StatisticsFilter,
 ) (RentalOverview, error) {
 	var args queryArgs
@@ -206,7 +206,7 @@ func (r *StatisticsRepository) RentalOverview(
 	return result, nil
 }
 
-func (r *StatisticsRepository) RentalTimeSeries(
+func (r *RentalStatisticsRepository) RentalTimeSeries(
 	ctx context.Context, filter StatisticsFilter, interval string,
 ) ([]RentalTimeSeriesPoint, error) {
 	var args queryArgs
@@ -275,7 +275,7 @@ func (r *StatisticsRepository) RentalTimeSeries(
 	return items, rows.Err()
 }
 
-func (r *StatisticsRepository) RentalOutliers(
+func (r *RentalStatisticsRepository) RentalOutliers(
 	ctx context.Context, filter StatisticsFilter, limit, offset int,
 ) ([]RentalOutlierRecord, int64, error) {
 	var args queryArgs

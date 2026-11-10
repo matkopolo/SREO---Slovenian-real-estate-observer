@@ -44,7 +44,7 @@ func TestDemographicsProfileStatuses(t *testing.T) {
 	if status != http.StatusOK || body["profile"].(map[string]any)["geography"].(map[string]any)["name"] != "Slovenija" {
 		t.Fatalf("national profile %d %v", status, body)
 	}
-	if len(body["sources"].([]any)) == 0 || body["releasesCaveat"] == "" {
+	if len(body["sources"].([]any)) == 0 || body["releasesCaveat"] == "" || body["releasesCaveatCode"] != "model_estimate_older_owners" {
 		t.Fatalf("sources and caveat must be present: %v", body)
 	}
 	if status, _ := getJSON(t, handler, "/api/v1/demographics?geographyId=0"); status != http.StatusBadRequest {

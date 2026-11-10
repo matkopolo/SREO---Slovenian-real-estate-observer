@@ -587,7 +587,7 @@ type releaseIndex struct {
 // active release once a minute and rebuilds the index (about 5 s) only when a new release is
 // published; searches keep using the previous index meanwhile. The build runs detached from
 // any request, so a cancelled typeahead request never cancels or restarts it.
-func newAddressIndexCache(r *StatisticsRepository) *memo.Value[*releaseIndex] {
+func newAddressIndexCache(r *BuildingRepository) *memo.Value[*releaseIndex] {
 	return memo.New(func(ctx context.Context, previous *releaseIndex, ok bool) (*releaseIndex, error) {
 		var releaseID string
 		if err := r.db.QueryRow(ctx, `
@@ -606,7 +606,7 @@ func newAddressIndexCache(r *StatisticsRepository) *memo.Value[*releaseIndex] {
 	}, memo.Options{TTL: time.Minute, Timeout: 2 * time.Minute, RetryAfter: 30 * time.Second})
 }
 
-func (r *StatisticsRepository) addressIndex(ctx context.Context) (*addressIndex, error) {
+func (r *BuildingRepository) addressIndex(ctx context.Context) (*addressIndex, error) {
 	current, err := r.search.Get(ctx)
 	if err != nil {
 		return nil, err
@@ -614,8 +614,11 @@ func (r *StatisticsRepository) addressIndex(ctx context.Context) (*addressIndex,
 	return current.index, nil
 }
 
+// SearchIndexCacheStats reports the use of the in-memory address index.
+func (r *BuildingRepository) SearchIndexCacheStats() memo.Stats { return r.search.Stats() }
+
 // WarmSearchIndex loads the address index ahead of the first search, waiting up to ctx.
-func (r *StatisticsRepository) WarmSearchIndex(ctx context.Context) error {
+func (r *BuildingRepository) WarmSearchIndex(ctx context.Context) error {
 	return r.search.Warm(ctx)
 }
 
@@ -741,7 +744,7 @@ func optionalText(value string) *string {
 // SearchBuildings finds buildings by address (diacritics-insensitive, "c."/"ul." and "15a"/"15 a"
 // tolerant), falls back to the nearest house numbers of the street, and summarises named streets.
 // Only buildings with a recorded sale or rental are known: there is no address register in the database.
-func (r *StatisticsRepository) SearchBuildings(
+func (r *BuildingRepository) SearchBuildings(
 	ctx context.Context, search string, limit int, filter BuildingFilter,
 ) (BuildingSearch, error) {
 	index, err := r.addressIndex(ctx)
@@ -816,7 +819,7 @@ func (r *StatisticsRepository) SearchBuildings(
 	return result, nil
 }
 
-func (r *StatisticsRepository) buildingSearchCounts(
+func (r *BuildingRepository) buildingSearchCounts(
 	ctx context.Context, codes []int32, numbers []string, filter BuildingFilter,
 ) (map[buildingKey]BuildingSearchResult, error) {
 	rows, err := r.db.Query(ctx, `

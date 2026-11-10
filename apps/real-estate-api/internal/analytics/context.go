@@ -142,7 +142,7 @@ type contextSubject struct {
 	packageSignature string
 }
 
-func (r *StatisticsRepository) TransactionContext(
+func (r *TransactionRepository) TransactionContext(
 	ctx context.Context, kind string, id int64,
 ) (TransactionContext, error) {
 	factTable, amountColumn := "analytics.sale_facts", "price_per_sqm"
@@ -302,7 +302,7 @@ func (r *StatisticsRepository) TransactionContext(
 	}
 	result.CurrentMarket = currentMarket
 
-	valuation, valuationErr := r.ValuationPrediction(ctx, kind, id)
+	valuation, valuationErr := loadValuationPrediction(ctx, r.db, kind, id)
 	if valuationErr == nil {
 		result.Valuation = &ContextValuation{
 			PredictedAmountPerSQM: valuation.PredictedAmountPerSQM,

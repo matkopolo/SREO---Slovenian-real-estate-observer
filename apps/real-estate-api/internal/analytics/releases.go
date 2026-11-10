@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/memo"
 )
 
 // ReleaseSummary is the public view of one analytical release. The pipeline's failure_message
@@ -33,7 +35,37 @@ type ReleaseStore interface {
 	DataStatus(context.Context) (DataStatus, error)
 }
 
-func (r *StatisticsRepository) DataStatus(ctx context.Context) (DataStatus, error) {
+// ActiveReleaseStore names the published release that the analytics endpoints answer from.
+// The HTTP layer derives ETags from it.
+type ActiveReleaseStore interface {
+	// ActiveReleaseID returns the active release id, or "" before the first publication. It may
+	// lag a new publication by a few seconds.
+	ActiveReleaseID(context.Context) (string, error)
+}
+
+// activeReleaseTTL bounds how long a new publication can go unnoticed by ActiveReleaseID.
+const activeReleaseTTL = 10 * time.Second
+
+func newActiveReleaseCache(r *ReleaseRepository) *memo.Value[string] {
+	return memo.New(func(ctx context.Context, _ string, _ bool) (string, error) {
+		var id string
+		if err := r.db.QueryRow(ctx, `
+			SELECT coalesce((SELECT active_release_id::text FROM analytics.analytical_publication LIMIT 1), '')`,
+		).Scan(&id); err != nil {
+			return "", fmt.Errorf("load active release: %w", err)
+		}
+		return id, nil
+	}, memo.Options{TTL: activeReleaseTTL, Timeout: 5 * time.Second, RetryAfter: 5 * time.Second})
+}
+
+func (r *ReleaseRepository) ActiveReleaseID(ctx context.Context) (string, error) {
+	return r.active.Get(ctx)
+}
+
+// ActiveReleaseCacheStats reports the use of the in-memory active release id.
+func (r *ReleaseRepository) ActiveReleaseCacheStats() memo.Stats { return r.active.Stats() }
+
+func (r *ReleaseRepository) DataStatus(ctx context.Context) (DataStatus, error) {
 	const query = `
 		SELECT release.id::text,release.status,release.stage,
 		       release.source_sale_through,release.source_rent_through,

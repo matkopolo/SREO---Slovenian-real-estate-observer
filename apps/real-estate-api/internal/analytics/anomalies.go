@@ -43,7 +43,7 @@ type AnomalyStore interface {
 	AnomalySummary(context.Context, string) (AnomalySummary, error)
 }
 
-func (r *StatisticsRepository) Anomalies(
+func (r *ValuationRepository) Anomalies(
 	ctx context.Context, filter AnomalyFilter, limit, offset int,
 ) ([]AnomalySignal, int64, error) {
 	rows, err := r.db.Query(ctx, `
@@ -83,7 +83,7 @@ func (r *StatisticsRepository) Anomalies(
 	return items, total, rows.Err()
 }
 
-func (r *StatisticsRepository) AnomalySummary(
+func (r *ValuationRepository) AnomalySummary(
 	ctx context.Context, transactionKind string,
 ) (AnomalySummary, error) {
 	var result AnomalySummary

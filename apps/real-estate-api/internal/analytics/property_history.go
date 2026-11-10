@@ -71,7 +71,7 @@ type HistoryStore interface {
 	ResaleSummary(context.Context, StatisticsFilter) (ResaleSummary, error)
 }
 
-func (r *StatisticsRepository) PropertyHistory(ctx context.Context, id int64) (PropertyHistory, error) {
+func (r *TransactionRepository) PropertyHistory(ctx context.Context, id int64) (PropertyHistory, error) {
 	tx, err := database.BeginReadOnly(ctx, r.db, pgx.RepeatableRead)
 	if err != nil {
 		return PropertyHistory{}, err
@@ -167,7 +167,7 @@ func loadPropertyHistory(ctx context.Context, tx database.Querier, id int64) (Pr
 	return result, nil
 }
 
-func (r *StatisticsRepository) ResaleSummary(ctx context.Context, filter StatisticsFilter) (ResaleSummary, error) {
+func (r *TransactionRepository) ResaleSummary(ctx context.Context, filter StatisticsFilter) (ResaleSummary, error) {
 	var args queryArgs
 	where, err := r.factFilter(ctx, "pair", filter, &args)
 	if err != nil {

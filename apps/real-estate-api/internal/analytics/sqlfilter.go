@@ -79,7 +79,7 @@ func (a *queryArgs) add(value any) string {
 // factFilter renders the common request filter (contract dates, property group, geography,
 // area) as AND-ed conditions on a fact table aliased alias, appending its arguments to args.
 // Every fact table (sale_facts*, rental_facts, property_resale_pairs) has these columns.
-func (r *StatisticsRepository) factFilter(
+func (r *queries) factFilter(
 	ctx context.Context, alias string, filter StatisticsFilter, args *queryArgs,
 ) (string, error) {
 	column := func(name string) string { return alias + "." + name }
@@ -125,7 +125,7 @@ type geographyLevels struct {
 	byID map[int64]string
 }
 
-func (r *StatisticsRepository) geographyLevel(ctx context.Context, id int64) (string, error) {
+func (r *queries) geographyLevel(ctx context.Context, id int64) (string, error) {
 	r.levels.mu.RLock()
 	level, ok := r.levels.byID[id]
 	r.levels.mu.RUnlock()

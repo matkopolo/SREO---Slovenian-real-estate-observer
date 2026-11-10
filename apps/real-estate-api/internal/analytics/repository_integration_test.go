@@ -15,10 +15,9 @@ import (
 // The fixture below lives in a rolled-back transaction: a municipality and a settlement of its
 // own (so geography filters isolate it from any real data), two buildings with five sales and
 // three rentals. The repository reads through the transaction as the API role.
-const (
-	fixtureBase          int64 = 9_990_000_000_000
-	fixtureCadastralCode       = 99901
-)
+const fixtureBase int64 = 9_990_000_000_000
+
+const fixtureCadastralCode = 99901
 
 type repositoryFixture struct {
 	tx             pgx.Tx
@@ -141,7 +140,7 @@ func (fixture *repositoryFixture) asAPI(t *testing.T, ctx context.Context) {
 func TestRecentTransactionsIntegration(t *testing.T) {
 	ctx, fixture := newRepositoryFixture(t)
 	fixture.asAPI(t, ctx)
-	repository := NewStatisticsRepository(fixture.tx)
+	repository := newAllRepositories(fixture.tx)
 	filter := StatisticsFilter{GeographyID: &fixture.municipalityID}
 	transactionIDs := func(items []RecentTransaction) []int64 {
 		ids := make([]int64, len(items))
@@ -198,7 +197,7 @@ func TestRecentTransactionsIntegration(t *testing.T) {
 func TestBuildingSummariesIntegration(t *testing.T) {
 	ctx, fixture := newRepositoryFixture(t)
 	fixture.asAPI(t, ctx)
-	repository := NewStatisticsRepository(fixture.tx)
+	repository := newAllRepositories(fixture.tx)
 	bounds := Bounds{West: 15.50, South: 45.50, East: 15.52, North: 45.52}
 	filter := StatisticsFilter{GeographyID: &fixture.municipalityID}
 	items, err := repository.BuildingSummaries(ctx, filter, bounds, "sale", 10)
@@ -231,7 +230,7 @@ func TestBuildingSummariesIntegration(t *testing.T) {
 func TestMunicipalityMediansIntegration(t *testing.T) {
 	ctx, fixture := newRepositoryFixture(t)
 	fixture.asAPI(t, ctx)
-	repository := NewStatisticsRepository(fixture.tx)
+	repository := newAllRepositories(fixture.tx)
 	from, to := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC)
 	medians, err := repository.MunicipalityMedians(ctx, StatisticsFilter{FromDate: &from, ToDate: &to, PropertyGroup: "apartment"})
 	if err != nil {
@@ -287,7 +286,7 @@ func TestDataStatusIntegration(t *testing.T) {
 		VALUES (true,'00000000-0000-4000-8000-000000000001',NULL)
 		ON CONFLICT (singleton) DO UPDATE SET active_release_id=EXCLUDED.active_release_id,pending_release_id=NULL`)
 	fixture.asAPI(t, ctx)
-	repository := NewStatisticsRepository(fixture.tx)
+	repository := newAllRepositories(fixture.tx)
 	status, err := repository.DataStatus(ctx)
 	if err != nil {
 		t.Fatal(err)

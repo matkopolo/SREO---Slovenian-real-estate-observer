@@ -45,7 +45,7 @@ type RecentStore interface {
 // matching the filter. The total is a separate count with the same filter: a window count over
 // the page query makes PostgreSQL materialise every matching row before the LIMIT, while the
 // page alone can stop early on the contract-date indexes.
-func (r *StatisticsRepository) RecentTransactions(
+func (r *TransactionRepository) RecentTransactions(
 	ctx context.Context, kind string, filter StatisticsFilter, page RecentPage,
 ) ([]RecentTransaction, int, error) {
 	table, amount, perSQM, parts := saleFactsTable(filter), "price", "price_per_sqm", "building_parts"
@@ -133,7 +133,7 @@ func (r *StatisticsRepository) RecentTransactions(
 	return items, count.total, nil
 }
 
-func (r *StatisticsRepository) recentPage(ctx context.Context, query string, args []any, limit int) ([]RecentTransaction, error) {
+func (r *TransactionRepository) recentPage(ctx context.Context, query string, args []any, limit int) ([]RecentTransaction, error) {
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("recent transactions: %w", err)

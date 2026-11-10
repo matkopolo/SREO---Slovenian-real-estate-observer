@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
 )
 
 var ErrPredictionNotFound = errors.New("valuation prediction not found")
@@ -64,7 +65,7 @@ type ModelStore interface {
 	ValuationPrediction(context.Context, string, int64) (ValuationPrediction, error)
 }
 
-func (r *StatisticsRepository) MarketIndices(
+func (r *ValuationRepository) MarketIndices(
 	ctx context.Context, filter MarketIndexFilter,
 ) ([]MarketIndexPoint, error) {
 	rows, err := r.db.Query(ctx, `
@@ -108,8 +109,15 @@ func (r *StatisticsRepository) MarketIndices(
 	return items, rows.Err()
 }
 
-func (r *StatisticsRepository) ValuationPrediction(
+func (r *ValuationRepository) ValuationPrediction(
 	ctx context.Context, kind string, id int64,
+) (ValuationPrediction, error) {
+	return loadValuationPrediction(ctx, r.db, kind, id)
+}
+
+// loadValuationPrediction is shared with TransactionContext, which embeds the prediction.
+func loadValuationPrediction(
+	ctx context.Context, db database.Querier, kind string, id int64,
 ) (ValuationPrediction, error) {
 	factTable := map[string]string{
 		"sale": "analytics.sale_facts",
@@ -142,7 +150,7 @@ func (r *StatisticsRepository) ValuationPrediction(
 		factTable)
 	var result ValuationPrediction
 	var medianAPE *float64
-	err := r.db.QueryRow(ctx, query, kind, id).Scan(
+	err := db.QueryRow(ctx, query, kind, id).Scan(
 		&result.TransactionKind, &result.TransactionID, &result.PropertyGroup,
 		&result.Area, &result.ActualAmountPerSQM,
 		&result.PredictedAmountPerSQM, &result.LowerAmountPerSQM,

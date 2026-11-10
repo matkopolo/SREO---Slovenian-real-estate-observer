@@ -15,7 +15,7 @@ type TransactionExtreme struct {
 	AmountPerSQM  float64  `json:"amountPerSqm"`
 }
 
-func (r *StatisticsRepository) TransactionExtremes(
+func (r *SaleStatisticsRepository) TransactionExtremes(
 	ctx context.Context, kind string, filter StatisticsFilter, limit int,
 ) ([]TransactionExtreme, error) {
 	table, amount, perSQM := saleFactsTable(filter), "price", "price_per_sqm"

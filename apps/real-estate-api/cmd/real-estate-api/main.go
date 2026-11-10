@@ -19,6 +19,8 @@ import (
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/economics"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/geography"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/httpapi"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/memo"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/metrics"
 )
 
 func main() {
@@ -57,35 +59,45 @@ func run() error {
 	defer probe.Close()
 
 	geographyRepository := geography.NewRepository(pool)
-	statisticsRepository := analytics.NewStatisticsRepository(pool)
+	repositories := analytics.NewRepositories(pool)
 	// Build the address search index now, so the first search after a restart is not slow.
 	// The build is detached from this context; this only bounds how long the warm-up waits.
 	go func() {
 		warmCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		defer cancel()
-		if err := statisticsRepository.WarmSearchIndex(warmCtx); err != nil {
+		if err := repositories.Buildings.WarmSearchIndex(warmCtx); err != nil {
 			logger.Warn("search index warm-up failed; the first search will retry", "error", err)
 		}
 	}()
+	economicsClient := economics.NewClient(nil, "")
+	registry := metrics.NewRegistry()
+	metrics.RegisterRuntime(registry)
+	registerPoolMetrics(registry, pool)
+	registerCacheMetrics(registry, map[string]func() memo.Stats{
+		"address_index":  repositories.Buildings.SearchIndexCacheStats,
+		"active_release": repositories.Releases.ActiveReleaseCacheStats,
+	}, economicsClient.CacheStats)
 	handler, err := httpapi.New(httpapi.Dependencies{
 		Logger:           logger,
 		Database:         probe,
 		Geographies:      geographyRepository,
-		Statistics:       statisticsRepository,
-		Rentals:          statisticsRepository,
-		Transactions:     statisticsRepository,
-		Histories:        statisticsRepository,
-		Distributions:    statisticsRepository,
-		Buildings:        statisticsRepository,
-		Anomalies:        statisticsRepository,
-		Models:           statisticsRepository,
-		Releases:         statisticsRepository,
-		Maps:             statisticsRepository,
-		Economics:        economics.NewClient(nil, ""),
+		Statistics:       repositories.Sales,
+		Rentals:          repositories.Rentals,
+		Transactions:     repositories.Transactions,
+		Histories:        repositories.Transactions,
+		Distributions:    repositories.Distributions,
+		Buildings:        repositories.Buildings,
+		Anomalies:        repositories.Valuations,
+		Models:           repositories.Valuations,
+		Releases:         repositories.Releases,
+		ActiveRelease:    repositories.Releases,
+		Maps:             repositories.Maps,
+		Economics:        economicsClient,
 		Affordability:    affordability.NewRepository(pool),
 		Construction:     construction.NewRepository(pool),
 		Demography:       demography.NewRepository(pool),
-		Recent:           statisticsRepository,
+		Recent:           repositories.Transactions,
+		Metrics:          registry,
 		RequestTimeout:   cfg.RequestTimeout,
 		AllowedOrigins:   cfg.AllowedOrigins,
 		Environment:      cfg.Environment,

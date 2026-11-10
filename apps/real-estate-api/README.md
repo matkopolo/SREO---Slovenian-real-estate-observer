@@ -68,6 +68,10 @@ The development container has a 512 MB ceiling. It does not load transactions or
 
 - `GET /health/live`: process liveness; does not depend on PostgreSQL.
 - `GET /health/ready`: readiness including PostgreSQL (through a reserved connection).
+- `GET /metrics`: Prometheus metrics (requests and durations by route pattern and
+  status, requests in flight, connection-pool statistics, cache hits and misses of the
+  CPI tables, the address index and the active release id, Go runtime). It is outside
+  `/api/`, so the frontend's nginx does not proxy it; the port is bound to 127.0.0.1.
 - `GET /api/v1/meta`: supported transaction, interval, geography, and property dimensions.
 - `GET /api/v1/data-status`: active analytical cutoff, pending GURS source
   cutoff, processing stage, and last failed release where applicable.
@@ -187,5 +191,11 @@ The model population stays strict. See [methodology](../../docs/statistical-meth
 - bounded connection pool, per-request deadlines, PostgreSQL statement timeout and bounded responses;
 - graceful shutdown and fail-fast startup;
 - structured JSON logs, request IDs, panic recovery, CORS allowlist, and security headers;
-- small handlers backed by repository interfaces for isolated testing;
+- small handlers backed by narrow repository interfaces for isolated testing; the
+  `analytics` package has one repository per area (sale statistics, rental statistics,
+  distributions, map, transactions, buildings, valuations, releases) sharing one SQL filter
+  helper (`sqlfilter.go`);
+- HTTP caching: analytics answers carry a weak ETag tied to the active release (304 without
+  querying), other answers an ETag hashed from their body (`internal/httpapi/caching.go`);
+- response bodies are validated against `openapi.yaml` in tests, so contract drift fails CI;
 - no ORM: spatial and analytical SQL remains visible and reviewable.

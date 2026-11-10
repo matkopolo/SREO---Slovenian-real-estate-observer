@@ -133,7 +133,7 @@ type TransactionDetailStore interface {
 	TransactionContext(context.Context, string, int64) (TransactionContext, error)
 }
 
-func (r *StatisticsRepository) SaleTransaction(
+func (r *TransactionRepository) SaleTransaction(
 	ctx context.Context, id int64,
 ) (SaleTransactionDetail, error) {
 	tx, err := database.BeginReadOnly(ctx, r.db, pgx.RepeatableRead)
@@ -195,7 +195,7 @@ func (r *StatisticsRepository) SaleTransaction(
 	return result, tx.Commit(ctx)
 }
 
-func (r *StatisticsRepository) RentalTransaction(
+func (r *TransactionRepository) RentalTransaction(
 	ctx context.Context, id int64,
 ) (RentalTransactionDetail, error) {
 	tx, err := database.BeginReadOnly(ctx, r.db, pgx.RepeatableRead)

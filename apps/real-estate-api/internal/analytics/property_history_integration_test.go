@@ -77,7 +77,7 @@ func TestPropertyHistoryIntegration(t *testing.T) {
 	from := time.Date(1901, 1, 11, 0, 0, 0, 0, time.UTC)
 	to := time.Date(1901, 12, 31, 0, 0, 0, 0, time.UTC)
 	filter := StatisticsFilter{FromDate: &from, ToDate: &to, PropertyGroup: "apartment"}
-	repository := NewStatisticsRepository(tx)
+	repository := newAllRepositories(tx)
 	summary, err := repository.ResaleSummary(ctx, filter)
 	if err != nil {
 		t.Fatal(err)

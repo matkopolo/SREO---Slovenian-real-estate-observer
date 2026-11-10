@@ -32,7 +32,7 @@ func TestGeographyFactColumn(t *testing.T) {
 }
 
 func TestFactFilterNumbersItsOwnPlaceholders(t *testing.T) {
-	repository := &StatisticsRepository{levels: geographyLevels{byID: map[int64]string{7: "municipality", 1: "country"}}}
+	repository := &queries{levels: &geographyLevels{byID: map[int64]string{7: "municipality", 1: "country"}}}
 	from := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	minimum := 40.0
 	geography := int64(7)

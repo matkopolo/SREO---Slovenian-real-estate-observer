@@ -75,6 +75,14 @@ func NewClient(httpClient *http.Client, url string) *Client {
 	return client
 }
 
+// CacheStats reports the use of the in-memory CPI tables, by table.
+func (c *Client) CacheStats() map[string]memo.Stats {
+	return map[string]memo.Stats{
+		"inflation_year_on_year":   c.yearOnYear.Stats(),
+		"inflation_month_on_month": c.monthOnMonth.Stats(),
+	}
+}
+
 func (c *Client) loader(index string) memo.LoadFunc[monthlyIndex] {
 	return func(ctx context.Context, _ monthlyIndex, _ bool) (monthlyIndex, error) {
 		values, err := c.fetch(ctx, index)

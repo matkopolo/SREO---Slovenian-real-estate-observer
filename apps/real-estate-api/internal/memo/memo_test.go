@@ -171,3 +171,27 @@ func waitFor(t *testing.T, condition func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+func TestStatsCountHitsMissesAndLoads(t *testing.T) {
+	fail := true
+	value := New(func(context.Context, int, bool) (int, error) {
+		if fail {
+			return 0, errors.New("source down")
+		}
+		return 7, nil
+	}, Options{TTL: time.Hour, RetryAfter: time.Nanosecond})
+	if _, err := value.Get(context.Background()); err == nil {
+		t.Fatal("first load should fail")
+	}
+	time.Sleep(time.Millisecond)
+	fail = false
+	for range 3 {
+		if got, err := value.Get(context.Background()); err != nil || got != 7 {
+			t.Fatalf("Get=%d,%v", got, err)
+		}
+	}
+	stats := value.Stats()
+	if stats != (Stats{Hits: 2, Misses: 2, Loads: 1, Failures: 1}) {
+		t.Fatalf("stats=%+v", stats)
+	}
+}

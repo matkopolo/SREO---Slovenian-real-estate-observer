@@ -7,6 +7,10 @@ info:
     PostGIS geographies, SURS and Banka Slovenije context, and GURS construction sources.
     Every operation is a GET; there are no accounts or writes. Each request has a deadline
     (504 timeout when exceeded), and every response carries X-Request-ID.
+    Analytics answers carry a weak ETag tied to the active analytical release and answer
+    If-None-Match with 304; other answers carry an ETag hashed from their body.
+    Properties marked x-internal document the methodology (raw averages, rule versions,
+    diagnostics); the SREO frontend does not use them and they may change without notice.
 servers:
   - url: http://localhost:8080
 paths:
@@ -1449,6 +1453,7 @@ components:
         code:
           type: integer
         compositeCode:
+          x-internal: true
           type: integer
         name:
           type: string
@@ -1510,6 +1515,7 @@ components:
           type: integer
           format: int64
         eligibleCount:
+          x-internal: true
           type: integer
           format: int64
         includedSampleSize:
@@ -1527,19 +1533,23 @@ components:
         medianPrice:
           type: [number, "null"]
         cleanedAveragePrice:
+          x-internal: true
           type: [number, "null"]
         rawAveragePrice:
+          x-internal: true
           type: [number, "null"]
         medianPricePerSqm:
           type: [number, "null"]
         cleanedAveragePricePerSqm:
+          x-internal: true
           type: [number, "null"]
         rawAveragePricePerSqm:
+          x-internal: true
           type: [number, "null"]
         medianArea:
           type: [number, "null"]
         isPublishable: {type: boolean}
-        suppressionReason: {type: [string, "null"]}
+        suppressionReason: {type: [string, "null"], x-internal: true}
     StatisticsTimeSeriesPoint:
       allOf:
         - $ref: "#/components/schemas/StatisticsOverview"
@@ -1593,7 +1603,7 @@ components:
         - isPublishable
       properties:
         transactionCount: {type: integer, format: int64}
-        eligibleCount: {type: integer, format: int64}
+        eligibleCount: {type: integer, format: int64, x-internal: true}
         includedSampleSize: {type: integer, format: int64}
         excludedOutlierCount: {type: integer, format: int64}
         monthlyRentSampleSize: {type: integer, format: int64}
@@ -1606,7 +1616,7 @@ components:
         rawAverageMonthlyRentPerSqm: {type: [number, "null"]}
         medianArea: {type: [number, "null"]}
         isPublishable: {type: boolean}
-        suppressionReason: {type: [string, "null"]}
+        suppressionReason: {type: [string, "null"], x-internal: true}
     RentalStatisticsTimeSeriesPoint:
       type: object
       required:
@@ -1630,7 +1640,7 @@ components:
         rentPerSqmYoYPercent: {type: [number, "null"]}
         weakComparisonSample: {type: boolean}
         isPublishable: {type: boolean}
-        suppressionReason: {type: [string, "null"]}
+        suppressionReason: {type: [string, "null"], x-internal: true}
     RentalStatisticsTimeSeries:
       type: object
       required: [interval, items, count]
@@ -1667,8 +1677,8 @@ components:
         cohortMedian: {type: number}
         lowerBound: {type: number}
         upperBound: {type: number}
-        modifiedZScore: {type: [number, "null"]}
-        ruleVersion: {type: string}
+        modifiedZScore: {type: [number, "null"], x-internal: true}
+        ruleVersion: {type: string, x-internal: true}
     RentalOutlierList:
       type: object
       required: [items, count, total, limit, offset]
@@ -1703,8 +1713,8 @@ components:
         cohortMedian: {type: [number, "null"]}
         lowerBound: {type: [number, "null"]}
         upperBound: {type: [number, "null"]}
-        modifiedZScore: {type: [number, "null"]}
-        ruleVersion: {type: string}
+        modifiedZScore: {type: [number, "null"], x-internal: true}
+        ruleVersion: {type: string, x-internal: true}
     TransactionGeography:
       type: object
       required: [id, level, name]
@@ -1776,7 +1786,7 @@ components:
             name: { type: string }
             nationalFallback: { type: boolean }
         wagePeriod: { type: string }
-        wageSource: { type: string }
+        wageSource: {type: string, x-internal: true}
         rule: { $ref: "#/components/schemas/LendingRule" }
         rates:
           type: object
@@ -1785,9 +1795,11 @@ components:
             fixedOver10Years: { $ref: "#/components/schemas/ContextObservation" }
             variable: { $ref: "#/components/schemas/ContextObservation" }
             aprc:
+              x-internal: true
               allOf: [{ $ref: "#/components/schemas/ContextObservation" }]
               nullable: true
             euribor6m:
+              x-internal: true
               allOf: [{ $ref: "#/components/schemas/ContextObservation" }]
               nullable: true
         stressMarginPoints: { type: number }
@@ -1803,7 +1815,7 @@ components:
         rows:
           type: array
           items: { $ref: "#/components/schemas/AffordabilityRow" }
-        disclaimer: { type: string }
+        disclaimer: {type: string, x-internal: true}
     ConstructionSummaryResponse:
       type: object
       required: [filter, summary, sources]
@@ -1883,10 +1895,10 @@ components:
         dwellings: { type: integer, nullable: true }
         businessUnits: { type: integer, nullable: true }
         buildingType: { type: string, nullable: true }
-        loadBearingStructure: { type: string, nullable: true }
+        loadBearingStructure: {type: string, nullable: true, x-internal: true}
         registrationStatus: { type: string, nullable: true }
         grossFloorArea: { type: number, nullable: true }
-        recordChangedOn: { type: string, format: date, nullable: true }
+        recordChangedOn: {type: string, format: date, nullable: true, x-internal: true}
         municipality: { type: string, nullable: true }
         municipalityId: { type: integer, format: int64, nullable: true }
         longitude: { type: number, nullable: true }
@@ -1989,12 +2001,16 @@ components:
         name: { type: string }
     DemographicsResponse:
       type: object
-      required: [profile, sources, licence, releasesCaveat]
+      required: [profile, sources, licence, releasesCaveat, releasesCaveatCode]
       properties:
         profile: { $ref: "#/components/schemas/DemographicProfile" }
         sources: { type: array, items: { $ref: "#/components/schemas/DemographicSource" } }
         licence: { type: string }
-        releasesCaveat: { type: string }
+        releasesCaveat: { type: string, description: Slovenian text of the caveat named by releasesCaveatCode. }
+        releasesCaveatCode:
+          type: string
+          enum: [model_estimate_older_owners]
+          description: Stable code of the caveat, for clients that show it in their own language.
     MunicipalDemographics:
       type: object
       required: [geographyId, name, population, share65Plus, change10Years, netMigrationPerThousand, releasesPerThousandDwellings, enteringThirtiesPerYear, releasesPerYear]
@@ -2010,11 +2026,15 @@ components:
         releasesPerYear: { type: number, nullable: true }
     MunicipalDemographicsResponse:
       type: object
-      required: [items, sources, releasesCaveat]
+      required: [items, sources, releasesCaveat, releasesCaveatCode]
       properties:
         items: { type: array, items: { $ref: "#/components/schemas/MunicipalDemographics" } }
         sources: { type: array, items: { $ref: "#/components/schemas/DemographicSource" } }
-        releasesCaveat: { type: string }
+        releasesCaveat: { type: string, description: Slovenian text of the caveat named by releasesCaveatCode. }
+        releasesCaveatCode:
+          type: string
+          enum: [model_estimate_older_owners]
+          description: Stable code of the caveat, for clients that show it in their own language.
     RecentTransactions:
       type: object
       required: [items, count, total, offset, transactionKind]
@@ -2093,12 +2113,12 @@ components:
               geographyId: { type: integer, format: int64 }
               name: { type: string }
               wagePeriod: { type: string }
-              nationalWageFallback: { type: boolean }
+              nationalWageFallback: {type: boolean, x-internal: true}
               medianPricePerSqm: { type: number, nullable: true }
               sampleSize: { type: integer, format: int64 }
               rows: { type: array, items: { $ref: "#/components/schemas/AffordabilityRow" } }
         count: { type: integer }
-        disclaimer: { type: string }
+        disclaimer: {type: string, x-internal: true}
     InflationFactor:
       type: object
       required: [from, to, factor, months, source]
@@ -2356,8 +2376,10 @@ components:
         upperBound:
           type: number
         modifiedZScore:
+          x-internal: true
           type: [number, "null"]
         ruleVersion:
+          x-internal: true
           type: string
     OutlierList:
       type: object
@@ -2414,6 +2436,15 @@ components:
         count:
           type: integer
           minimum: 0
+        zoom:
+          type: integer
+          description: Zoom level the clusters were built for (cluster layers only).
+        limit:
+          type: integer
+          description: Maximum number of features returned (property layers only).
+        level:
+          $ref: "#/components/schemas/GeographyLevel"
+          description: Geography level of the features (geography layers only).
     Distribution:
       type: object
       required: [metric, sampleSize, belowBoundCount, aboveBoundCount, buckets, isPublishable]
@@ -2435,7 +2466,7 @@ components:
         belowBoundCount: {type: integer, format: int64}
         aboveBoundCount: {type: integer, format: int64}
         isPublishable: {type: boolean}
-        suppressionReason: {type: [string, "null"]}
+        suppressionReason: {type: [string, "null"], x-internal: true}
         buckets:
           type: array
           items:
@@ -2469,7 +2500,7 @@ components:
         indexValue: {type: number}
         sampleSize: {type: integer}
         basePeriod: {type: string, format: date}
-        methodologyVersion: {type: string}
+        methodologyVersion: {type: string, x-internal: true}
         modelVersion: {type: [string, "null"]}
         calculationRunId: {type: string, format: uuid}
         observedSampleSize: {type: integer}
@@ -2479,7 +2510,7 @@ components:
         nominalCoverage: {type: [number, "null"]}
         uncertaintyMethod: {type: [string, "null"]}
         isPublishable: {type: boolean}
-        suppressionReason: {type: [string, "null"]}
+        suppressionReason: {type: [string, "null"], x-internal: true}
     MarketIndexList:
       type: object
       required: [items, count, scope]
@@ -2758,7 +2789,7 @@ components:
         quality:
           $ref: "#/components/schemas/QualityDecision"
         outlierStatus: {type: [string, "null"]}
-        methodologyVersion: {type: string}
+        methodologyVersion: {type: string, x-internal: true}
     ContextValuation:
       type: object
       required:
@@ -2820,24 +2851,24 @@ components:
         lowerAmountPerSqm: {type: number}
         centralAmountPerSqm: {type: number}
         upperAmountPerSqm: {type: number}
-        unadjustedLowerAmountPerSqm: {type: number}
-        unadjustedCentralAmountPerSqm: {type: number}
-        unadjustedUpperAmountPerSqm: {type: number}
+        unadjustedLowerAmountPerSqm: {type: number, x-internal: true}
+        unadjustedCentralAmountPerSqm: {type: number, x-internal: true}
+        unadjustedUpperAmountPerSqm: {type: number, x-internal: true}
         comparableCount: {type: integer}
         maximumRadiusMeters: {type: integer}
         areaTolerancePercent: {type: integer}
         constructionYearTolerance: {type: integer}
         locationAdjustmentFactor: {type: number}
-        rawLocationAdjustmentFactor: {type: number}
+        rawLocationAdjustmentFactor: {type: number, x-internal: true}
         locationAdjustmentApplied: {type: boolean}
-        localAdjustmentSampleSize: {type: integer}
-        packageCompositionMatched: {type: boolean}
+        localAdjustmentSampleSize: {type: integer, x-internal: true}
+        packageCompositionMatched: {type: boolean, x-internal: true}
         referenceYear: {type: integer}
         confidence: {type: string, enum: [moderate, low, very_low]}
         warnings:
           type: array
           items: {type: string}
-        methodologyVersion: {type: string}
+        methodologyVersion: {type: string, x-internal: true}
     ErrorResponse:
       type: object
       required: [error]
