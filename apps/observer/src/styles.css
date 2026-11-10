@@ -53,7 +53,8 @@ button, select { font: inherit; }
 /* ---------- page shell ---------- */
 /* Same masthead and top spacing on every page: the page is full width, only the reading pages limit their content.
    Spacing between the shell rows comes from margins (not a grid gap), so the empty data-notice row costs nothing. */
-.observer { margin: 0 auto; padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); padding-block: 10px 32px; display: grid; gap: 0; }
+/* One column that never grows past the viewport: a scrolling tab row or a wide table scrolls inside it instead of widening the page. */
+.observer { margin: 0 auto; padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); padding-block: 10px 32px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; }
 .observer:not(.full) > main, .observer:not(.full) > .colophon { width: 100%; max-width: 1408px; margin-inline: auto; }
 .observer:not(.full) .masthead { margin-bottom: 18px; }
 .observer:not(.full) .data-banner-region:not(:empty) { margin-bottom: 18px; }
@@ -501,3 +502,4 @@ th[scope="row"] { text-align: left; }
 .multiple { margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .multiple figcaption { display: flex; justify-content: space-between; gap: 8px; font-family: var(--font-display); font-size: 1rem; }
 .multiple figcaption span { font-family: var(--font-body); font-weight: 600; }
+

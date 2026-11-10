@@ -9,7 +9,7 @@ it("formats percent with one sign rule: gains signed on request, losses always, 
 });
 
 it("formats amounts, areas and dates", () => {
-  expect(perSqm(4538.4)).toBe("4538");
+  expect(perSqm(4538.4)).toBe("4.538");
   expect(perSqm(7.74)).toBe("7,7");
   expect(landArea(24400)).toBe("2,44 ha");
   expect(landArea(900)).toBe("900 m²");

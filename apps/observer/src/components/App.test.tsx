@@ -87,7 +87,7 @@ it("opens on Slovenija: median, change, real change and a flats/houses pair on l
   expect(await screen.findByRole("heading", { level: 1, name: "Slovenija" })).toBeInTheDocument();
   // One copy check; the rest asserts the numbers.
   const lede = await screen.findByText(/Mediana cene stanovanj v 12 mesecih do 30\. 6\. 2026/);
-  expect(lede).toHaveTextContent("2966");
+  expect(lede).toHaveTextContent("2.966");
   expect(lede).toHaveTextContent(/\+9,8\s%/);                                   // 2965,78 / 2700 − 1
   expect(lede).toHaveTextContent(/\+6,6\s%/);                                   // real: 1,0984 / 1,03 − 1
   const pair = screen.getByRole("group", { name: /Vrsta nepremičnine/ });

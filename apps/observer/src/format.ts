@@ -10,11 +10,15 @@ export const NBSP = " ";
 /** Typographic minus (U+2212), also in English, so signed values line up. */
 const MINUS = "−";
 
-const integerFormat = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 0 });
-const decimal1Format = new Intl.NumberFormat(LOCALE, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-const upTo1Format = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 1 });
-const upTo2Format = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 2 });
-const euroFormat = new Intl.NumberFormat(LOCALE, { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
+// Thousands are always grouped ("2.864"): Slovenian's CLDR minimum of two grouping digits would leave four-digit numbers
+// ungrouped in engines that honour it (Firefox), so the same page showed "2864" and "2.864" to different readers.
+// (The ES2023 string value is not in the TypeScript lib this project compiles against.)
+const GROUPED = { useGrouping: "always" as unknown as boolean };
+const integerFormat = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 0, ...GROUPED });
+const decimal1Format = new Intl.NumberFormat(LOCALE, { minimumFractionDigits: 1, maximumFractionDigits: 1, ...GROUPED });
+const upTo1Format = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 1, ...GROUPED });
+const upTo2Format = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 2, ...GROUPED });
+const euroFormat = new Intl.NumberFormat(LOCALE, { style: "currency", currency: "EUR", maximumFractionDigits: 0, ...GROUPED });
 
 /** "1.234" */
 export const integer = (value: number) => integerFormat.format(value);
