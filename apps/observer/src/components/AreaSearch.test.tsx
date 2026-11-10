@@ -110,8 +110,12 @@ it("Enter opens a unique exact address, also when pressed before the results arr
   const { onAddress, input, type } = setup();
   type("celovska cesta 143");
   fireEvent.submit(input.closest("form")!);
-  await vi.waitFor(() => expect(onAddress).toHaveBeenCalledWith({ cadastralMunicipalityCode: 1730, buildingNumber: "143", label: "Celovška cesta 143, Ljubljana" }));
-  expect(input).toHaveValue("");
+  // Resolved from an effect when the results arrive: the callback and the cleared field land in the same update,
+  // which React renders just after the callback runs, so both are awaited together.
+  await vi.waitFor(() => {
+    expect(onAddress).toHaveBeenCalledWith({ cadastralMunicipalityCode: 1730, buildingNumber: "143", label: "Celovška cesta 143, Ljubljana" });
+    expect(input).toHaveValue("");
+  });
 });
 
 it("Enter on an address in several towns asks for a pick", async () => {
