@@ -89,9 +89,9 @@ export function App() {
       <ErrorBoundary name={`page ${page}`} resetKey={page}><Suspense fallback={<p className="muted" role="status">{t("Nalagam …")}</p>}>
         {page === "explorer" && <ExplorerView cutoff={cutoff}/>}
         {page === TRENDS && <div className="view">
-          <div className="segmented" role="group" aria-label={t("Del strani")}>
-            <button type="button" aria-pressed={trendPart === "time"} onClick={() => setTrendPart("time")}>{t("Cene skozi čas")}</button>
-            <button type="button" aria-pressed={trendPart === "distribution"} onClick={() => setTrendPart("distribution")}>{t("Porazdelitev in skrajni posli")}</button>
+          <div className="part-tabs" role="tablist" aria-label={t("Del strani")}>
+            <button type="button" role="tab" aria-selected={trendPart === "time"} onClick={() => setTrendPart("time")}>{t("Cene skozi čas")}</button>
+            <button type="button" role="tab" aria-selected={trendPart === "distribution"} onClick={() => setTrendPart("distribution")}>{t("Porazdelitev in skrajni posli")}</button>
           </div>
           {trendPart === "time" ? <TimeView cutoff={cutoff}/> : <MarketView cutoff={cutoff}/>}
         </div>}
