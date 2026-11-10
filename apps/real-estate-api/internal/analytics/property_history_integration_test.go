@@ -77,7 +77,8 @@ func TestPropertyHistoryIntegration(t *testing.T) {
 	from := time.Date(1901, 1, 11, 0, 0, 0, 0, time.UTC)
 	to := time.Date(1901, 12, 31, 0, 0, 0, 0, time.UTC)
 	filter := StatisticsFilter{FromDate: &from, ToDate: &to, PropertyGroup: "apartment"}
-	summary, err := loadResaleSummary(ctx, tx, filter, "$4::bigint IS NULL", nil)
+	repository := NewStatisticsRepository(tx)
+	summary, err := repository.ResaleSummary(ctx, filter)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +86,7 @@ func TestPropertyHistoryIntegration(t *testing.T) {
 		t.Fatalf("summary=%+v", summary)
 	}
 	from = from.AddDate(0, 0, 1)
-	summary, err = loadResaleSummary(ctx, tx, filter, "$4::bigint IS NULL", nil)
+	summary, err = repository.ResaleSummary(ctx, filter)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +95,7 @@ func TestPropertyHistoryIntegration(t *testing.T) {
 	}
 	min := 61.0
 	filter.MinArea = &min
-	summary, err = loadResaleSummary(ctx, tx, filter, "$4::bigint IS NULL", nil)
+	summary, err = repository.ResaleSummary(ctx, filter)
 	if err != nil || summary.PairCount != 0 {
 		t.Fatalf("area filter=%+v err=%v", summary, err)
 	}

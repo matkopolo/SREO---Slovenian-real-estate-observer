@@ -2,11 +2,8 @@ package analytics
 
 import (
 	"context"
-	"errors"
 	"fmt"
 )
-
-var ErrAnomalyNotFound = errors.New("anomaly signal not found")
 
 type AnomalyFilter struct {
 	TransactionKind string
@@ -29,8 +26,6 @@ type AnomalySignal struct {
 	SignalVersion        string   `json:"signalVersion"`
 	ModelVersion         *string  `json:"modelVersion"`
 	ReviewStatus         string   `json:"reviewStatus"`
-	ReviewNotes          *string  `json:"reviewNotes"`
-	ReviewedBy           *string  `json:"reviewedBy"`
 	ReviewedAt           *string  `json:"reviewedAt"`
 	EvaluatedAt          string   `json:"evaluatedAt"`
 }
@@ -42,39 +37,21 @@ type AnomalySummary struct {
 	HighPriority int64 `json:"highPriority"`
 }
 
+// AnomalyStore reads the anomaly signals. Reviews are not written through the API.
 type AnomalyStore interface {
 	Anomalies(context.Context, AnomalyFilter, int, int) ([]AnomalySignal, int64, error)
 	AnomalySummary(context.Context, string) (AnomalySummary, error)
-	ReviewAnomaly(context.Context, string, int64, string, *string, string) error
-}
-
-func (r *StatisticsRepository) ReviewAnomaly(
-	ctx context.Context, kind string, id int64, status string, notes *string,
-	reviewerID string,
-) error {
-	command, err := r.pool.Exec(ctx, `
-		UPDATE analytics.anomaly_signals
-		SET review_status=$3,review_notes=$4,reviewed_by=$5,reviewed_at=now()
-		WHERE transaction_kind=$1 AND transaction_id=$2`,
-		kind, id, status, notes, reviewerID)
-	if err != nil {
-		return fmt.Errorf("review anomaly: %w", err)
-	}
-	if command.RowsAffected() == 0 {
-		return ErrAnomalyNotFound
-	}
-	return nil
 }
 
 func (r *StatisticsRepository) Anomalies(
 	ctx context.Context, filter AnomalyFilter, limit, offset int,
 ) ([]AnomalySignal, int64, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.Query(ctx, `
 		SELECT count(*) OVER()::bigint,transaction_kind,transaction_id,flags,
 		  hard_rule_score::float8,robust_cohort_score::float8,
 		  model_residual_score::float8,isolation_forest_score::float8,
 		  duplicate_score::float8,spatial_score::float8,review_score::float8,
-		  signal_version,model_version,review_status,review_notes,reviewed_by,
+		  signal_version,model_version,review_status,
 		  reviewed_at::text,evaluated_at::text
 		FROM analytics.anomaly_signals
 		WHERE ($1='' OR transaction_kind=$1)
@@ -97,7 +74,7 @@ func (r *StatisticsRepository) Anomalies(
 			&item.ModelResidualScore, &item.IsolationForestScore,
 			&item.DuplicateScore, &item.SpatialScore, &item.ReviewScore,
 			&item.SignalVersion, &item.ModelVersion, &item.ReviewStatus,
-			&item.ReviewNotes, &item.ReviewedBy, &item.ReviewedAt,
+			&item.ReviewedAt,
 			&item.EvaluatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan anomaly signal: %w", err)
 		}
@@ -110,7 +87,7 @@ func (r *StatisticsRepository) AnomalySummary(
 	ctx context.Context, transactionKind string,
 ) (AnomalySummary, error) {
 	var result AnomalySummary
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.QueryRow(ctx, `
 		SELECT count(*)::bigint,
 		  count(*) FILTER(WHERE cardinality(flags)>0)::bigint,
 		  count(*) FILTER(WHERE review_status='unreviewed'

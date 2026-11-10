@@ -2,9 +2,13 @@ package analytics
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
+// ReleaseSummary is the public view of one analytical release. The pipeline's failure_message
+// stays in the database for operators: it can contain SQL, table names or paths, so the public
+// status reports only that a release failed.
 type ReleaseSummary struct {
 	ID                   string     `json:"id"`
 	Status               string     `json:"status"`
@@ -16,7 +20,6 @@ type ReleaseSummary struct {
 	ModelVersions        *string    `json:"modelVersions,omitempty"`
 	StartedAt            time.Time  `json:"startedAt"`
 	PublishedAt          *time.Time `json:"publishedAt,omitempty"`
-	FailureMessage       *string    `json:"failureMessage,omitempty"`
 }
 
 type DataStatus struct {
@@ -35,8 +38,7 @@ func (r *StatisticsRepository) DataStatus(ctx context.Context) (DataStatus, erro
 		SELECT release.id::text,release.status,release.stage,
 		       release.source_sale_through,release.source_rent_through,
 		       release.analytics_sale_through,release.analytics_rent_through,
-		       release.model_versions,release.started_at,release.published_at,
-		       release.failure_message
+		       release.model_versions,release.started_at,release.published_at
 		FROM analytics.analytical_releases release
 		JOIN analytics.analytical_publication publication
 		  ON release.id IN (publication.active_release_id,publication.pending_release_id)
@@ -44,8 +46,7 @@ func (r *StatisticsRepository) DataStatus(ctx context.Context) (DataStatus, erro
 		SELECT release.id::text,release.status,release.stage,
 		       release.source_sale_through,release.source_rent_through,
 		       release.analytics_sale_through,release.analytics_rent_through,
-		       release.model_versions,release.started_at,release.published_at,
-		       release.failure_message
+		       release.model_versions,release.started_at,release.published_at
 		FROM analytics.analytical_releases release
 		JOIN analytics.analytical_publication publication ON publication.singleton
 		LEFT JOIN analytics.analytical_releases active
@@ -56,9 +57,9 @@ func (r *StatisticsRepository) DataStatus(ctx context.Context) (DataStatus, erro
 		      AND (active.published_at IS NULL OR failed.failed_at>active.published_at)
 		    ORDER BY failed.failed_at DESC LIMIT 1
 		)`
-	rows, err := r.pool.Query(ctx, query)
+	rows, err := r.db.Query(ctx, query)
 	if err != nil {
-		return DataStatus{}, err
+		return DataStatus{}, fmt.Errorf("load analytical releases: %w", err)
 	}
 	defer rows.Close()
 	result := DataStatus{Status: "current"}
@@ -69,9 +70,8 @@ func (r *StatisticsRepository) DataStatus(ctx context.Context) (DataStatus, erro
 			&release.SourceSaleThrough, &release.SourceRentThrough,
 			&release.AnalyticsSaleThrough, &release.AnalyticsRentThrough,
 			&release.ModelVersions, &release.StartedAt, &release.PublishedAt,
-			&release.FailureMessage,
 		); err != nil {
-			return DataStatus{}, err
+			return DataStatus{}, fmt.Errorf("scan analytical release: %w", err)
 		}
 		if release.Status == "processing" {
 			result.Pending = &release
@@ -83,7 +83,7 @@ func (r *StatisticsRepository) DataStatus(ctx context.Context) (DataStatus, erro
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return DataStatus{}, err
+		return DataStatus{}, fmt.Errorf("load analytical releases: %w", err)
 	}
 	if result.Pending != nil {
 		result.Status = "processing"

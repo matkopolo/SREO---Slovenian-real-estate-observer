@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,14 +23,28 @@ func (s *server) searchBuildings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := s.buildings.SearchBuildings(r.Context(), query, limit, filter)
+	result, err := s.buildings.SearchBuildings(r.Context(), query, limit, filter)
 	if err != nil {
-		s.logger.Error("search buildings", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed",
-			"could not search buildings")
+		s.fail(w, r, "search buildings", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	if result.Items == nil {
+		result.Items = []analytics.BuildingSearchResult{}
+	}
+	if result.Streets == nil {
+		result.Streets = []analytics.StreetSearchResult{}
+	}
+	if result.Settlements == nil {
+		result.Settlements = []analytics.SettlementSearchResult{}
+	}
+	if result.MatchType == "" {
+		result.MatchType = analytics.SearchMatchNone
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{
+		"items": result.Items, "count": len(result.Items), "matchType": result.MatchType,
+		"requestedHouseNumber": result.RequestedHouseNumber, "streets": result.Streets,
+		"settlements": result.Settlements,
+	})
 }
 
 func (s *server) buildingStatistics(w http.ResponseWriter, r *http.Request) {
@@ -53,18 +66,11 @@ func (s *server) buildingStatistics(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := s.buildings.BuildingStatistics(
 		r.Context(), int32(code64), number, filter)
-	if errors.Is(err, analytics.ErrBuildingNotFound) {
-		writeError(w, r, http.StatusNotFound, "building_not_found",
-			"building was not found")
-		return
-	}
 	if err != nil {
-		s.logger.Error("building statistics", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed",
-			"could not load building statistics")
+		s.fail(w, r, "load building statistics", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, r, http.StatusOK, result)
 }
 
 func parseBuildingFilter(
@@ -72,16 +78,7 @@ func parseBuildingFilter(
 ) (analytics.BuildingFilter, bool) {
 	var filter analytics.BuildingFilter
 	var ok bool
-	if filter.FromDate, ok = optionalDate(w, r, "from"); !ok {
-		return filter, false
-	}
-	if filter.ToDate, ok = optionalDate(w, r, "to"); !ok {
-		return filter, false
-	}
-	if filter.FromDate != nil && filter.ToDate != nil &&
-		filter.FromDate.After(*filter.ToDate) {
-		writeError(w, r, http.StatusBadRequest, "invalid_date_range",
-			"from must not be after to")
+	if filter.FromDate, filter.ToDate, ok = dateRange(w, r); !ok {
 		return filter, false
 	}
 	filter.PropertyGroup = r.URL.Query().Get("propertyGroup")

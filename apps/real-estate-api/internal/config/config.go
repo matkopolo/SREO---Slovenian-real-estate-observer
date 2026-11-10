@@ -16,13 +16,17 @@ type Config struct {
 	Address                string
 	DatabaseURL            string
 	DatabaseMaxConnections int32
-	AllowedOrigins         []string
-	LogLevel               string
-	ReadHeaderTimeout      time.Duration
-	ReadTimeout            time.Duration
-	WriteTimeout           time.Duration
-	IdleTimeout            time.Duration
-	ShutdownTimeout        time.Duration
+	// DatabaseStatementTimeout is PostgreSQL's statement_timeout for every API connection.
+	DatabaseStatementTimeout time.Duration
+	// RequestTimeout is the deadline of each request's context; queries are cancelled with it.
+	RequestTimeout    time.Duration
+	AllowedOrigins    []string
+	LogLevel          string
+	ReadHeaderTimeout time.Duration
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
+	ShutdownTimeout   time.Duration
 }
 
 func Load() (Config, error) {
@@ -30,21 +34,31 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	statementTimeout, err := durationEnv("DATABASE_STATEMENT_TIMEOUT", 15*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	requestTimeout, err := durationEnv("API_REQUEST_TIMEOUT", 20*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
-		ApplicationName:        env("API_NAME", "real-estate-api"),
-		ApplicationBuild:       env("API_BUILD", "development"),
-		Environment:            env("API_ENV", "development"),
-		Address:                env("API_ADDRESS", ":8080"),
-		DatabaseURL:            os.Getenv("DATABASE_URL"),
-		DatabaseMaxConnections: maxConnections,
-		AllowedOrigins:         csvEnv("API_ALLOWED_ORIGINS"),
-		LogLevel:               env("LOG_LEVEL", "info"),
-		ReadHeaderTimeout:      5 * time.Second,
-		ReadTimeout:            15 * time.Second,
-		WriteTimeout:           30 * time.Second,
-		IdleTimeout:            60 * time.Second,
-		ShutdownTimeout:        10 * time.Second,
+		ApplicationName:          env("API_NAME", "real-estate-api"),
+		ApplicationBuild:         env("API_BUILD", "development"),
+		Environment:              env("API_ENV", "development"),
+		Address:                  env("API_ADDRESS", ":8080"),
+		DatabaseURL:              os.Getenv("DATABASE_URL"),
+		DatabaseMaxConnections:   maxConnections,
+		DatabaseStatementTimeout: statementTimeout,
+		RequestTimeout:           requestTimeout,
+		AllowedOrigins:           csvEnv("API_ALLOWED_ORIGINS"),
+		LogLevel:                 env("LOG_LEVEL", "info"),
+		ReadHeaderTimeout:        5 * time.Second,
+		ReadTimeout:              15 * time.Second,
+		WriteTimeout:             30 * time.Second,
+		IdleTimeout:              60 * time.Second,
+		ShutdownTimeout:          10 * time.Second,
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -52,6 +66,12 @@ func Load() (Config, error) {
 	}
 	if cfg.DatabaseMaxConnections < 1 {
 		return Config{}, errors.New("DATABASE_MAX_CONNECTIONS must be positive")
+	}
+	if cfg.DatabaseStatementTimeout <= 0 || cfg.RequestTimeout <= 0 {
+		return Config{}, errors.New("DATABASE_STATEMENT_TIMEOUT and API_REQUEST_TIMEOUT must be positive")
+	}
+	if cfg.RequestTimeout >= cfg.WriteTimeout {
+		return Config{}, fmt.Errorf("API_REQUEST_TIMEOUT must be shorter than the %s write timeout", cfg.WriteTimeout)
 	}
 	if !oneOf(cfg.LogLevel, "debug", "info", "warn", "error") {
 		return Config{}, fmt.Errorf("unsupported LOG_LEVEL %q", cfg.LogLevel)
@@ -91,6 +111,19 @@ func int32Env(name string, fallback int32) (int32, error) {
 		return 0, fmt.Errorf("%s must be an integer: %w", name, err)
 	}
 	return int32(parsed), nil
+}
+
+// durationEnv reads a Go duration ("15s", "500ms").
+func durationEnv(name string, fallback time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a duration such as 15s: %w", name, err)
+	}
+	return parsed, nil
 }
 
 func oneOf(value string, allowed ...string) bool {

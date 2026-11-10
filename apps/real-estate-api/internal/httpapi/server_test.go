@@ -2,8 +2,6 @@ package httpapi
 
 import (
 	"errors"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -305,16 +303,8 @@ func TestTransactionDetailAcceptsNegativeSourceID(t *testing.T) {
 }
 
 func TestTransactionDetailNotFound(t *testing.T) {
-	handler := New(Dependencies{
-		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Database: fakeDatabase{}, Geographies: fakeGeographies{},
-		Statistics: fakeStatistics{}, Rentals: fakeStatistics{}, Maps: fakeMaps{},
-		Transactions:  fakeTransactions{err: analytics.ErrTransactionNotFound},
-		Distributions: fakeDistributions{},
-		Buildings:     fakeBuildings{},
-		Anomalies:     fakeAnomalies{},
-		Identities:    fakeIdentities{},
-		Models:        fakeModels{},
+	handler := handlerWith(func(d *Dependencies) {
+		d.Transactions = fakeTransactions{err: analytics.ErrTransactionNotFound}
 	})
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
@@ -338,53 +328,21 @@ func TestIndexAndValuationEndpoints(t *testing.T) {
 	}
 }
 
-func TestIdentityAndPreferenceEndpoints(t *testing.T) {
-	tests := []struct {
-		method, path, body string
-		auth               bool
-		status             int
-	}{
-		{http.MethodPost, "/api/v1/auth/register",
-			`{"email":"user@example.com","password":"very-secure-password","displayName":"User"}`,
-			false, http.StatusCreated},
-		{http.MethodPost, "/api/v1/auth/login",
-			`{"email":"user@example.com","password":"very-secure-password"}`,
-			false, http.StatusOK},
-		{http.MethodGet, "/api/v1/users/me", "", true, http.StatusOK},
-		{http.MethodGet, "/api/v1/users/me/preferences", "", true, http.StatusOK},
-		{http.MethodPut, "/api/v1/users/me/preferences", `{"theme":"light"}`,
-			true, http.StatusOK},
-		{http.MethodPost, "/api/v1/auth/logout", "", true, http.StatusNoContent},
-	}
+func TestRemovedWriteAndIdentityRoutesAreGone(t *testing.T) {
 	handler := newTestHandler(nil, fakeGeographies{})
-	for _, test := range tests {
+	for _, test := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/auth/register"},
+		{http.MethodPost, "/api/v1/auth/login"},
+		{http.MethodPost, "/api/v1/auth/logout"},
+		{http.MethodGet, "/api/v1/users/me"},
+		{http.MethodPut, "/api/v1/users/me/preferences"},
+		{http.MethodPatch, "/api/v1/anomalies/sale/-123/review"},
+		{http.MethodGet, "/api/v1/health"},
+	} {
 		response := httptest.NewRecorder()
-		request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
-		if test.auth {
-			request.Header.Set("Authorization", "Bearer token")
-		}
-		handler.ServeHTTP(response, request)
-		if response.Code != test.status {
-			t.Fatalf("%s %s status=%d body=%s",
-				test.method, test.path, response.Code, response.Body.String())
-		}
-	}
-}
-
-func TestIdentityValidationAndAuthentication(t *testing.T) {
-	tests := []struct{ method, path, body string }{
-		{http.MethodPost, "/api/v1/auth/register",
-			`{"email":"bad","password":"short","displayName":""}`},
-		{http.MethodGet, "/api/v1/users/me", ""},
-		{http.MethodPut, "/api/v1/users/me/preferences", `[]`},
-	}
-	handler := newTestHandler(nil, fakeGeographies{})
-	for _, test := range tests {
-		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(
-			test.method, test.path, strings.NewReader(test.body)))
-		if response.Code < 400 {
-			t.Fatalf("%s %s status=%d", test.method, test.path, response.Code)
+		handler.ServeHTTP(response, httptest.NewRequest(test.method, test.path, strings.NewReader(`{}`)))
+		if response.Code != http.StatusNotFound && response.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s %s status=%d, want 404 or 405", test.method, test.path, response.Code)
 		}
 	}
 }
@@ -415,25 +373,6 @@ func TestAnomalyEndpointsRejectInvalidFilters(t *testing.T) {
 		if response.Code != http.StatusBadRequest {
 			t.Fatalf("path=%s status=%d", path, response.Code)
 		}
-	}
-}
-
-func TestReviewAnomalyRequiresAuthAndAcceptsSignedID(t *testing.T) {
-	handler := newTestHandler(nil, fakeGeographies{})
-	body := `{"status":"confirmed_valid","notes":"checked source"}`
-	unauthorized := httptest.NewRecorder()
-	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPatch,
-		"/api/v1/anomalies/sale/-123/review", strings.NewReader(body)))
-	if unauthorized.Code != http.StatusUnauthorized {
-		t.Fatalf("unauthorized status=%d", unauthorized.Code)
-	}
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPatch,
-		"/api/v1/anomalies/sale/-123/review", strings.NewReader(body))
-	request.Header.Set("Authorization", "Bearer token")
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusNoContent {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

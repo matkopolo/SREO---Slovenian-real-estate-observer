@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
 )
 
 var ErrTransactionNotFound = errors.New("transaction not found")
@@ -135,9 +136,7 @@ type TransactionDetailStore interface {
 func (r *StatisticsRepository) SaleTransaction(
 	ctx context.Context, id int64,
 ) (SaleTransactionDetail, error) {
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
-		IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly,
-	})
+	tx, err := database.BeginReadOnly(ctx, r.db, pgx.RepeatableRead)
 	if err != nil {
 		return SaleTransactionDetail{}, fmt.Errorf("begin sale detail: %w", err)
 	}
@@ -199,9 +198,7 @@ func (r *StatisticsRepository) SaleTransaction(
 func (r *StatisticsRepository) RentalTransaction(
 	ctx context.Context, id int64,
 ) (RentalTransactionDetail, error) {
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
-		IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly,
-	})
+	tx, err := database.BeginReadOnly(ctx, r.db, pgx.RepeatableRead)
 	if err != nil {
 		return RentalTransactionDetail{}, fmt.Errorf("begin rental detail: %w", err)
 	}

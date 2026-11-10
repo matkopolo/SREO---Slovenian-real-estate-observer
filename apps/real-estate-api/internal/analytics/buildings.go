@@ -2,7 +2,6 @@ package analytics
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -36,6 +35,8 @@ type BuildingTransaction struct {
 	Area          *float64 `json:"area"`
 	Amount        *float64 `json:"amount"`
 	AmountPerSQM  *float64 `json:"amountPerSqm"`
+	// Representative tells whether the agreement enters the published statistics.
+	Representative bool `json:"representative"`
 }
 
 type BuildingSearchResult struct {
@@ -58,6 +59,10 @@ type BuildingStatistics struct {
 	BuildingNumber            string                `json:"buildingNumber"`
 	ConstructionYear          *int32                `json:"constructionYear"`
 	KnownBuildingPartCount    int64                 `json:"knownBuildingPartCount"`
+	Settlement                *string               `json:"settlement"`
+	Street                    *string               `json:"street"`
+	HouseNumber               *string               `json:"houseNumber"`
+	HouseNumberSuffix         *string               `json:"houseNumberSuffix"`
 	Longitude                 *float64              `json:"longitude"`
 	Latitude                  *float64              `json:"latitude"`
 	Sales                     BuildingMarketSummary `json:"sales"`
@@ -76,81 +81,7 @@ type BuildingFilter struct {
 
 type BuildingStore interface {
 	BuildingStatistics(context.Context, int32, string, BuildingFilter) (BuildingStatistics, error)
-	SearchBuildings(context.Context, string, int, BuildingFilter) ([]BuildingSearchResult, error)
-}
-
-func (r *StatisticsRepository) SearchBuildings(
-	ctx context.Context, search string, limit int, filter BuildingFilter,
-) ([]BuildingSearchResult, error) {
-	rows, err := r.pool.Query(ctx, `
-		WITH buildings AS (
-		  SELECT cadastral_municipality_code,building_number,
-		    max(settlement) settlement,max(street) street,max(house_number) house_number,
-		    max(house_number_suffix) house_number_suffix,
-		    ST_Centroid(ST_Collect(location)) location
-		  FROM building_parts
-		  WHERE cadastral_municipality_code IS NOT NULL
-		    AND building_number IS NOT NULL AND location IS NOT NULL
-		    AND to_tsvector('simple',concat_ws(' ',settlement,street,house_number,
-		      house_number_suffix,cadastral_municipality_code::text,building_number))
-		      @@ plainto_tsquery('simple',$1)
-		  GROUP BY cadastral_municipality_code,building_number
-		)
-		SELECT b.cadastral_municipality_code,b.building_number,b.settlement,b.street,
-		  b.house_number,b.house_number_suffix,ST_X(ST_Transform(b.location,4326)),
-		  ST_Y(ST_Transform(b.location,4326)),
-		  coalesce(sales.total,0),coalesce(rentals.total,0),
-		  coalesce(sales.by_group,'{}'::jsonb),coalesce(rentals.by_group,'{}'::jsonb)
-		FROM buildings b
-		LEFT JOIN LATERAL (
-		  SELECT sum(group_count)::bigint total,
-		    jsonb_object_agg(property_group,group_count) by_group
-		  FROM (SELECT property_group,count(*)::bigint group_count
-		    FROM analytics.sale_facts f
-		    WHERE f.cadastral_municipality_code=b.cadastral_municipality_code
-		      AND f.building_number=b.building_number
-		      AND ($3::date IS NULL OR f.contract_date>=$3)
-		      AND ($4::date IS NULL OR f.contract_date<=$4)
-		    GROUP BY property_group) grouped
-		) sales ON true
-		LEFT JOIN LATERAL (
-		  SELECT sum(group_count)::bigint total,
-		    jsonb_object_agg(property_group,group_count) by_group
-		  FROM (SELECT property_group,count(*)::bigint group_count
-		    FROM analytics.rental_facts f
-		    WHERE f.cadastral_municipality_code=b.cadastral_municipality_code
-		      AND f.building_number=b.building_number
-		      AND ($3::date IS NULL OR f.contract_date>=$3)
-		      AND ($4::date IS NULL OR f.contract_date<=$4)
-		    GROUP BY property_group) grouped
-		) rentals ON true
-		ORDER BY coalesce(sales.total,0) DESC,b.settlement,b.street,b.house_number
-		LIMIT $2`, search, limit, filter.FromDate, filter.ToDate)
-	if err != nil {
-		return nil, fmt.Errorf("search buildings: %w", err)
-	}
-	defer rows.Close()
-	items := make([]BuildingSearchResult, 0)
-	for rows.Next() {
-		var item BuildingSearchResult
-		var saleCounts, rentalCounts []byte
-		if err := rows.Scan(
-			&item.CadastralMunicipalityCode, &item.BuildingNumber,
-			&item.Settlement, &item.Street, &item.HouseNumber,
-			&item.HouseNumberSuffix, &item.Longitude, &item.Latitude,
-			&item.SaleCount, &item.RentalCount, &saleCounts, &rentalCounts,
-		); err != nil {
-			return nil, fmt.Errorf("scan building search result: %w", err)
-		}
-		if err := json.Unmarshal(saleCounts, &item.SaleCounts); err != nil {
-			return nil, fmt.Errorf("decode building sale counts: %w", err)
-		}
-		if err := json.Unmarshal(rentalCounts, &item.RentalCounts); err != nil {
-			return nil, fmt.Errorf("decode building rental counts: %w", err)
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
+	SearchBuildings(context.Context, string, int, BuildingFilter) (BuildingSearch, error)
 }
 
 func (r *StatisticsRepository) BuildingStatistics(
@@ -165,22 +96,25 @@ func (r *StatisticsRepository) BuildingStatistics(
 		SaleTransactions:          []BuildingTransaction{},
 		RentalTransactions:        []BuildingTransaction{},
 	}
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.QueryRow(ctx, `
 		WITH parts AS (
-		  SELECT construction_year,building_part_number,location
+		  SELECT construction_year,building_part_number,location,settlement,street,house_number::text house_number,house_number_suffix
 		  FROM building_parts
 		  WHERE cadastral_municipality_code=$1 AND building_number=$2
 		  UNION ALL
-		  SELECT construction_year,building_part_number,location
+		  SELECT construction_year,building_part_number,location,settlement,street,house_number::text,house_number_suffix
 		  FROM rental_building_parts
 		  WHERE cadastral_municipality_code=$1 AND building_number=$2
 		)
 		SELECT min(construction_year),
 		  count(DISTINCT building_part_number) FILTER(WHERE building_part_number IS NOT NULL),
+		  mode() WITHIN GROUP (ORDER BY settlement),mode() WITHIN GROUP (ORDER BY street),
+		  mode() WITHIN GROUP (ORDER BY house_number),mode() WITHIN GROUP (ORDER BY house_number_suffix),
 		  ST_X(ST_Transform(ST_Centroid(ST_Collect(location)),4326)),
 		  ST_Y(ST_Transform(ST_Centroid(ST_Collect(location)),4326))
 		FROM parts HAVING count(*)>0`, cadastralCode, buildingNumber).Scan(
 		&result.ConstructionYear, &result.KnownBuildingPartCount,
+		&result.Settlement, &result.Street, &result.HouseNumber, &result.HouseNumberSuffix,
 		&result.Longitude, &result.Latitude)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return BuildingStatistics{}, ErrBuildingNotFound
@@ -207,9 +141,9 @@ func (r *StatisticsRepository) BuildingStatistics(
 	if err != nil {
 		return BuildingStatistics{}, err
 	}
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.Query(ctx, `
 		SELECT transaction_id,contract_date::text,property_group,area::float8,
-		  price::float8,price_per_sqm::float8
+		  price::float8,price_per_sqm::float8,representative_eligible
 		FROM analytics.sale_facts_strict_land
 		WHERE cadastral_municipality_code=$1 AND building_number=$2
 		  AND ($3='' OR property_group=$3)
@@ -226,7 +160,7 @@ func (r *StatisticsRepository) BuildingStatistics(
 		var item BuildingTransaction
 		if err := rows.Scan(&item.TransactionID, &item.ContractDate,
 			&item.PropertyGroup, &item.Area, &item.Amount,
-			&item.AmountPerSQM); err != nil {
+			&item.AmountPerSQM, &item.Representative); err != nil {
 			return BuildingStatistics{}, fmt.Errorf("scan building sale transaction: %w", err)
 		}
 		result.SaleTransactions = append(result.SaleTransactions, item)
@@ -235,9 +169,9 @@ func (r *StatisticsRepository) BuildingStatistics(
 		return BuildingStatistics{}, err
 	}
 	rows.Close()
-	rentalRows, err := r.pool.Query(ctx, `
+	rentalRows, err := r.db.Query(ctx, `
 		SELECT transaction_id,contract_date::text,property_group,area::float8,
-		  monthly_rent_ex_vat::float8,monthly_rent_per_sqm::float8
+		  monthly_rent_ex_vat::float8,monthly_rent_per_sqm::float8,representative_eligible
 		FROM analytics.rental_facts
 		WHERE cadastral_municipality_code=$1 AND building_number=$2
 		  AND ($3='' OR property_group=$3)
@@ -254,7 +188,7 @@ func (r *StatisticsRepository) BuildingStatistics(
 		var item BuildingTransaction
 		if err := rentalRows.Scan(&item.TransactionID, &item.ContractDate,
 			&item.PropertyGroup, &item.Area, &item.Amount,
-			&item.AmountPerSQM); err != nil {
+			&item.AmountPerSQM, &item.Representative); err != nil {
 			return BuildingStatistics{}, fmt.Errorf("scan building rental transaction: %w", err)
 		}
 		result.RentalTransactions = append(result.RentalTransactions, item)
@@ -279,7 +213,7 @@ func (r *StatisticsRepository) loadBuildingSummary(
 		  AND ($4::date IS NULL OR contract_date>=$4)
 		  AND ($5::date IS NULL OR contract_date<=$5)`,
 		amount, perSQM, table)
-	if err := r.pool.QueryRow(ctx, query, code, number, filter.PropertyGroup,
+	if err := r.db.QueryRow(ctx, query, code, number, filter.PropertyGroup,
 		filter.FromDate, filter.ToDate).Scan(
 		&result.TransactionCount, &result.RepresentativeCount,
 		&result.MedianAmount, &result.MedianAmountPerSQM,
@@ -307,7 +241,7 @@ func (r *StatisticsRepository) loadBuildingHistory(
 		  AND ($4::date IS NULL OR contract_date>=$4)
 		  AND ($5::date IS NULL OR contract_date<=$5)
 		GROUP BY 1 ORDER BY 1`, perSQM, amount, table)
-	rows, err := r.pool.Query(ctx, query, code, number, filter.PropertyGroup,
+	rows, err := r.db.Query(ctx, query, code, number, filter.PropertyGroup,
 		filter.FromDate, filter.ToDate)
 	if err != nil {
 		return nil, fmt.Errorf("load building history: %w", err)

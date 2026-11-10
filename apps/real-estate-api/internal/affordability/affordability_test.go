@@ -57,3 +57,22 @@ func TestComputeDerivesPriceDownPaymentAndArea(t *testing.T) {
 		t.Fatal("a suppressed median must not produce an area")
 	}
 }
+
+func TestHouseholdAppliesLimitsPerBorrower(t *testing.T) {
+	rule := Rule{DSTIMax: 0.5, MinRemainingIncome: 819, RecommendedLTV: 0.8}
+	rates := Rates{Fixed: 3.3, Variable: 4}
+	single := Household([]float64{1453}, rule, rates)
+	couple := Household([]float64{1453, 1453}, rule, rates)
+	if couple.Loan30Years != 2*single.Loan30Years && math.Abs(couple.Loan30Years-2*single.Loan30Years) > 1 {
+		t.Fatalf("couple %v, single %v", couple.Loan30Years, single.Loan30Years)
+	}
+	// 1453 − 819 = 634 < 0,5 × 1453: the remaining-income floor binds.
+	if single.MaxInstalment != 634 || !single.FloorBinding || single.Loan30Stress >= single.Loan30Years {
+		t.Fatalf("single %+v", single)
+	}
+	// Uneven incomes: the higher earner is limited by DSTI, the lower one by the floor.
+	mixed := Household([]float64{4000, 1000}, rule, rates)
+	if mixed.MaxInstalment != 2000+181 {
+		t.Fatalf("mixed instalment %v", mixed.MaxInstalment)
+	}
+}

@@ -60,17 +60,16 @@ func (r *StatisticsRepository) RentalDistribution(
 func (r *StatisticsRepository) distribution(
 	ctx context.Context, filter StatisticsFilter, table, column, metric string, bins int,
 ) (Distribution, error) {
-	clause, geographyID, err := r.geographyClause(ctx, filter.GeographyID)
+	var args queryArgs
+	where, err := r.factFilter(ctx, "fact", filter, &args)
 	if err != nil {
 		return Distribution{}, err
 	}
+	binCount := args.add(bins)
 	query := fmt.Sprintf(`
 		WITH values AS MATERIALIZED (
-		  SELECT %s::float8 value FROM %s
-		  WHERE representative_eligible AND %s IS NOT NULL
-		    AND ($1::date IS NULL OR contract_date >= $1)
-		    AND ($2::date IS NULL OR contract_date <= $2)
-		    AND ($3 = '' OR property_group=$3) AND %s
+		  SELECT fact.%[1]s::float8 value FROM %[2]s fact
+		  WHERE fact.representative_eligible AND fact.%[1]s IS NOT NULL AND %[3]s
 		), summary AS (
 		  SELECT count(*)::bigint sample_size,
 		    percentile_cont(.05) WITHIN GROUP(ORDER BY value) p05,
@@ -84,7 +83,7 @@ func (r *StatisticsRepository) distribution(
 		    percentile_cont(.99) WITHIN GROUP(ORDER BY value) high
 		  FROM values
 		), bucketed AS (
-		  SELECT greatest(1,least($7,width_bucket(value,s.low,s.high,$7))) bucket,
+		  SELECT greatest(1,least(%[4]s,width_bucket(value,s.low,s.high,%[4]s))) bucket,
 		    count(*)::bigint count
 		  FROM values CROSS JOIN summary s
 		  WHERE s.high>s.low GROUP BY 1
@@ -97,18 +96,17 @@ func (r *StatisticsRepository) distribution(
 		  s.low,s.high,
 		  t.below_count,t.above_count,
 		  series.bucket,
-		  s.low+(series.bucket-1)*(s.high-s.low)/$7 bucket_from,
-		  s.low+series.bucket*(s.high-s.low)/$7 bucket_to,
+		  s.low+(series.bucket-1)*(s.high-s.low)/%[4]s bucket_from,
+		  s.low+series.bucket*(s.high-s.low)/%[4]s bucket_to,
 		  coalesce(b.count,0)
 		FROM summary s
 		CROSS JOIN tails t
-		CROSS JOIN generate_series(1,$7) series(bucket)
+		CROSS JOIN generate_series(1,%[4]s) series(bucket)
 		LEFT JOIN bucketed b ON b.bucket=series.bucket
 		GROUP BY s.sample_size,s.p05,s.p10,s.p25,s.p50,s.p75,s.p90,s.p95,
 		  s.low,s.high,t.below_count,t.above_count,series.bucket,b.count
-		ORDER BY series.bucket`, column, table, column, clause)
-	rows, err := r.pool.Query(ctx, query, filter.FromDate, filter.ToDate,
-		filter.PropertyGroup, geographyID, filter.MinArea, filter.MaxArea, bins)
+		ORDER BY series.bucket`, column, table, where, binCount)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return Distribution{}, fmt.Errorf("calculate %s distribution: %w", metric, err)
 	}

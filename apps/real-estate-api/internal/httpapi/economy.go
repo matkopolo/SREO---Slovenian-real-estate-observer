@@ -23,11 +23,33 @@ func (s *server) inflation(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := s.economics.Inflation(r.Context(), from, to, interval)
 	if err != nil {
-		s.logger.Error("load inflation", "error", err)
+		requestLog(r).Warn("load inflation", "error", err)
 		writeError(w, r, http.StatusBadGateway, "source_unavailable", "SURS inflation data is unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, r, http.StatusOK, map[string]any{
 		"items": items, "count": len(items), "source": "SURS SiStat H281S",
 	})
+}
+
+func (s *server) inflationFactor(w http.ResponseWriter, r *http.Request) {
+	from, ok := optionalDate(w, r, "from")
+	if !ok {
+		return
+	}
+	to, ok := optionalDate(w, r, "to")
+	if !ok {
+		return
+	}
+	if from == nil || to == nil || from.After(*to) || from.Year() < 1991 || to.After(s.now().UTC()) {
+		writeError(w, r, http.StatusBadRequest, "invalid_date_range", "from/to must be ordered dates from 1991 through today")
+		return
+	}
+	result, err := s.economics.InflationFactor(r.Context(), *from, *to)
+	if err != nil {
+		requestLog(r).Warn("inflation factor", "error", err)
+		writeError(w, r, http.StatusServiceUnavailable, "inflation_unavailable", "complete monthly inflation series unavailable")
+		return
+	}
+	writeJSON(w, r, http.StatusOK, result)
 }

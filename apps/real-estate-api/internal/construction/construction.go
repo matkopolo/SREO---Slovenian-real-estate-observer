@@ -1,5 +1,5 @@
 // Package construction serves the official construction sources behind "Gradbeni projekti":
-// GURS registered buildings, SURS building-permit counts and EU TED public-works notices.
+// GURS registered buildings and SURS building-permit counts.
 // Registered buildings are completed (or measurable) buildings, never construction in progress.
 package construction
 
@@ -9,10 +9,14 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
 )
 
-var ErrNotFound = errors.New("construction record not found")
+// ErrBuildingNotFound means no registered building has the requested EID.
+var ErrBuildingNotFound = errors.New("building not found")
+
+// ErrGeographyNotFound means the requested geography does not exist.
+var ErrGeographyNotFound = errors.New("geography not found")
 
 // Filter narrows registered buildings. GeographyID nil means Slovenia.
 type Filter struct {
@@ -39,13 +43,10 @@ type PermitYear struct {
 }
 
 type Summary struct {
-	SourceDate        *string      `json:"sourceDate"`
-	BuildingsByYear   []YearCount  `json:"buildingsByYear"`
-	Permits           []PermitYear `json:"permits"`
-	PermitsScope      string       `json:"permitsScope"`
-	PublicWorks12m    int64        `json:"publicWorksLast12Months"`
-	PublicWorksAwards int64        `json:"publicWorksAwardsLast12Months"`
-	PublicWorksScope  string       `json:"publicWorksScope"`
+	SourceDate      *string      `json:"sourceDate"`
+	BuildingsByYear []YearCount  `json:"buildingsByYear"`
+	Permits         []PermitYear `json:"permits"`
+	PermitsScope    string       `json:"permitsScope"`
 }
 
 type MapFeature struct {
@@ -82,29 +83,15 @@ type Building struct {
 	SourceDate           string   `json:"sourceDate"`
 }
 
-type Notice struct {
-	PublicationNumber string   `json:"publicationNumber"`
-	NoticeType        string   `json:"noticeType"`
-	PublicationDate   string   `json:"publicationDate"`
-	Title             string   `json:"title"`
-	Buyer             *string  `json:"buyer"`
-	Winners           []string `json:"winners"`
-	Regions           []string `json:"regions"`
-	Value             *float64 `json:"value"`
-	Currency          *string  `json:"currency"`
-	URL               string   `json:"url"`
-}
-
 type Store interface {
 	Summary(context.Context, Filter) (Summary, error)
 	MapFeatures(context.Context, Filter, bool) ([]MapFeature, bool, error)
 	Building(context.Context, string) (Building, error)
-	PublicWorks(context.Context, *int64, int, int) ([]Notice, int64, error)
 }
 
-type Repository struct{ pool *pgxpool.Pool }
+type Repository struct{ pool database.Querier }
 
-func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
+func NewRepository(pool database.Querier) *Repository { return &Repository{pool: pool} }
 
 // area is a CTE selecting the boundary of the requested geography (Slovenia when NULL).
 const area = `area AS (
@@ -126,6 +113,12 @@ const municipalities = `municipalities AS (
 )`
 
 func (r *Repository) Summary(ctx context.Context, filter Filter) (Summary, error) {
+	var level string
+	if err := r.pool.QueryRow(ctx, `WITH `+area+` SELECT level FROM area`, filter.GeographyID).Scan(&level); errors.Is(err, pgx.ErrNoRows) {
+		return Summary{}, ErrGeographyNotFound
+	} else if err != nil {
+		return Summary{}, fmt.Errorf("geography level: %w", err)
+	}
 	var summary Summary
 	if err := r.pool.QueryRow(ctx, `SELECT max(source_date)::text FROM analytics.cadastre_buildings`).Scan(&summary.SourceDate); err != nil {
 		return Summary{}, fmt.Errorf("building snapshot: %w", err)
@@ -143,12 +136,6 @@ func (r *Repository) Summary(ctx context.Context, filter Filter) (Summary, error
 		return Summary{}, fmt.Errorf("buildings by year: %w", err)
 	}
 
-	var level string
-	if err := r.pool.QueryRow(ctx, `WITH `+area+` SELECT level FROM area`, filter.GeographyID).Scan(&level); errors.Is(err, pgx.ErrNoRows) {
-		return Summary{}, ErrNotFound
-	} else if err != nil {
-		return Summary{}, fmt.Errorf("geography level: %w", err)
-	}
 	permitKeys := `SELECT key FROM municipalities`
 	summary.PermitsScope = "municipalities"
 	if level == "country" {
@@ -169,26 +156,6 @@ func (r *Repository) Summary(ctx context.Context, filter Filter) (Summary, error
 		return Summary{}, fmt.Errorf("permits: %w", err)
 	}
 
-	summary.PublicWorksScope = "slovenia"
-	err = r.pool.QueryRow(ctx, `WITH `+area+`, region AS (
-			SELECT n.nuts3 FROM area
-			JOIN analytics.geographic_units g ON g.id = area.id
-			LEFT JOIN analytics.geographic_units p1 ON p1.id = g.parent_id
-			LEFT JOIN analytics.geographic_units p2 ON p2.id = p1.parent_id
-			JOIN analytics.nuts3_regions n ON n.region_name IN (
-				CASE WHEN g.level = 'statistical_region' THEN g.name END,
-				CASE WHEN p1.level = 'statistical_region' THEN p1.name END,
-				CASE WHEN p2.level = 'statistical_region' THEN p2.name END)
-		)
-		SELECT count(*), count(*) FILTER (WHERE notice_type LIKE 'can%'),
-		       CASE WHEN EXISTS (SELECT 1 FROM region) THEN 'region' ELSE 'slovenia' END
-		FROM analytics.public_works_notices
-		WHERE publication_date >= current_date - interval '12 months'
-		  AND (NOT EXISTS (SELECT 1 FROM region) OR nuts3 && ARRAY(SELECT nuts3 FROM region))`,
-		filter.GeographyID).Scan(&summary.PublicWorks12m, &summary.PublicWorksAwards, &summary.PublicWorksScope)
-	if err != nil {
-		return Summary{}, fmt.Errorf("public works: %w", err)
-	}
 	return summary, nil
 }
 
@@ -235,7 +202,10 @@ func (r *Repository) MapFeatures(ctx context.Context, filter Filter, buildings b
 		return nil, false, fmt.Errorf("municipality aggregates: %w", err)
 	}
 	features, err := pgx.CollectRows(rows, scanFeature)
-	return features, false, err
+	if err != nil {
+		return nil, false, fmt.Errorf("municipality aggregates: %w", err)
+	}
+	return features, false, nil
 }
 
 func scanFeature(row pgx.CollectableRow) (MapFeature, error) {
@@ -268,41 +238,10 @@ func (r *Repository) Building(ctx context.Context, eid string) (Building, error)
 		&building.MunicipalityID, &building.Longitude, &building.Latitude, &building.SaleTransactions,
 		&building.RentalTransactions, &building.SourceDate)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Building{}, ErrNotFound
+		return Building{}, ErrBuildingNotFound
 	}
 	if err != nil {
 		return Building{}, fmt.Errorf("building %s: %w", eid, err)
 	}
 	return building, nil
-}
-
-func (r *Repository) PublicWorks(ctx context.Context, geographyID *int64, limit, offset int) ([]Notice, int64, error) {
-	const regionFilter = `WITH ` + area + `, region AS (
-			SELECT n.nuts3 FROM area
-			JOIN analytics.geographic_units g ON g.id = area.id
-			LEFT JOIN analytics.geographic_units p1 ON p1.id = g.parent_id
-			LEFT JOIN analytics.geographic_units p2 ON p2.id = p1.parent_id
-			JOIN analytics.nuts3_regions n ON n.region_name IN (
-				CASE WHEN g.level = 'statistical_region' THEN g.name END,
-				CASE WHEN p1.level = 'statistical_region' THEN p1.name END,
-				CASE WHEN p2.level = 'statistical_region' THEN p2.name END)
-		), notices AS (
-			SELECT * FROM analytics.public_works_notices
-			WHERE NOT EXISTS (SELECT 1 FROM region) OR nuts3 && ARRAY(SELECT nuts3 FROM region)
-		)`
-	var total int64
-	if err := r.pool.QueryRow(ctx, regionFilter+` SELECT count(*) FROM notices`, geographyID).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("public works count: %w", err)
-	}
-	rows, err := r.pool.Query(ctx, regionFilter+`
-		SELECT n.publication_number, n.notice_type, n.publication_date::text, n.title, n.buyer, n.winners,
-		       coalesce(ARRAY(SELECT r.region_name FROM analytics.nuts3_regions r WHERE r.nuts3 = ANY(n.nuts3) ORDER BY 1), '{}'),
-		       n.value::float8, n.currency, n.url
-		FROM notices n ORDER BY n.publication_date DESC, n.publication_number DESC LIMIT $2 OFFSET $3`,
-		geographyID, limit, offset)
-	if err != nil {
-		return nil, 0, fmt.Errorf("public works: %w", err)
-	}
-	notices, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Notice])
-	return notices, total, err
 }

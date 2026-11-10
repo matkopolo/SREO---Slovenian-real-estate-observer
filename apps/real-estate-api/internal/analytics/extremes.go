@@ -25,19 +25,18 @@ func (r *StatisticsRepository) TransactionExtremes(
 	} else if kind != "sale" {
 		return nil, fmt.Errorf("unsupported transaction kind %q", kind)
 	}
-	clause, geographyID, err := r.geographyClause(ctx, filter.GeographyID)
+	var args queryArgs
+	where, err := r.factFilter(ctx, "fact", filter, &args)
 	if err != nil {
 		return nil, err
 	}
+	rank := args.add(limit)
 	query := fmt.Sprintf(`
 		WITH eligible AS MATERIALIZED (
-		  SELECT transaction_id,contract_date,property_group,area,%s amount,
-		    %s amount_per_sqm
-		  FROM %s
-		  WHERE representative_eligible AND %s>0 AND %s>0
-		    AND ($1::date IS NULL OR contract_date >= $1)
-		    AND ($2::date IS NULL OR contract_date <= $2)
-		    AND ($3='' OR property_group=$3) AND %s
+		  SELECT fact.transaction_id,fact.contract_date,fact.property_group,fact.area,fact.%[1]s amount,
+		    fact.%[2]s amount_per_sqm
+		  FROM %[3]s fact
+		  WHERE fact.representative_eligible AND fact.%[2]s>0 AND fact.%[1]s>0 AND %[4]s
 		), ranked AS (
 		  SELECT *,
 		    row_number() OVER(ORDER BY amount,transaction_id) low_rank,
@@ -48,17 +47,16 @@ func (r *StatisticsRepository) TransactionExtremes(
 		FROM (
 		  SELECT 'lowest' direction,transaction_id,contract_date::text,property_group,
 		    area::float8,amount::float8,amount_per_sqm::float8
-		  FROM ranked WHERE low_rank<=$7
+		  FROM ranked WHERE low_rank<=%[5]s
 		  UNION ALL
 		  SELECT 'highest' direction,transaction_id,contract_date::text,property_group,
 		    area::float8,amount::float8,amount_per_sqm::float8
-		  FROM ranked WHERE high_rank<=$7
+		  FROM ranked WHERE high_rank<=%[5]s
 		) extremes
 		ORDER BY CASE direction WHEN 'highest' THEN 0 ELSE 1 END,
 		  CASE WHEN direction='highest' THEN -amount ELSE amount END,transaction_id`,
-		amount, perSQM, table, perSQM, amount, clause)
-	rows, err := r.pool.Query(ctx, query, filter.FromDate, filter.ToDate,
-		filter.PropertyGroup, geographyID, filter.MinArea, filter.MaxArea, limit)
+		amount, perSQM, table, where, rank)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load transaction extremes: %w", err)
 	}

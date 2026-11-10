@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
 )
 
 // ErrUnavailable means the context series needed for the illustration are not stored yet.
@@ -123,17 +123,45 @@ func Compute(bands []Band, rule Rule, rates Rates, medianPerSqm *float64) []Row 
 
 func round(value float64) float64 { return math.Round(value) }
 
+// HouseholdResult sums the per-borrower limits: Banka Slovenije applies DSTI and the
+// remaining-income floor to each borrower separately.
+type HouseholdResult struct {
+	Incomes        []float64 `json:"netIncomes"`
+	MaxInstalment  float64   `json:"maxInstalment"`
+	FloorBinding   bool      `json:"floorBinding"`
+	Loan20Years    float64   `json:"loan20Years"`
+	Loan30Years    float64   `json:"loan30Years"`
+	Loan30Stress   float64   `json:"loan30YearsStress"`
+	MaxLoanToValue float64   `json:"recommendedLtv"`
+}
+
+func Household(incomes []float64, rule Rule, rates Rates) HouseholdResult {
+	result := HouseholdResult{Incomes: incomes, MaxLoanToValue: rule.RecommendedLTV}
+	for _, income := range incomes {
+		instalment, floor := Instalment(income, rule)
+		result.MaxInstalment += instalment
+		result.FloorBinding = result.FloorBinding || floor
+		result.Loan20Years += Principal(instalment, rates.Fixed, 20)
+		result.Loan30Years += Principal(instalment, rates.Fixed, 30)
+		result.Loan30Stress += Principal(instalment, rates.Fixed+StressMarginPoints, 30)
+	}
+	result.MaxInstalment, result.Loan20Years = round(result.MaxInstalment), round(result.Loan20Years)
+	result.Loan30Years, result.Loan30Stress = round(result.Loan30Years), round(result.Loan30Stress)
+	return result
+}
+
 // Store reads the stored context series.
 type Store interface {
 	Rule(ctx context.Context, on time.Time) (Rule, error)
 	Wages(ctx context.Context, geographyKey string) ([]Observation, error)
 	Latest(ctx context.Context, series string) (Observation, error)
+	AllWages(ctx context.Context) (map[string][]Observation, error)
 }
 
 // Repository implements Store on PostgreSQL.
-type Repository struct{ pool *pgxpool.Pool }
+type Repository struct{ pool database.Querier }
 
-func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
+func NewRepository(pool database.Querier) *Repository { return &Repository{pool: pool} }
 
 func (r *Repository) Rule(ctx context.Context, on time.Time) (Rule, error) {
 	var rule Rule
@@ -167,7 +195,38 @@ func (r *Repository) Wages(ctx context.Context, geographyKey string) ([]Observat
 	if err != nil {
 		return nil, fmt.Errorf("wage distribution: %w", err)
 	}
-	return pgx.CollectRows(rows, pgx.RowToStructByPos[Observation])
+	observations, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Observation])
+	if err != nil {
+		return nil, fmt.Errorf("wage distribution: %w", err)
+	}
+	return observations, nil
+}
+
+// AllWages returns the newest wage distribution of every geography key in one query.
+func (r *Repository) AllWages(ctx context.Context) (map[string][]Observation, error) {
+	rows, err := r.pool.Query(ctx, `
+		WITH latest AS (
+			SELECT geography_key, max(period) AS period FROM analytics.context_series
+			WHERE source = 'surs' AND series = 'net_wage_p50' GROUP BY geography_key
+		)
+		SELECT c.geography_key, c.series, c.period, c.value::float8, c.source_table
+		FROM analytics.context_series c JOIN latest l USING (geography_key, period)
+		WHERE c.source = 'surs' AND c.series LIKE 'net\_wage\_%' AND c.series <> 'net_wage_mean_monthly'
+		ORDER BY 1, 2`)
+	if err != nil {
+		return nil, fmt.Errorf("all wage distributions: %w", err)
+	}
+	defer rows.Close()
+	wages := map[string][]Observation{}
+	for rows.Next() {
+		var key string
+		var observation Observation
+		if err := rows.Scan(&key, &observation.Series, &observation.Period, &observation.Value, &observation.SourceTable); err != nil {
+			return nil, fmt.Errorf("scan wage distribution: %w", err)
+		}
+		wages[key] = append(wages[key], observation)
+	}
+	return wages, rows.Err()
 }
 
 // Latest returns the newest observation of a national series.

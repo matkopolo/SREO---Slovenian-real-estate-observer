@@ -1,36 +1,64 @@
+// Package economics serves the SURS consumer-price index (table H281S): annual inflation rates
+// and chained monthly price factors. The table is fetched from SURS PxWeb and kept in memory.
 package economics
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/memo"
 )
 
 const DefaultSURSURL = "https://pxweb.stat.si/SiStatData/api/v1/en/Data/H281S.px"
+
+// ErrSourceUnavailable wraps every failure to obtain the CPI table from SURS.
+var ErrSourceUnavailable = errors.New("SURS consumer-price index is unavailable")
+
+const (
+	// H281S index selections: 1 is the month-on-previous-month index, 2 the year-on-year index.
+	monthOnMonthIndex = "1"
+	yearOnYearIndex   = "2"
+	// maxResponseBytes bounds a PxWeb answer (the full monthly series is about 20 kB).
+	maxResponseBytes = 4 << 20
+	cacheFor         = 6 * time.Hour
+)
 
 type Point struct {
 	Period            string  `json:"period"`
 	AnnualRatePercent float64 `json:"annualRatePercent"`
 }
 
-type Store interface {
-	Inflation(context.Context, time.Time, time.Time, string) ([]Point, error)
+type InflationFactor struct {
+	From   string  `json:"from"`
+	To     string  `json:"to"`
+	Factor float64 `json:"factor"`
+	Months int     `json:"months"`
+	Source string  `json:"source"`
 }
 
+type Store interface {
+	Inflation(ctx context.Context, from, to time.Time, interval string) ([]Point, error)
+	InflationFactor(ctx context.Context, from, to time.Time) (InflationFactor, error)
+}
+
+// monthlyIndex maps a month ("2024-01-01") to the published index value.
+type monthlyIndex map[string]float64
+
+// Client reads H281S from SURS. Each index is cached for six hours; a failed refresh keeps
+// serving the previous table, and requests never wait behind one another's SURS call.
 type Client struct {
-	url        string
-	httpClient *http.Client
-	mu         sync.Mutex
-	cachedAt   time.Time
-	monthly    []Point
-	ratios     map[string]float64
-	ratiosAt   time.Time
+	url          string
+	httpClient   *http.Client
+	yearOnYear   *memo.Value[monthlyIndex]
+	monthOnMonth *memo.Value[monthlyIndex]
 }
 
 func NewClient(httpClient *http.Client, url string) *Client {
@@ -40,40 +68,43 @@ func NewClient(httpClient *http.Client, url string) *Client {
 	if url == "" {
 		url = DefaultSURSURL
 	}
-	return &Client{url: url, httpClient: httpClient}
+	client := &Client{url: url, httpClient: httpClient}
+	options := memo.Options{TTL: cacheFor, Timeout: 15 * time.Second, RetryAfter: time.Minute}
+	client.yearOnYear = memo.New(client.loader(yearOnYearIndex), options)
+	client.monthOnMonth = memo.New(client.loader(monthOnMonthIndex), options)
+	return client
 }
 
-type pxResponse struct {
-	ID        []string `json:"id"`
-	Size      []int    `json:"size"`
-	Value     []any    `json:"value"`
-	Dimension map[string]struct {
-		Category struct {
-			Index map[string]int `json:"index"`
-		} `json:"category"`
-	} `json:"dimension"`
-	Dataset *pxResponse `json:"dataset"`
+func (c *Client) loader(index string) memo.LoadFunc[monthlyIndex] {
+	return func(ctx context.Context, _ monthlyIndex, _ bool) (monthlyIndex, error) {
+		values, err := c.fetch(ctx, index)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrSourceUnavailable, err)
+		}
+		return values, nil
+	}
 }
 
+// Inflation averages the year-on-year rates of the months from–to per month, quarter or year.
 func (c *Client) Inflation(ctx context.Context, from, to time.Time, interval string) ([]Point, error) {
-	monthly, err := c.load(ctx)
+	index, err := c.yearOnYear.Get(ctx)
 	if err != nil {
 		return nil, err
 	}
 	groups := map[string][]float64{}
-	for _, point := range monthly {
-		period, parseErr := time.Parse("2006-01-02", point.Period)
+	for month, value := range index {
+		period, parseErr := time.Parse("2006-01-02", month)
 		if parseErr != nil || period.Before(monthStart(from)) || period.After(monthStart(to)) {
 			continue
 		}
-		key := period.Format("2006-01-02")
+		key := month
 		switch interval {
 		case "quarter":
 			key = fmt.Sprintf("%04d-%02d-01", period.Year(), ((int(period.Month())-1)/3)*3+1)
 		case "year":
 			key = fmt.Sprintf("%04d-01-01", period.Year())
 		}
-		groups[key] = append(groups[key], point.AnnualRatePercent)
+		groups[key] = append(groups[key], value-100)
 	}
 	keys := make([]string, 0, len(groups))
 	for key := range groups {
@@ -91,54 +122,85 @@ func (c *Client) Inflation(ctx context.Context, from, to time.Time, interval str
 	return result, nil
 }
 
-func (c *Client) load(ctx context.Context) ([]Point, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if time.Since(c.cachedAt) < 6*time.Hour && c.monthly != nil {
-		return append([]Point(nil), c.monthly...), nil
-	}
-	body := `{"query":[{"code":"MESEC","selection":{"filter":"all","values":["*"]}},{"code":"INDEKS","selection":{"filter":"item","values":["2"]}}],"response":{"format":"json-stat2"}}`
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewBufferString(body))
+// InflationFactor chains monthly CPI ratios, never overlapping year-on-year rates. Rounded
+// published monthly ratios give an approximate adjustment, not a daily price index.
+func (c *Client) InflationFactor(ctx context.Context, from, to time.Time) (InflationFactor, error) {
+	index, err := c.monthOnMonth.Get(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("create SURS inflation request: %w", err)
+		return InflationFactor{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.httpClient.Do(req)
+	ratios := make(map[string]float64, len(index))
+	for month, value := range index {
+		if value > 0 {
+			ratios[month] = value / 100
+		}
+	}
+	return chainMonthlyRatios(ratios, from, to)
+}
+
+type pxResponse struct {
+	ID        []string `json:"id"`
+	Size      []int    `json:"size"`
+	Value     []any    `json:"value"`
+	Dimension map[string]struct {
+		Category struct {
+			Index map[string]int `json:"index"`
+		} `json:"category"`
+	} `json:"dimension"`
+	Dataset *pxResponse `json:"dataset"`
+}
+
+// fetch requests every month of one H281S index and returns its numeric values.
+func (c *Client) fetch(ctx context.Context, index string) (monthlyIndex, error) {
+	body := fmt.Sprintf(`{"query":[{"code":"MESEC","selection":{"filter":"all","values":["*"]}},`+
+		`{"code":"INDEKS","selection":{"filter":"item","values":[%q]}}],"response":{"format":"json-stat2"}}`, index)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewBufferString(body))
 	if err != nil {
-		return nil, fmt.Errorf("load SURS inflation: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("load SURS inflation: status %d", resp.StatusCode)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("request index %s: %w", index, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("request index %s: status %d", index, response.StatusCode)
 	}
 	var payload pxResponse
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode SURS inflation: %w", err)
+	if err := json.NewDecoder(io.LimitReader(response.Body, maxResponseBytes)).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode index %s: %w", index, err)
 	}
+	return parseIndex(payload)
+}
+
+func parseIndex(payload pxResponse) (monthlyIndex, error) {
 	if payload.Dataset != nil {
 		payload = *payload.Dataset
 	}
-	monthDimension, ok := payload.Dimension["MESEC"]
+	months, ok := payload.Dimension["MESEC"]
 	if !ok {
-		return nil, fmt.Errorf("decode SURS inflation: missing MESEC dimension")
+		return nil, errors.New("response has no MESEC dimension")
 	}
-	points := make([]Point, 0, len(monthDimension.Category.Index))
-	for month, index := range monthDimension.Category.Index {
-		if index >= len(payload.Value) || payload.Value[index] == nil {
+	// The request selects a single index. Reject a differently shaped response rather than
+	// accidentally reading another index.
+	if len(payload.ID) != 2 || payload.ID[0] != "MESEC" || payload.ID[1] != "INDEKS" ||
+		len(payload.Size) != 2 || payload.Size[1] != 1 {
+		return nil, errors.New("response has unexpected dimensions")
+	}
+	values := monthlyIndex{}
+	for month, position := range months.Category.Index {
+		if position < 0 || position >= len(payload.Value) || !strings.Contains(month, "M") {
 			continue
 		}
-		value, ok := payload.Value[index].(float64)
-		if !ok || !strings.Contains(month, "M") {
-			continue
+		if value, ok := payload.Value[position].(float64); ok {
+			values[strings.Replace(month, "M", "-", 1)+"-01"] = value
 		}
-		points = append(points, Point{
-			Period:            strings.Replace(month, "M", "-", 1) + "-01",
-			AnnualRatePercent: value - 100,
-		})
 	}
-	sort.Slice(points, func(i, j int) bool { return points[i].Period < points[j].Period })
-	c.monthly, c.cachedAt = points, time.Now()
-	return append([]Point(nil), points...), nil
+	if len(values) == 0 {
+		return nil, errors.New("response has no values")
+	}
+	return values, nil
 }
 
 func monthStart(value time.Time) time.Time {

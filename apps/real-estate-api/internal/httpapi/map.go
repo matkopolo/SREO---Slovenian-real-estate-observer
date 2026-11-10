@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,13 +22,8 @@ func (s *server) mapClusters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, err := s.maps.Clusters(r.Context(), filter, bounds, clusterGridSize(zoom))
-	if errors.Is(err, analytics.ErrGeographyNotFound) {
-		writeError(w, r, http.StatusNotFound, "geography_not_found", "geography was not found")
-		return
-	}
 	if err != nil {
-		s.logger.Error("map clusters", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not load map clusters")
+		s.fail(w, r, "load map clusters", err)
 		return
 	}
 	features := make([]map[string]any, 0, len(items))
@@ -46,7 +40,7 @@ func (s *server) mapClusters(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	}
-	writeGeoJSON(w, http.StatusOK, map[string]any{
+	writeGeoJSON(w, r, http.StatusOK, map[string]any{
 		"type": "FeatureCollection", "features": features,
 		"count": len(features), "zoom": zoom,
 	})
@@ -66,13 +60,8 @@ func (s *server) mapProperties(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, err := s.maps.PropertyPoints(r.Context(), filter, bounds, limit)
-	if errors.Is(err, analytics.ErrGeographyNotFound) {
-		writeError(w, r, http.StatusNotFound, "geography_not_found", "geography was not found")
-		return
-	}
 	if err != nil {
-		s.logger.Error("map properties", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not load map properties")
+		s.fail(w, r, "load map properties", err)
 		return
 	}
 	features := make([]map[string]any, 0, len(items))
@@ -86,7 +75,7 @@ func (s *server) mapProperties(w http.ResponseWriter, r *http.Request) {
 			"properties": item,
 		})
 	}
-	writeGeoJSON(w, http.StatusOK, map[string]any{
+	writeGeoJSON(w, r, http.StatusOK, map[string]any{
 		"type": "FeatureCollection", "features": features,
 		"count": len(features), "limit": limit,
 	})
@@ -115,13 +104,8 @@ func (s *server) geographyMap(w http.ResponseWriter, r *http.Request, kind strin
 		return
 	}
 	items, err := s.maps.GeographySummaries(r.Context(), filter, bounds, level, kind)
-	if errors.Is(err, analytics.ErrGeographyNotFound) {
-		writeError(w, r, http.StatusNotFound, "geography_not_found", "geography was not found")
-		return
-	}
 	if err != nil {
-		s.logger.Error("map geography summaries", "error", err, "level", level, "kind", kind)
-		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not load map geography summaries")
+		s.fail(w, r, "load map geography summaries", err)
 		return
 	}
 	features := make([]map[string]any, 0, len(items))
@@ -146,7 +130,7 @@ func (s *server) geographyMap(w http.ResponseWriter, r *http.Request, kind strin
 			"properties": properties,
 		})
 	}
-	writeGeoJSON(w, http.StatusOK, map[string]any{
+	writeGeoJSON(w, r, http.StatusOK, map[string]any{
 		"type": "FeatureCollection", "features": features,
 		"count": len(features), "level": level,
 	})
@@ -195,4 +179,30 @@ func clusterGridSize(zoom int) float64 {
 	default:
 		return 0.003
 	}
+}
+
+func (s *server) mapBuildings(w http.ResponseWriter, r *http.Request) {
+	filter, ok := statisticsFilter(w, r)
+	if !ok {
+		return
+	}
+	bounds, ok := mapBounds(w, r)
+	if !ok {
+		return
+	}
+	kind, ok := transactionKindParameter(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := boundedInteger(w, r, "limit", 2000, 1, 5000)
+	if !ok {
+		return
+	}
+	items, err := s.maps.BuildingSummaries(r.Context(), filter, bounds, kind, limit)
+	if err != nil {
+		s.fail(w, r, "load map buildings", err)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{"items": items, "count": len(items), "limit": limit,
+		"truncated": len(items) == limit, "transactionKind": kind})
 }

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/memo"
 )
 
 var ErrGeographyNotFound = errors.New("geography not found")
@@ -22,27 +22,6 @@ type StatisticsFilter struct {
 	LandScope     string
 	MinArea       *float64
 	MaxArea       *float64
-}
-
-func saleFactsTable(filter StatisticsFilter) string {
-	switch filter.LandScope {
-	case "broad":
-		return "analytics.sale_facts_broad_land"
-	case "all":
-		return "analytics.sale_facts_all_land"
-	case "agricultural":
-		return "analytics.sale_facts_agricultural_land"
-	case "forest":
-		return "analytics.sale_facts_forest_land"
-	case "unverified":
-		return "analytics.sale_facts_unverified_land"
-	case "mixed":
-		return "analytics.sale_facts_mixed_land"
-	case "other":
-		return "analytics.sale_facts_other_land"
-	default:
-		return "analytics.sale_facts_strict_land"
-	}
 }
 
 type Overview struct {
@@ -88,6 +67,14 @@ type StatisticsStore interface {
 	TimeSeries(context.Context, StatisticsFilter, string) ([]TimeSeriesPoint, error)
 	Outliers(context.Context, StatisticsFilter, int, int) ([]OutlierRecord, int64, error)
 	TransactionExtremes(context.Context, string, StatisticsFilter, int) ([]TransactionExtreme, error)
+	MunicipalityMedians(context.Context, StatisticsFilter) ([]GeographyMedian, error)
+}
+
+// GeographyMedian is the representative sale median of one geography.
+type GeographyMedian struct {
+	GeographyID         int64
+	RepresentativeCount int64
+	MedianPricePerSQM   *float64
 }
 
 type OutlierRecord struct {
@@ -109,16 +96,25 @@ type OutlierRecord struct {
 	RuleVersion               string   `json:"ruleVersion"`
 }
 
+// StatisticsRepository answers every analytics query from the published fact tables.
 type StatisticsRepository struct {
-	pool *pgxpool.Pool
+	db     database.Querier
+	now    func() time.Time
+	levels geographyLevels
+	// search is the in-memory address index of SearchBuildings, reloaded per release.
+	search *memo.Value[*releaseIndex]
 }
 
-func NewStatisticsRepository(pool *pgxpool.Pool) *StatisticsRepository {
-	return &StatisticsRepository{pool: pool}
+// NewStatisticsRepository returns a repository reading through db (a pool, or a test transaction).
+func NewStatisticsRepository(db database.Querier) *StatisticsRepository {
+	r := &StatisticsRepository{db: db, now: time.Now, levels: geographyLevels{byID: map[int64]string{}}}
+	r.search = newAddressIndexCache(r)
+	return r
 }
 
 func (r *StatisticsRepository) Overview(ctx context.Context, filter StatisticsFilter) (Overview, error) {
-	geographyClause, geographyID, err := r.geographyClause(ctx, filter.GeographyID)
+	var args queryArgs
+	where, err := r.factFilter(ctx, "fact", filter, &args)
 	if err != nil {
 		return Overview{}, err
 	}
@@ -140,15 +136,10 @@ func (r *StatisticsRepository) Overview(ctx context.Context, filter StatisticsFi
 			avg(price_per_sqm) FILTER (WHERE is_quality_eligible)::float8,
 			percentile_cont(0.5) WITHIN GROUP (ORDER BY area)
 				FILTER (WHERE representative_eligible)::float8
-		FROM %s
-		WHERE ($1::date IS NULL OR contract_date >= $1)
-		  AND ($2::date IS NULL OR contract_date <= $2)
-		  AND ($3 = '' OR property_group = $3)
-		  AND %s`, saleFactsTable(filter), geographyClause)
+		FROM %s fact
+		WHERE %s`, saleFactsTable(filter), where)
 	var result Overview
-	err = r.pool.QueryRow(ctx, query,
-		filter.FromDate, filter.ToDate, filter.PropertyGroup, geographyID, filter.MinArea, filter.MaxArea,
-	).Scan(
+	err = r.db.QueryRow(ctx, query, args...).Scan(
 		&result.TransactionCount, &result.EligibleCount,
 		&result.IncludedSampleSize, &result.ExcludedOutlierCount,
 		&result.PriceSampleSize, &result.PricePerSQMSampleSize,
@@ -169,7 +160,8 @@ func (r *StatisticsRepository) TimeSeries(
 	filter StatisticsFilter,
 	interval string,
 ) ([]TimeSeriesPoint, error) {
-	geographyClause, geographyID, err := r.geographyClause(ctx, filter.GeographyID)
+	var args queryArgs
+	where, err := r.factFilter(ctx, "fact", filter, &args)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +169,7 @@ func (r *StatisticsRepository) TimeSeries(
 	query := fmt.Sprintf(`
 		SELECT
 			date_trunc('%s',contract_date)::date,
-			(date_trunc('%s',contract_date)+interval '%s'>current_date),
+			(date_trunc('%s',contract_date)+interval '%s'>(SELECT coalesce(max(r.analytics_sale_through), current_date::timestamptz) - interval '3 months' FROM analytics.analytical_releases r JOIN analytics.analytical_publication p ON r.id = p.active_release_id)),
 			count(*)::bigint,
 			count(*) FILTER (WHERE is_quality_eligible)::bigint,
 			count(*) FILTER (WHERE representative_eligible)::bigint,
@@ -194,17 +186,11 @@ func (r *StatisticsRepository) TimeSeries(
 			avg(price_per_sqm) FILTER (WHERE is_quality_eligible)::float8,
 			percentile_cont(0.5) WITHIN GROUP (ORDER BY area)
 				FILTER (WHERE representative_eligible)::float8
-		FROM %s
-		WHERE contract_date IS NOT NULL
-		  AND ($1::date IS NULL OR contract_date >= $1)
-		  AND ($2::date IS NULL OR contract_date <= $2)
-		  AND ($3 = '' OR property_group = $3)
-		  AND %s
+		FROM %s fact
+		WHERE fact.contract_date IS NOT NULL AND %s
 		GROUP BY 1,2 ORDER BY 1`, truncUnit, truncUnit, step,
-		saleFactsTable(filter), geographyClause)
-	rows, err := r.pool.Query(ctx, query,
-		filter.FromDate, filter.ToDate, filter.PropertyGroup, geographyID, filter.MinArea, filter.MaxArea,
-	)
+		saleFactsTable(filter), where)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("time-series statistics: %w", err)
 	}
@@ -249,7 +235,8 @@ func (r *StatisticsRepository) Outliers(
 	filter StatisticsFilter,
 	limit, offset int,
 ) ([]OutlierRecord, int64, error) {
-	geographyClause, geographyID, err := r.geographyClause(ctx, filter.GeographyID)
+	var args queryArgs
+	where, err := r.factFilter(ctx, "fact", filter, &args)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -274,16 +261,10 @@ func (r *StatisticsRepository) Outliers(
 			evaluation.rule_version
 		FROM %s fact
 		JOIN analytics.sale_outlier_evaluations evaluation USING (transaction_id)
-		WHERE evaluation.status='outlier'
-		  AND ($1::date IS NULL OR fact.contract_date >= $1)
-		  AND ($2::date IS NULL OR fact.contract_date <= $2)
-		  AND ($3 = '' OR fact.property_group = $3)
-		  AND %s
+		WHERE evaluation.status='outlier' AND %s
 		ORDER BY evaluation.modified_z_score DESC NULLS LAST,fact.transaction_id
-		LIMIT $7 OFFSET $8`, saleFactsTable(filter), geographyClause)
-	rows, err := r.pool.Query(ctx, query,
-		filter.FromDate, filter.ToDate, filter.PropertyGroup, geographyID, filter.MinArea, filter.MaxArea, limit, offset,
-	)
+		LIMIT %s OFFSET %s`, saleFactsTable(filter), where, args.add(limit), args.add(offset))
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list statistical outliers: %w", err)
 	}
@@ -309,53 +290,33 @@ func (r *StatisticsRepository) Outliers(
 	return items, total, nil
 }
 
-func (r *StatisticsRepository) geographyClause(
-	ctx context.Context,
-	geographyID *int64,
-) (string, *int64, error) {
-	if geographyID == nil {
-		return "$4::bigint IS NULL AND ($5::float8 IS NULL OR area >= $5) AND ($6::float8 IS NULL OR area <= $6)", nil, nil
-	}
-	var level string
-	err := r.pool.QueryRow(ctx,
-		"SELECT level FROM analytics.geographic_units WHERE id=$1", *geographyID,
-	).Scan(&level)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil, ErrGeographyNotFound
-	}
+// MunicipalityMedians returns the representative median EUR/m2 of every municipality with
+// agreements matching the filter: one grouped scan of the facts, without geometry work.
+func (r *StatisticsRepository) MunicipalityMedians(ctx context.Context, filter StatisticsFilter) ([]GeographyMedian, error) {
+	var args queryArgs
+	where, err := r.factFilter(ctx, "fact", filter, &args)
 	if err != nil {
-		return "", nil, fmt.Errorf("resolve statistics geography: %w", err)
+		return nil, err
 	}
-	column, ok := geographyFactColumn(level)
-	if !ok {
-		return "", nil, fmt.Errorf("unsupported geography level %q", level)
+	rows, err := r.db.Query(ctx, fmt.Sprintf(`
+		SELECT fact.municipality_id,
+		  count(*) FILTER (WHERE fact.representative_eligible)::bigint,
+		  percentile_cont(.5) WITHIN GROUP (ORDER BY fact.price_per_sqm)
+		    FILTER (WHERE fact.representative_eligible)::float8
+		FROM %s fact
+		WHERE fact.municipality_id IS NOT NULL AND %s
+		GROUP BY fact.municipality_id`, saleFactsTable(filter), where), args...)
+	if err != nil {
+		return nil, fmt.Errorf("municipality medians: %w", err)
 	}
-	if column == "" {
-		return "$4::bigint IS NOT NULL AND ($5::float8 IS NULL OR area >= $5) AND ($6::float8 IS NULL OR area <= $6)", geographyID, nil
+	defer rows.Close()
+	items := []GeographyMedian{}
+	for rows.Next() {
+		var item GeographyMedian
+		if err := rows.Scan(&item.GeographyID, &item.RepresentativeCount, &item.MedianPricePerSQM); err != nil {
+			return nil, fmt.Errorf("scan municipality median: %w", err)
+		}
+		items = append(items, item)
 	}
-	return column + " = $4 AND ($5::float8 IS NULL OR area >= $5) AND ($6::float8 IS NULL OR area <= $6)", geographyID, nil
-}
-
-func geographyFactColumn(level string) (string, bool) {
-	columns := map[string]string{
-		"country":            "",
-		"statistical_region": "statistical_region_id",
-		"municipality":       "municipality_id",
-		"city_district":      "city_district_id",
-		"local_community":    "local_community_id",
-		"settlement":         "settlement_id",
-	}
-	column, ok := columns[level]
-	return column, ok
-}
-
-func intervalSQL(interval string) (string, string) {
-	switch interval {
-	case "month":
-		return "month", "1 month"
-	case "quarter":
-		return "quarter", "3 months"
-	default:
-		return "year", "1 year"
-	}
+	return items, rows.Err()
 }

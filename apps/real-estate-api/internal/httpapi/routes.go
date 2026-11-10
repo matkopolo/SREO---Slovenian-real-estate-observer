@@ -2,22 +2,25 @@ package httpapi
 
 import "net/http"
 
-// routes is the single source of truth for HTTP method/path registration.
+// routes is the single source of truth for HTTP method/path registration. The API is
+// read-only: every route is a GET.
 // The OpenAPI contract test compares these registrations with openapi.yaml.
 func (s *server) routes() *http.ServeMux {
 	router := http.NewServeMux()
 	router.HandleFunc("GET /health/live", s.live)
 	router.HandleFunc("GET /health/ready", s.ready)
-	router.HandleFunc("GET /api/v1/health", s.ready)
 	router.HandleFunc("GET /api/v1/meta", s.meta)
 	router.HandleFunc("GET /api/v1/data-status", s.dataStatus)
 	router.HandleFunc("GET /api/v1/economy/inflation", s.inflation)
 	router.HandleFunc("GET /api/v1/economy/inflation-factor", s.inflationFactor)
 	router.HandleFunc("GET /api/v1/affordability", s.affordability)
+	router.HandleFunc("GET /api/v1/affordability/municipalities", s.affordabilityMunicipalities)
+	router.HandleFunc("GET /api/v1/demographics", s.demographics)
+	router.HandleFunc("GET /api/v1/demographics/municipalities", s.demographicsMunicipalities)
+	router.HandleFunc("GET /api/v1/map/buildings", s.mapBuildings)
 	router.HandleFunc("GET /api/v1/construction/summary", s.constructionSummary)
 	router.HandleFunc("GET /api/v1/construction/map", s.constructionMap)
 	router.HandleFunc("GET /api/v1/construction/buildings/{eid}", s.constructionBuilding)
-	router.HandleFunc("GET /api/v1/construction/public-works", s.constructionPublicWorks)
 	router.HandleFunc("GET /api/v1/sales/statistics/resales", s.resaleSummary)
 	router.HandleFunc("GET /api/v1/sales/transactions/{id}/history", s.propertyHistory)
 	router.HandleFunc("GET /api/v1/geographies", s.listGeographies)
@@ -29,6 +32,7 @@ func (s *server) routes() *http.ServeMux {
 	router.HandleFunc("GET /api/v1/statistics/timeseries", s.statisticsTimeSeries)
 	router.HandleFunc("GET /api/v1/statistics/outliers", s.statisticsOutliers)
 	router.HandleFunc("GET /api/v1/transactions/extremes", s.transactionExtremes)
+	router.HandleFunc("GET /api/v1/transactions/recent", s.recentTransactions)
 	router.HandleFunc("GET /api/v1/rentals/statistics/overview", s.rentalOverview)
 	router.HandleFunc("GET /api/v1/rentals/statistics/timeseries", s.rentalTimeSeries)
 	router.HandleFunc("GET /api/v1/rentals/statistics/outliers", s.rentalOutliers)
@@ -45,13 +49,6 @@ func (s *server) routes() *http.ServeMux {
 	router.HandleFunc("GET /api/v1/buildings/search", s.searchBuildings)
 	router.HandleFunc("GET /api/v1/anomalies", s.anomalies)
 	router.HandleFunc("GET /api/v1/anomalies/summary", s.anomalySummary)
-	router.HandleFunc("PATCH /api/v1/anomalies/{kind}/{id}/review", s.reviewAnomaly)
-	router.HandleFunc("POST /api/v1/auth/register", s.register)
-	router.HandleFunc("POST /api/v1/auth/login", s.login)
-	router.HandleFunc("POST /api/v1/auth/logout", s.logout)
-	router.HandleFunc("GET /api/v1/users/me", s.me)
-	router.HandleFunc("GET /api/v1/users/me/preferences", s.getPreferences)
-	router.HandleFunc("PUT /api/v1/users/me/preferences", s.savePreferences)
 	router.HandleFunc("GET /api/v1/indices", s.marketIndices)
 	router.HandleFunc("GET /api/v1/valuations/{kind}/{id}", s.valuationPrediction)
 	router.HandleFunc("GET /api/v1/map/clusters", s.mapClusters)

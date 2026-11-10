@@ -1,9 +1,7 @@
 package httpapi
 
 import (
-	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/analytics"
 )
@@ -14,7 +12,7 @@ func (s *server) marketIndices(w http.ResponseWriter, r *http.Request) {
 		Method:          r.URL.Query().Get("method"),
 		PropertyGroup:   r.URL.Query().Get("propertyGroup"),
 	}
-	if !validTransactionKind(filter.TransactionKind) {
+	if !validOptionalTransactionKind(filter.TransactionKind) {
 		writeError(w, r, http.StatusBadRequest, "invalid_transaction_kind",
 			"transactionKind must be sale or rent")
 		return
@@ -32,12 +30,10 @@ func (s *server) marketIndices(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := s.models.MarketIndices(r.Context(), filter)
 	if err != nil {
-		s.logger.Error("market indices", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed",
-			"could not load market indices")
+		s.fail(w, r, "load market indices", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, r, http.StatusOK, map[string]any{
 		"items": items, "count": len(items), "scope": "Slovenia",
 	})
 }
@@ -49,23 +45,14 @@ func (s *server) valuationPrediction(w http.ResponseWriter, r *http.Request) {
 			"transaction kind must be sale or rent")
 		return
 	}
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id == 0 {
-		writeError(w, r, http.StatusBadRequest, "invalid_transaction_id",
-			"transaction id must be a non-zero integer")
+	id, ok := transactionID(w, r)
+	if !ok {
 		return
 	}
 	result, err := s.models.ValuationPrediction(r.Context(), kind, id)
-	if errors.Is(err, analytics.ErrPredictionNotFound) {
-		writeError(w, r, http.StatusNotFound, "prediction_not_found",
-			"no eligible model prediction exists for this transaction")
-		return
-	}
 	if err != nil {
-		s.logger.Error("valuation prediction", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed",
-			"could not load valuation prediction")
+		s.fail(w, r, "load valuation prediction", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, r, http.StatusOK, result)
 }

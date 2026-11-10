@@ -1,11 +1,9 @@
 package httpapi
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/construction"
 )
@@ -18,7 +16,7 @@ const (
 
 func (s *server) constructionFilter(w http.ResponseWriter, r *http.Request) (construction.Filter, bool) {
 	query := r.URL.Query()
-	thisYear := time.Now().Year()
+	thisYear := s.now().Year()
 	filter := construction.Filter{FromYear: thisYear - 5, ToYear: thisYear, MaxMapFeatures: constructionMaxFeatures}
 	for name, target := range map[string]*int{"fromYear": &filter.FromYear, "toYear": &filter.ToYear} {
 		if raw := query.Get(name); raw != "" {
@@ -34,59 +32,35 @@ func (s *server) constructionFilter(w http.ResponseWriter, r *http.Request) (con
 		writeError(w, r, http.StatusBadRequest, "invalid_year_range", "fromYear must not exceed toYear")
 		return filter, false
 	}
-	if raw := query.Get("geographyId"); raw != "" {
-		id, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || id <= 0 {
-			writeError(w, r, http.StatusBadRequest, "invalid_geography_id", "geographyId must be a positive integer")
-			return filter, false
-		}
-		filter.GeographyID = &id
+	var ok bool
+	if filter.GeographyID, ok = optionalGeographyID(w, r); !ok {
+		return filter, false
 	}
 	filter.WithDwellings = query.Get("withDwellings") == "true"
 	return filter, true
 }
 
-func (s *server) constructionReady(w http.ResponseWriter, r *http.Request) bool {
-	if s.construction == nil {
-		writeError(w, r, http.StatusServiceUnavailable, "construction_unavailable", "construction sources are not configured")
-		return false
-	}
-	return true
-}
-
 func (s *server) constructionSummary(w http.ResponseWriter, r *http.Request) {
-	if !s.constructionReady(w, r) {
-		return
-	}
 	filter, ok := s.constructionFilter(w, r)
 	if !ok {
 		return
 	}
 	summary, err := s.construction.Summary(r.Context(), filter)
-	if errors.Is(err, construction.ErrNotFound) {
-		writeError(w, r, http.StatusNotFound, "geography_not_found", "geography was not found")
-		return
-	}
 	if err != nil {
-		s.logger.Error("construction summary", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not summarise construction sources")
+		s.fail(w, r, "summarise construction sources", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, r, http.StatusOK, map[string]any{
 		"filter":  map[string]any{"fromYear": filter.FromYear, "toYear": filter.ToYear, "withDwellings": filter.WithDwellings},
 		"summary": summary,
 		"sources": []map[string]string{
 			{"name": "GURS, Kataster nepremičnin — stavbe", "licence": "CC BY 4.0", "note": "Vpisane stavbe; leto izgradnje po katastru. Ne prikazuje gradenj v teku."},
 			{"name": "SURS 1970717S — dovoljenja za gradnjo stavb", "licence": "Vir: SURS", "note": "Število izdanih dovoljenj po občinah in letih; ni posameznih projektov."},
-			{"name": "EU TED — javna naročila gradbenih del (CPV 45)", "licence": "Odločba Komisije 2011/833/EU", "note": "Le javna naročila nad pragom EU; lokacija na ravni regije."},
 		},
 	})
 }
 
 func (s *server) constructionMap(w http.ResponseWriter, r *http.Request) {
-	if !s.constructionReady(w, r) {
-		return
-	}
 	filter, ok := s.constructionFilter(w, r)
 	if !ok {
 		return
@@ -104,60 +78,26 @@ func (s *server) constructionMap(w http.ResponseWriter, r *http.Request) {
 	buildings := zoom >= constructionPointZoom
 	features, truncated, err := s.construction.MapFeatures(r.Context(), filter, buildings)
 	if err != nil {
-		s.logger.Error("construction map", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not load construction map features")
+		s.fail(w, r, "load construction map features", err)
 		return
 	}
 	level := "municipality"
 	if buildings {
 		level = "building"
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"level": level, "items": features, "count": len(features), "truncated": truncated})
+	writeJSON(w, r, http.StatusOK, map[string]any{"level": level, "items": features, "count": len(features), "truncated": truncated})
 }
 
 func (s *server) constructionBuilding(w http.ResponseWriter, r *http.Request) {
-	if !s.constructionReady(w, r) {
-		return
-	}
 	eid := r.PathValue("eid")
 	if eid == "" || len(eid) > 40 || strings.Trim(eid, "0123456789") != "" {
 		writeError(w, r, http.StatusBadRequest, "invalid_building_id", "building id must be a GURS EID_STAVBA number")
 		return
 	}
 	building, err := s.construction.Building(r.Context(), eid)
-	if errors.Is(err, construction.ErrNotFound) {
-		writeError(w, r, http.StatusNotFound, "building_not_found", "building was not found")
-		return
-	}
 	if err != nil {
-		s.logger.Error("construction building", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not load building")
+		s.fail(w, r, "load building", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, building)
-}
-
-func (s *server) constructionPublicWorks(w http.ResponseWriter, r *http.Request) {
-	if !s.constructionReady(w, r) {
-		return
-	}
-	filter, ok := s.constructionFilter(w, r)
-	if !ok {
-		return
-	}
-	limit, ok := boundedInteger(w, r, "limit", 20, 1, 100)
-	if !ok {
-		return
-	}
-	offset, ok := boundedInteger(w, r, "offset", 0, 0, 100000)
-	if !ok {
-		return
-	}
-	notices, total, err := s.construction.PublicWorks(r.Context(), filter.GeographyID, limit, offset)
-	if err != nil {
-		s.logger.Error("construction public works", "error", err)
-		writeError(w, r, http.StatusInternalServerError, "query_failed", "could not load public works")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": notices, "total": total, "limit": limit, "offset": offset})
+	writeJSON(w, r, http.StatusOK, building)
 }
