@@ -9,6 +9,7 @@ import type { Bbox, MunicipalityShape } from "../api";
 import { t } from "../i18n";
 import { WITHHELD } from "../metrics";
 import { circlePolygon } from "./map-geometry";
+import { marks } from "../palette";
 import { AGREEMENT_ZOOM, BUILDING_ZOOM } from "./map-zoom";
 
 /** Street basemap (OpenFreeMap "liberty", OpenStreetMap data); area colours fade as the user zooms into streets. */
@@ -32,7 +33,7 @@ const collection = (features: Collection["features"]): Collection => ({ type: "F
 /** Municipal fill with no sub-areas drawn: the layer's colour, lighter when pooled, fading into the streets. */
 const AREA_COLOR: maplibregl.ExpressionSpecification = ["get", "color"];
 // "zoom" may only drive a top-level interpolate, so the pooled case sits inside each stop.
-const AREA_OPACITY: maplibregl.ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], 7, ["case", ["get", "pooled"], 0.42, 0.78], 11, ["case", ["get", "pooled"], 0.25, 0.45], 13, 0.12];
+const AREA_OPACITY: maplibregl.ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], 7, ["case", ["get", "pooled"], 0.55, 0.88], 11, ["case", ["get", "pooled"], 0.32, 0.55], 13, 0.14];
 /**
  * One colour scale per map: while districts or settlements are drawn, every municipality underneath is a neutral
  * grey (the colour of a withheld value, lighter), so only the sub-areas carry the ramp.
@@ -94,6 +95,10 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
       instance.on("load", () => {
         // Slovenian place names where the tiles have them.
         for (const layer of instance.getStyle().layers ?? []) {
+          // The basemap's parks, woods and farmland are greens too: dimmed, so the price ramp (sand → pine) stays the only green that means something.
+          if (layer.type === "fill" && "source-layer" in layer && ["landuse", "landcover", "park"].includes(String(layer["source-layer"]))) {
+            try { instance.setPaintProperty(layer.id, "fill-opacity", 0.4); } catch { /* keep the style's fill */ }
+          }
           // Basemap place names would repeat our area labels ("Šoštanj Šoštanj"); they appear from street zoom on.
           if (layer.type === "symbol" && "source-layer" in layer && layer["source-layer"] === "place") {
             try { instance.setLayerZoomRange(layer.id, Math.max(layer.minzoom ?? 0, 14.5), layer.maxzoom ?? 24); } catch { /* keep */ }
@@ -107,36 +112,36 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
         // Area fills fade as the user zooms into streets, so the basemap takes over; pooled (3 or 5 years) values are drawn lighter.
         instance.addLayer({ id: "areas-fill", type: "fill", source: "areas", paint: { "fill-color": AREA_COLOR, "fill-opacity": AREA_OPACITY } });
         instance.addLayer({ id: "areas-line", type: "line", source: "areas", paint: {
-          "line-color": ["case", ["boolean", ["feature-state", "selected"], false], "#0f2a33", "#ffffff"],
+          "line-color": ["case", ["boolean", ["feature-state", "selected"], false], "#1c1f24", "#ffffff"],
           "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 2.6, ["boolean", ["feature-state", "hover"], false], 1.8, 0.6] } });
         instance.addLayer({ id: "areas-label", type: "symbol", source: "areas", maxzoom: 10.5, layout: {
           "text-field": ["get", "name"], "text-size": ["interpolate", ["linear"], ["zoom"], 7, 10, 10, 12], "text-font": ["Noto Sans Regular"] },
-          paint: { "text-color": "#1d2b33", "text-halo-color": "#ffffff", "text-halo-width": 1.4 } });
-        instance.addLayer({ id: "regions-line", type: "line", source: "regions", paint: { "line-color": "#36505c", "line-width": 1.4, "line-opacity": 0.8 } });
+          paint: { "text-color": "#1c1f24", "text-halo-color": "#ffffff", "text-halo-width": 1.4 } });
+        instance.addLayer({ id: "regions-line", type: "line", source: "regions", paint: { "line-color": "#3a3f44", "line-width": 1.4, "line-opacity": 0.8 } });
         instance.addLayer({ id: "sub-fill", type: "fill", source: "sub", paint: {
-          "fill-color": ["get", "color"], "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10, ["case", ["get", "pooled"], 0.4, 0.7], 14, ["case", ["get", "pooled"], 0.1, 0.18]] } });
+          "fill-color": ["get", "color"], "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10, ["case", ["get", "pooled"], 0.55, 0.88], 14, ["case", ["get", "pooled"], 0.12, 0.2]] } });
         instance.addLayer({ id: "sub-line", type: "line", source: "sub", paint: {
-          "line-color": ["case", ["boolean", ["feature-state", "selected"], false], "#0f2a33", "#ffffff"],
+          "line-color": ["case", ["boolean", ["feature-state", "selected"], false], "#1c1f24", "#ffffff"],
           "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 3, ["boolean", ["feature-state", "hover"], false], 2, 0.8] } });
         instance.addLayer({ id: "sub-label", type: "symbol", source: "sub", minzoom: 9.5, maxzoom: 14.5, layout: {
-          "text-field": ["get", "name"], "text-size": 11, "text-font": ["Noto Sans Regular"] }, paint: { "text-color": "#1d2b33", "text-halo-color": "#ffffff", "text-halo-width": 1.4 } });
+          "text-field": ["get", "name"], "text-size": 11, "text-font": ["Noto Sans Regular"] }, paint: { "text-color": "#1c1f24", "text-halo-color": "#ffffff", "text-halo-width": 1.4 } });
         instance.addLayer({ id: "buildings", type: "circle", source: "buildings", minzoom: BUILDING_ZOOM, paint: {
-          "circle-color": ["get", "color"], "circle-radius": ["get", "radius"], "circle-stroke-color": "#0f2a33", "circle-stroke-width": 1.4,
+          "circle-color": ["get", "color"], "circle-radius": ["get", "radius"], "circle-stroke-color": "#1c1f24", "circle-stroke-width": 1.4,
           "circle-opacity": ["interpolate", ["linear"], ["zoom"], BUILDING_ZOOM, 0.7, AGREEMENT_ZOOM, 0.35] } });
         // Single sales: loaded only from AGREEMENT_ZOOM for buildings, from street zoom for land (no buildings).
         instance.addLayer({ id: "agreements", type: "circle", source: "agreements", minzoom: BUILDING_ZOOM, paint: {
-          "circle-color": ["get", "color"], "circle-radius": 7, "circle-stroke-color": "#0f2a33", "circle-stroke-width": 1.5 } });
+          "circle-color": ["get", "color"], "circle-radius": 7, "circle-stroke-color": "#1c1f24", "circle-stroke-width": 1.5 } });
         // A value estimate's evidence: the search circle and the comparables, one highlighted from the panel's list.
-        instance.addLayer({ id: "radius-line", type: "line", source: "radius", paint: { "line-color": "#d9480f", "line-width": 2.2, "line-dasharray": [2, 1.5], "line-opacity": 0.95 } });
+        instance.addLayer({ id: "radius-line", type: "line", source: "radius", paint: { "line-color": marks().subject, "line-width": 2.2, "line-dasharray": [2, 1.5], "line-opacity": 0.95 } });
         instance.addLayer({ id: "comparables", type: "circle", source: "comparables", paint: {
-          "circle-color": "#0f6d61", "circle-radius": 6, "circle-stroke-color": "#ffffff", "circle-stroke-width": 1.5, "circle-opacity": 0.92 } });
+          "circle-color": marks().comparable, "circle-radius": 6, "circle-stroke-color": "#ffffff", "circle-stroke-width": 1.5, "circle-opacity": 0.92 } });
         // The highlighted comparable is drawn again on top, so a neighbouring dot never covers it.
         instance.addLayer({ id: "comparables-highlight", type: "circle", source: "comparables", filter: ["==", ["get", "id"], -1], paint: {
-          "circle-color": "#0f6d61", "circle-radius": 9, "circle-stroke-color": "#ffffff", "circle-stroke-width": 4 } });
+          "circle-color": marks().comparable, "circle-radius": 9, "circle-stroke-color": "#ffffff", "circle-stroke-width": 4 } });
         instance.addLayer({ id: "marker-halo", type: "circle", source: "marker", paint: {
           "circle-radius": 15, "circle-color": "rgba(0,0,0,0)", "circle-stroke-color": "#ffffff", "circle-stroke-width": 5 } });
         instance.addLayer({ id: "marker-ring", type: "circle", source: "marker", paint: {
-          "circle-radius": 15, "circle-color": "rgba(0,0,0,0)", "circle-stroke-color": "#d9480f", "circle-stroke-width": 3 } });
+          "circle-radius": 15, "circle-color": "rgba(0,0,0,0)", "circle-stroke-color": marks().subject, "circle-stroke-width": 3 } });
 
         // One rule for hover and click: the nearest dot within 14 px wins (agreement over building), else the area under the pointer.
         const pick = (point: { x: number; y: number }) => {

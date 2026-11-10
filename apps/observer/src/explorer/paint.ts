@@ -1,3 +1,4 @@
+import { marks } from "../palette";
 import type { MapBuilding, MunicipalityShape, PropertyGroup } from "../api";
 import { addressLabel } from "../components/AreaSearch";
 import type { AreaPaint, MapAgreementPoint, MapBuildingPoint } from "../components/ExplorerMap";
@@ -38,7 +39,7 @@ export function areaPaint(shapes: MunicipalityShape[], values: AreaValue[], { me
 }
 
 /**
- * Districts and settlements: their own classes on the same teal ramp (on the municipal classes they would all share
+ * Districts and settlements: their own classes on the same ramp (on the municipal classes they would all share
  * the top one; the municipalities underneath are drawn neutral meanwhile); sale or rent medians only.
  */
 export function finePaint(shapes: MunicipalityShape[], values: AreaValue[], { ramp, period, metric = "salePrice" }: { ramp: (value: number | null) => string; period: string; metric?: MetricId }) {
@@ -76,7 +77,7 @@ export function agreementPoints(agreements: AgreementPoint[], newBuildings: NewB
       return { id: item.id, lon: item.at[0], lat: item.at[1], color: ramp(item.perSqm),
         label: [rent ? t("Najem {date}: {value}", vars) : t("Prodaja {date}: {value}", vars), item.area ? landArea(item.area) : "", total].filter(Boolean).join(", ") };
     }),
-    ...newBuildings.map((item, index) => ({ id: -1 - index, lon: item.at[0], lat: item.at[1], color: "#199e70", label: t("Nova stavba, zgrajena {year}", { year: item.year ?? "—" }) })),
+    ...newBuildings.map((item, index) => ({ id: -1 - index, lon: item.at[0], lat: item.at[1], color: marks().newBuilding, label: t("Nova stavba, zgrajena {year}", { year: item.year ?? "—" }) })),
   ];
 }
 

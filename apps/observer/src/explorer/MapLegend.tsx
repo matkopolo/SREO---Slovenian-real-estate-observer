@@ -56,7 +56,7 @@ export function ComparablesLegend({ count, radiusMeters, trusted }: { count: num
     <ul className="ramp-keys">
       <li><i className="key-dot"/>{trusted ? t("primerljive prodaje ({count})", { count }) : t("podobne prodaje v okolici ({count})", { count })}</li>
       <li><i className="key-ring"/>{t("vaša nepremičnina")}</li>
-      <li><svg className="key-dash" width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18" y2="3" stroke="#d9480f" strokeWidth="2" strokeDasharray="4 3"/></svg>{t("iskalni polmer {distance} km", { distance: upTo1(radiusMeters / 1000) })}</li>
+      <li><svg className="key-dash" width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18" y2="3" stroke="currentColor" strokeWidth="2" strokeDasharray="4 3"/></svg>{t("iskalni polmer {distance} km", { distance: upTo1(radiusMeters / 1000) })}</li>
     </ul>
     <p className="strip-note">{trusted ? t("Pike so prodaje, na katerih temelji ocena. Kliknite piko za podrobnosti prodaje.") : t("Pike so podobne prodaje v okolici; kliknite piko za podrobnosti prodaje.")}</p>
   </div>;

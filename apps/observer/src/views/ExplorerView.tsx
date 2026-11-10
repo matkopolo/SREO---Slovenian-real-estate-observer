@@ -19,6 +19,7 @@ import { useUrlState } from "../explorer/useUrlState";
 import { useLoad } from "../hooks/useLoad";
 import { Name, proper, t, tx } from "../i18n";
 import { classBreaks, colorScale, divergingBreaks, divergingScale, layersFor, METRICS } from "../metrics";
+import { familyOf, type Family } from "../palette";
 import { sizeBand } from "../nouns";
 import { count, form, forms, NOUN_FORMS, type Forms } from "../plural";
 import { hasBadArea } from "../url-state";
@@ -32,7 +33,7 @@ const NO_LISTS: GeographyLists = { regions: [], municipalities: [], districts: [
 
 interface RankItem { id: number; name: string; value: number | null; sample: number; format: (value: number) => string; label: string; pooled?: number; populationSample?: boolean; unit?: Forms }
 
-const scaleOf = (values: Array<number | null>): Scale => ({ breaks: classBreaks(values), ramp: colorScale(values) });
+const scaleOf = (values: Array<number | null>, family: Family = "price"): Scale => ({ breaks: classBreaks(values), ramp: colorScale(values, family) });
 
 /** The market by area: map navigator, area panel, building and sale evidence, and the value check, all in the address. */
 export function ExplorerView({ cutoff }: { cutoff?: string }) {
@@ -94,23 +95,23 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
   const { shown, regionShown } = choropleth;
   const municipalScale = useMemo<Scale>(() => {
     const numbers = shown.map((item) => item.value);
-    return definition.signed ? { breaks: divergingBreaks(numbers), ramp: divergingScale(numbers) } : scaleOf(numbers);
-  }, [definition.signed, shown]);
+    return definition.signed ? { breaks: divergingBreaks(numbers), ramp: divergingScale(numbers) } : scaleOf(numbers, familyOf(layer));
+  }, [definition.signed, layer, shown]);
   const regionScale = useMemo<Scale>(() => {
     const numbers = regionShown.map((item) => item.value);
-    return { breaks: classBreaks(numbers), ramp: definition.signed ? divergingScale(numbers) : colorScale(numbers) };
-  }, [definition.signed, regionShown]);
+    return { breaks: classBreaks(numbers), ramp: definition.signed ? divergingScale(numbers) : colorScale(numbers, familyOf(layer)) };
+  }, [definition.signed, layer, regionShown]);
   const paint = useMemo(() => areaPaint(municipalShapes, shown, { metric: layer, ramp: municipalScale.ramp, period: periodShort, countWithheld: true }),
     [layer, municipalScale, municipalShapes, periodShort, shown]);
   const regionPaint = useMemo(() => areaPaint(regionShapes, regionShown, { metric: layer, ramp: regionScale.ramp, period: periodShort }), [layer, periodShort, regionScale, regionShapes, regionShown]);
   // Districts/settlements get their own scale (they would all share the top municipal class) and their own legend.
-  const subScale = useMemo(() => scaleOf(subAreas.values.map((item) => item.value)), [subAreas.values]);
+  const subScale = useMemo(() => scaleOf(subAreas.values.map((item) => item.value), familyOf(layer)), [layer, subAreas.values]);
   const subPaint = useMemo(() => finePaint(sub?.shapes ?? [], subAreas.values, { ramp: subScale.ramp, period: periodShort }), [periodShort, sub, subAreas.values, subScale]);
-  const fineScale = useMemo(() => scaleOf(fine.values.map((item) => item.value)), [fine.values]);
+  const fineScale = useMemo(() => scaleOf(fine.values.map((item) => item.value), familyOf(layer)), [fine.values, layer]);
   const fineAreaPaint = useMemo(() => finePaint(fine.shapes, fine.values, { ramp: fineScale.ramp, period: periodShort, metric: layer }), [fine, fineScale, layer, periodShort]);
   // Buildings get their own scale from the buildings in view (the municipal scale would make every city building the darkest class).
   const landPoints = state.group === "land";
-  const buildingScale = useMemo(() => scaleOf(landPoints ? agreements.map((item) => item.perSqm) : buildings.map((item) => item.medianAmountPerSqm ?? null)), [agreements, buildings, landPoints]);
+  const buildingScale = useMemo(() => scaleOf(landPoints ? agreements.map((item) => item.perSqm) : buildings.map((item) => item.medianAmountPerSqm ?? null), rent ? "rent" : "price"), [agreements, buildings, landPoints, rent]);
   const buildingDots = useMemo(() => buildingPoints(buildings, { ramp: buildingScale.ramp, rent, span: buildingSpan }), [buildingScale, buildingSpan, buildings, rent]);
   const agreementDots = useMemo(() => agreementPoints(agreements, newBuildings, { ramp: buildingScale.ramp, rent }), [agreements, buildingScale, newBuildings, rent]);
 
