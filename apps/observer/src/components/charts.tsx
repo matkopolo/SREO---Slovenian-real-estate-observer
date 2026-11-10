@@ -242,13 +242,15 @@ export function Sparkline({ points, label }: { points: Array<number | null>; lab
 }
 
 /** Ranked horizontal bars in one hue, in the caller's order: the name (a link when given), the bar and the value at its tip. */
-export function Bars({ items, label, format, max }: {
+export function Bars({ items, label, format, max, tone = "price" }: {
   items: Array<{ key: string | number; name: ReactNode; title?: string; value: number; href?: string; note?: string; current?: boolean; pooled?: boolean }>;
   label: string; format: (value: number) => string; max?: number;
+  /** The family of measure the bars show, for their hue. */
+  tone?: "price" | "rent" | "money";
 }) {
   if (!items.length) return <p className="muted">{t("Ni objavljivih podatkov.")}</p>;
   const top = Math.max(1e-9, max ?? Math.max(...items.map((item) => item.value)));
-  return <ol className="bars" aria-label={label}>{items.map((item) => <li key={item.key} title={item.title}
+  return <ol className={`bars tone-${tone}`} aria-label={label}>{items.map((item) => <li key={item.key} title={item.title}
     className={[item.current ? "current" : "", item.pooled ? "pooled" : ""].filter(Boolean).join(" ") || undefined}>
     <span className="bar-name">{item.href ? <a href={item.href}>{item.name}</a> : item.name}</span>
     <span className="bar-track" aria-hidden="true"><i style={{ width: `${Math.max(1, (item.value / top) * 100)}%` }}/></span>

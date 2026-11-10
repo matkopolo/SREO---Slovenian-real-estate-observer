@@ -1,3 +1,4 @@
+import { ramp, type Family } from "./palette";
 import type { PropertyGroup } from "./api";
 import { t } from "./i18n";
 import { decimal1, integer, percent as percentOf } from "./format";
@@ -65,13 +66,10 @@ export interface MunicipalityValue {
   sample: number;
 }
 
-/** The one sequential ramp of the map (five teal classes, light → dark): municipalities, districts and buildings alike. */
-const TEAL = ["#d4ece3", "#93cfba", "#4fa894", "#24786c", "#0e4a45"];
-
-/** Single-hue sequential ramp (light → dark) on the light map; withheld values use a neutral grey. */
-export function colorScale(values: Array<number | null>) {
+/** Single-hue sequential ramp (light → dark) of the measure's family; withheld values use a neutral grey. */
+export function colorScale(values: Array<number | null>, family: Family = "price") {
   // Five classes (ONS guidance for choropleths); the classes are the rounded legend breaks, so colour and legend agree.
-  const stops = TEAL;
+  const stops = ramp(family);
   const withheld = WITHHELD;
   const breaks = classBreaks(values);
   return (value: number | null) => {

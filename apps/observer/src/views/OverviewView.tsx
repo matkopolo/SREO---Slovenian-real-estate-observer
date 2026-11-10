@@ -186,7 +186,7 @@ export function OverviewView({ cutoff }: { cutoff?: string }) {
       <section className="card" aria-labelledby="ov-yield">
         <h2 id="ov-yield">{t("Najem proti nakupu po regijah")}</h2>
         <p className="muted">{t("Bruto donos: letna mediana najemnine deljena z mediano cene, brez stroškov in praznih mesecev. {nouns}, najemi leta {year}.", { nouns: nouns.label, year: rentYear ?? "" })} {t("Regije s premalo najemi ali prodajami so izpuščene.")}</p>
-        {regional.error ? <LoadFailed retry={regional.retry}/> : <Bars items={yields} label={t("Bruto donos po regijah")} format={(value) => percent(value / 100)}/>}
+        {regional.error ? <LoadFailed retry={regional.retry}/> : <Bars items={yields} tone="money" label={t("Bruto donos po regijah")} format={(value) => percent(value / 100)}/>}
       </section>
       <section className="card" aria-labelledby="ov-spread">
         <h2 id="ov-spread">{t("Za koliko so se prodajali")}</h2>

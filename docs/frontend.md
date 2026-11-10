@@ -83,7 +83,7 @@ colours and sale/rental points are SREO layers drawn on top; `map-zoom.ts` decid
 which geography level a zoom shows. One colour scale per map: while districts or
 settlements are drawn (inside a selected municipality, or every one in view from
 zoom 11), the municipalities underneath turn neutral grey and only the sub-areas
-carry the teal ramp (classed on their own values). Map attribution
+carry the ramp of the measure's family (prices sand→pine, rents water blues, money coral, people plum, building amber; `src/palette.ts`) (classed on their own values). Map attribution
 (OpenFreeMap, OpenMapTiles, OpenStreetMap contributors) must stay visible; see
 [data licensing](data-licensing-privacy.md).
 
