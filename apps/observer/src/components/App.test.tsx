@@ -36,7 +36,7 @@ const byId: Record<string, unknown> = { 266: district, 133: municipalities[0], 1
 const collection = { type: "FeatureCollection", features: [] };
 const saleDetail = { transactionId: 14, contractDate: "2021-06-30", price: 130000, area: 61, propertyGroup: "apartment",
   geographies: [{ id: 133, level: "municipality", name: "Ljubljana" }], buildingParts: [{ id: 1, cadastralMunicipalityCode: 1734, buildingNumber: "1710" }] };
-const market = { lowerTotal: 266375, centralTotal: 289052, upperTotal: 313826, comparableCount: 85, maximumRadiusMeters: 10000, areaTolerancePercent: 15,
+const market = { lowerTotal: 266375, centralTotal: 289052, upperTotal: 313826, comparableCount: 85, maximumRadiusMeters: 10000, comparables: [], subjectLongitude: 14.51, subjectLatitude: 46.09, areaTolerancePercent: 15,
   constructionYearTolerance: 8, confidence: "moderate" };
 let api: ReturnType<typeof stubApi>;
 

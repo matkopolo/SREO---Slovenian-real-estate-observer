@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   loadBuilding, loadInflationBetween, loadPriceIndex, loadRentOverview, loadSaleAreas, loadSaleEvidence, loadSaleOverview, loadSpread, marketWindows, shiftWindow,
   type BuildingStatistics, type Distribution, type Geography, type MarketIndex, type PropertyGroup, type RentalOverview, type RentGroup, type StatisticsOverview,
@@ -9,6 +9,8 @@ import { RangeBar } from "./charts";
 import { dateCompact as date, decimal1, euro, integer, median, percent, sqm, upTo1 } from "../format";
 import { useLoad } from "../hooks/useLoad";
 import { LANG, proper, t, tx } from "../i18n";
+import type { MarketComparable } from "../api";
+import { transactionHref } from "../url-state";
 import { ALL_SOLD, OF_TYPE, SIMILAR, TYPE_LABEL, TYPE_NAME } from "../nouns";
 import { saleScenario, TAX_RULES } from "../resale";
 import { count, forms, NOUN_FORMS } from "../plural";
@@ -47,6 +49,8 @@ const EXAMPLE_ADDRESS = "Dunajska cesta 221, Ljubljana"; // i18n-ignore
 const SUPPORTED: PropertyGroup[] = ["apartment", "house", "commercial", "garage", "land"];
 
 export interface Purchase { price: number; date: string; area: number; group: PropertyGroup; transactionId?: number }
+/** The similar sales found for the estimate, the circle they were searched in (centre and radius); `trusted` when the estimate rests on them. */
+export interface ShownComparables { comparables: MarketComparable[]; center: [number, number]; radiusMeters: number; trusted: boolean }
 /** A city district (četrtna skupnost) the property lies in. */
 interface District { id: number; name: string }
 type Evidence = Awaited<ReturnType<typeof loadSaleEvidence>>;
@@ -58,8 +62,14 @@ const quiet = <T,>(promise: Promise<T>) => promise.catch(() => undefined); // i1
  * evidence (similar sales, else the district or municipality), your own price updated with the local market as context, and a sale-now tax scenario.
  * The page has one close control: "← Nazaj na pregled trga" in the explorer bar.
  */
-export function ValueCheck({ building: buildingRef, transactionId, municipalityId, cutoff, municipalities, onBuilding, onTransaction }: {
+export function ValueCheck({ building: buildingRef, transactionId, municipalityId, cutoff, municipalities, onBuilding, onTransaction, onComparables, onHighlight, onComparable }: {
   building?: { ko: number; st: string }; transactionId?: number; municipalityId?: number; cutoff?: string; municipalities: Geography[];
+  /** The similar sales found for the estimate and their search radius, for the map; null when there are none. */
+  onComparables?: (shown: ShownComparables | null) => void;
+  /** The comparable the owner points at in the list, for the map to highlight. */
+  onHighlight?: (id: number | null) => void;
+  /** Opens a comparable's sale page (the same way as a click on its dot); the row link is the fallback. */
+  onComparable?: (item: MarketComparable) => void;
   onBuilding: (ko: number, st: string) => void; onTransaction: (id: number | undefined) => void;
 }) {
   const buildingKey = buildingRef ? `${buildingRef.ko}-${buildingRef.st}` : null;
@@ -68,7 +78,8 @@ export function ValueCheck({ building: buildingRef, transactionId, municipalityI
   const first = building?.saleTransactions[0]?.transactionId;
   const areas = useLoad(first ? `sale-areas-${first}` : null, (signal) => loadSaleAreas(first!, signal)).data;
   const [manual, setManual] = useState<Purchase | null>(null);
-  const evidence = useLoad(transactionId ? `sale-evidence-${transactionId}` : null, (signal) => loadSaleEvidence(transactionId!, signal)).data;
+  const evidenceLoad = useLoad(transactionId ? `sale-evidence-${transactionId}` : null, (signal) => loadSaleEvidence(transactionId!, signal));
+  const evidence = evidenceLoad.data;
   const stepOne = useRef<HTMLLIElement>(null);
   const stepTwo = useRef<HTMLHeadingElement>(null);
   // Raised when the owner picks or types a purchase: the answer heading takes focus as soon as it renders.
@@ -126,7 +137,8 @@ export function ValueCheck({ building: buildingRef, transactionId, municipalityI
     </ol>
 
     {purchase && <Estimates purchase={purchase} evidence={manual ? undefined : evidence} municipalityId={purchaseMunicipality} district={district} cutoff={cutoff}
-      focusRequest={focusRequest} municipalityName={municipalities.find((item) => item.id === purchaseMunicipality)?.name}/>}
+      focusRequest={focusRequest} municipalityName={municipalities.find((item) => item.id === purchaseMunicipality)?.name}
+      onComparables={onComparables} onHighlight={onHighlight} onComparable={onComparable} evidenceLoading={!manual && evidenceLoad.loading}/>}
   </article>;
 }
 
@@ -236,10 +248,11 @@ function indexAt(items: MarketIndex[], month: string) {
 interface AreaData { sale?: StatisticsOverview; pooled?: boolean; spread?: Distribution; districtSpread?: Distribution; districtTypical?: Typical }
 interface RentData { rent?: RentalOverview; rentSpread?: Distribution; districtRent?: RentalOverview; districtRentSpread?: Distribution }
 
-function Estimates({ purchase, evidence, municipalityId, municipalityName, district, cutoff, focusRequest }: {
-  purchase: Purchase; evidence?: Evidence; municipalityId?: number; municipalityName?: string; district?: District; cutoff?: string;
+function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId, municipalityName, district, cutoff, focusRequest, onComparables, onHighlight, onComparable }: {
+  purchase: Purchase; evidence?: Evidence; evidenceLoading?: boolean; municipalityId?: number; municipalityName?: string; district?: District; cutoff?: string;
   /** Raised each time the owner picks a purchase: the answer heading then takes focus. */
   focusRequest: number;
+  onComparables?: (shown: ShownComparables | null) => void; onHighlight?: (id: number | null) => void; onComparable?: (item: MarketComparable) => void;
 }) {
   const [poorCondition, setPoorCondition] = useState(false);
   const garage = purchase.group === "garage";
@@ -300,6 +313,23 @@ function Estimates({ purchase, evidence, municipalityId, municipalityName, distr
   const { reference, local, localSales, useDistrict, districtBand, garageSource, trustedMarket, wideRadius, localNow, localThen, localFactor, anchored, garageMismatch,
     asksCondition, worse, answer } = chooseReference({ purchase, market, municipal: area, district: district && { spread: area.districtSpread, typical: area.districtTypical },
     then, poorCondition, hasCondition: CONDITION[purchase.group] != null });
+  // The similar sales go to the map and the list below, worded by whether the headline rests on them (a set the estimate
+  // does not use still shows what sold nearby). One object per settled estimate, reported once per change; while a new
+  // estimate loads the map keeps the previous one. An estimate from before this field simply shows no list.
+  const shownComparables = market?.comparables?.length ? market.comparables : null;
+  const trusted = reference?.kind === "market";
+  const subjectLon = market?.subjectLongitude, subjectLat = market?.subjectLatitude, radiusMeters = market?.maximumRadiusMeters;
+  useEffect(() => {
+    if (evidenceLoading) return;
+    onComparables?.(shownComparables && subjectLon != null && subjectLat != null && radiusMeters != null
+      ? { comparables: shownComparables, center: [subjectLon, subjectLat], radiusMeters, trusted } : null);
+  }, [evidenceLoading, onComparables, radiusMeters, shownComparables, subjectLat, subjectLon, trusted]);
+  const callbacks = useRef({ onComparables, onHighlight });
+  useLayoutEffect(() => { callbacks.current = { onComparables, onHighlight }; });
+  useEffect(() => () => { callbacks.current.onComparables?.(null); callbacks.current.onHighlight?.(null); }, []);
+  // "Prikaži vse" holds for this estimate only.
+  const [expandedFor, setExpandedFor] = useState<unknown>(null);
+  const allComparables = expandedFor === market;
   const condition = CONDITION[purchase.group];
   const where = useDistrict && district ? inDistrict(district.name) : municipalWhere;
   const year = purchase.date.slice(0, 4);
@@ -394,6 +424,21 @@ function Estimates({ purchase, evidence, municipalityId, municipalityName, distr
         {row.note && <dd className="value-note">{row.note}</dd>}
       </div>)}</dl>
       {consequence && <p className="value-own">{consequence}</p>}
+      {shownComparables && <details className="value-comparables">
+        <summary>{trusted ? t("Primerljive prodaje na zemljevidu ({count})", { count: shownComparables.length }) : t("Podobne prodaje v okolici na zemljevidu ({count})", { count: shownComparables.length })}</summary>
+        <p className="muted">{trusted ? t("Pike na zemljevidu so prodaje, na katerih temelji ocena; obroč je vaša nepremičnina. Povezava odpre prodajo.")
+          : t("Ocena ne temelji na njih (premalo ali preveč različne), a kažejo, kaj se je v okolici prodajalo; obroč je vaša nepremičnina. Povezava odpre prodajo.")}
+          {" "}<a href="#explorer-map" className="value-map-jump" onClick={(event) => { event.preventDefault(); document.querySelector(".explorer-map-wrap")?.scrollIntoView({ block: "start" }); }}>{t("Zemljevid je na dnu strani ↓")}</a></p>
+        <ol className="rows value-comparable-rows">{(allComparables ? shownComparables : shownComparables.slice(0, 8)).map((item) => <li key={item.transactionId}
+          onMouseEnter={() => onHighlight?.(item.transactionId)} onMouseLeave={() => onHighlight?.(null)}>
+          <a href={transactionHref({ kind: "sale", id: item.transactionId })} onFocus={() => onHighlight?.(item.transactionId)} onBlur={() => onHighlight?.(null)}
+            onClick={(event) => { if (!onComparable || event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return; event.preventDefault(); onComparable(item); }}>
+            {proper(addressLabel(item)) || t("naslov ni naveden")}</a>
+          <span>{[date(item.contractDate), `${integer(item.amountPerSqm)}\u00a0€/m²`, sqm(item.area),
+            item.distanceMeters < 1000 ? t("{distance} m", { distance: integer(item.distanceMeters) }) : t("{distance} km", { distance: km(item.distanceMeters) })].join(" · ")}</span>
+        </li>)}</ol>
+        {!allComparables && shownComparables.length > 8 && <button type="button" className="ghost" onClick={() => setExpandedFor(market)}>{t("Prikaži vse ({count})", { count: shownComparables.length })}</button>}
+      </details>}
       {answer && answer.high > answer.low && <RangeBar p25={answer.low} p50={answer.mid} p75={answer.high} min={0} max={scaleMax} unit="€" markers={markers}
         label={t("Vaš nakup in današnja ocena na isti lestvici")} caption={t("Ocena danes {range}", { range: span(answer.low, answer.high) })}/>}
       {asksCondition && <label className="value-condition">

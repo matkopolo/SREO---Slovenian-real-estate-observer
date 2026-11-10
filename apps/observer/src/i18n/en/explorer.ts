@@ -163,4 +163,11 @@ export const explorer: Record<string, string> = {
   "na 1.000 stanovanj letno": "per 1,000 dwellings a year",
   "{value} / 1.000 stan.": "{value} / 1,000 dwellings",
   "Modelna ocena iz SURS 05C4004S, 05L2016S, 05E3002S, 0861102S": "Model estimate from SURS 05C4004S, 05L2016S, 05E3002S, 0861102S",
+  // The value check's evidence on the map
+  "primerljive prodaje ({count})": "comparable sales ({count})",
+  "podobne prodaje v okolici ({count})": "similar sales nearby ({count})",
+  "vaša nepremičnina": "your property",
+  "Pike so podobne prodaje v okolici; kliknite piko za podrobnosti prodaje.": "Dots are similar sales nearby; click a dot for the sale's details.",
+  "iskalni polmer {distance} km": "search radius {distance} km",
+  "Pike so prodaje, na katerih temelji ocena. Kliknite piko za podrobnosti prodaje.": "Dots are the sales the estimate is based on; click a dot for the sale's details.",
 };

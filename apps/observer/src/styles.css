@@ -312,6 +312,11 @@ th[scope="row"] { text-align: left; }
 .ramp-keys i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid var(--line); }
 .ramp-keys .pooled-key { opacity: .55; }
 .strip-note { margin: 0; flex: 1 1 240px; min-width: 0; font-size: 0.75rem; }
+/* The value check's map legend: the comparables, the property's ring and the search circle. */
+.comparables-strip .ramp-keys { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.comparables-strip .key-dot { border-radius: 50%; background: #0f6d61; border-color: #ffffff; }
+.comparables-strip .key-ring { border-radius: 50%; background: #ffffff; border: 2px solid #d9480f; }
+.comparables-strip .key-dash { flex: none; }
 .strip-help-toggle { flex: none; margin-left: auto; width: 32px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
 .strip-help-toggle:hover, .strip-help-toggle[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
 /* The explanation opens as a bubble above the strip, so the strip keeps its height. */

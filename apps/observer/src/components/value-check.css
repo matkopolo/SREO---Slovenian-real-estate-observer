@@ -90,3 +90,14 @@
 }
 .value-presets button .money { font-weight: 650; }
 .value-presets button[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+
+/* The comparables behind the estimate: a folded list whose rows light up their dot on the map. */
+.value-comparables { margin: 10px 0 0; }
+.value-comparables summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; font-weight: 600; font-size: 0.9062rem; }
+.value-comparables > .muted { margin: 0 0 4px; font-size: 0.75rem; }
+.value-comparable-rows a { min-height: 32px; }
+.value-comparables .ghost { margin-top: 6px; }
+.value-comparable-rows li:hover, .value-comparable-rows li:focus-within { background: color-mix(in srgb, #0f6d61 10%, transparent); box-shadow: inset 3px 0 0 #0f6d61; padding-left: 8px; }
+/* On one column the map is at the bottom of the page: the list says so. */
+.value-map-jump { display: none; }
+@media (max-width: 900px) { .value-map-jump { display: inline; } }

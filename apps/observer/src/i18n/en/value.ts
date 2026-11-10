@@ -191,4 +191,14 @@ export const value: Record<string, string> = {
   "Dodajte hišno številko ali izberite stavbo s seznama.": "Add a house number or choose a building from the list.",
   "Več stavb s tem naslovom ({count}) – izberite s seznama ali dodajte kraj.": "Several buildings have this address ({count}) – choose from the list or add the town.",
   "Predlogi: {label}": "Suggestions: {label}",
+  // The comparables behind the estimate, on the map
+  "Primerljive prodaje na zemljevidu ({count})": "Comparable sales on the map ({count})",
+  "Pike na zemljevidu so prodaje, na katerih temelji ocena; obroč je vaša nepremičnina. Povezava odpre prodajo.": "The dots on the map are the sales the estimate is based on; the ring is your property. A link opens the sale.",
+  "Podobne prodaje v okolici na zemljevidu ({count})": "Similar sales nearby on the map ({count})",
+  "Ocena ne temelji na njih (premalo ali preveč različne), a kažejo, kaj se je v okolici prodajalo; obroč je vaša nepremičnina. Povezava odpre prodajo.": "The estimate is not based on them (too few or too different), but they show what sold nearby; the ring is your property. A link opens the sale.",
+  "Zemljevid je na dnu strani ↓": "The map is at the bottom of the page ↓",
+  "naslov ni naveden": "no address given",
+  "{distance} m": "{distance} m",
+  "{distance} km": "{distance} km",
+  "Prikaži vse ({count})": "Show all ({count})",
 };
