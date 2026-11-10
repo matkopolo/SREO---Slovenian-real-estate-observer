@@ -370,6 +370,131 @@ def test_boundary_outage_on_first_install_fails_when_the_seed_is_unavailable(tmp
         _sync_geographies_or_keep_existing(connection, tmp_path)
 
 
+def test_scheduler_waits_for_the_database_instead_of_failing():
+    import psycopg
+
+    from real_estate_etl.operations import _wait_for_database
+
+    attempts = []
+
+    def connect(_url):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise psycopg.OperationalError("the database system is not yet accepting connections")
+        return MagicMock()
+
+    assert _wait_for_database("postgresql://x", Event(), poll_seconds=0.01, connect=connect) is True
+    assert len(attempts) == 3
+
+
+def test_scheduler_stops_waiting_for_the_database_when_asked():
+    import psycopg
+
+    from real_estate_etl.operations import _wait_for_database
+
+    stop = Event()
+
+    def connect(_url):
+        stop.set()
+        raise psycopg.OperationalError("down")
+
+    assert _wait_for_database("postgresql://x", stop, poll_seconds=0.01, connect=connect) is False
+
+
+def system_refresh_patches(stack: ExitStack, **overrides) -> dict[str, MagicMock]:
+    mocks = {
+        "refresh_all_national": MagicMock(return_value=RefreshSummary(0, 3, 0)),
+        "sync_geographies": MagicMock(return_value={"country": 1}),
+        "sync_context": MagicMock(return_value=SourceSyncReport({"ecb_euribor_6m": 6})),
+        "sync_demography": MagicMock(return_value=SourceSyncReport(failures={"surs_deaths": "HTTPStatusError: 500"})),
+        "sync_construction": MagicMock(return_value=SourceSyncReport({"gurs_buildings": 0})),
+        "refresh_analytics": MagicMock(return_value={"facts": 3}),
+        "start_release": MagicMock(return_value="release-1"),
+        "update_release_source": MagicMock(),
+        "set_release_stage": MagicMock(),
+        "record_source_status": MagicMock(),
+        "publish_release": MagicMock(),
+        "fail_release": MagicMock(),
+        **overrides,
+    }
+    for name, mock in mocks.items():
+        stack.enter_context(patch(f"real_estate_etl.operations.{name}", mock))
+    return mocks
+
+
+def run_unlocked(tmp_path: Path, **kwargs) -> SystemRefreshResult:
+    connection = MagicMock()
+    connection.execute.return_value.fetchone.return_value = (False,)
+    return _refresh_system_unlocked(
+        connection, output_dir=tmp_path, end_year=2026, force=False, workers=1, verbose=False,
+        database_url="postgresql://test", **kwargs,
+    )
+
+
+def test_source_failures_are_recorded_on_the_release(tmp_path: Path, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    monkeypatch.setenv("MODEL_REFRESH_POLICY", "manual")
+    with ExitStack() as stack:
+        mocks = system_refresh_patches(stack)
+        result = run_unlocked(tmp_path)
+
+    expected = {
+        "rpe_boundaries": "ok", "ecb_euribor_6m": "ok", "gurs_buildings": "ok",
+        "surs_deaths": "HTTPStatusError: 500",
+    }
+    assert result.sources == expected
+    mocks["record_source_status"].assert_called_once_with("postgresql://test", "release-1", expected)
+    mocks["publish_release"].assert_called_once()
+    assert "release=release-1 published" in caplog.text
+    assert "failed optional sources=surs_deaths" in caplog.text
+
+
+def test_failed_stage_marks_release_failed_and_reraises_original_error(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MODEL_REFRESH_POLICY", "manual")
+    error = RuntimeError("analytics broke")
+    with ExitStack() as stack:
+        mocks = system_refresh_patches(stack, refresh_analytics=MagicMock(side_effect=error))
+        with pytest.raises(RuntimeError) as raised:
+            run_unlocked(tmp_path)
+
+    assert raised.value is error
+    mocks["fail_release"].assert_called_once_with("postgresql://test", "release-1", error)
+    mocks["publish_release"].assert_not_called()
+
+
+def test_stop_request_interrupts_between_stages(tmp_path: Path, monkeypatch):
+    from real_estate_etl.operations import RefreshInterrupted
+
+    monkeypatch.setenv("MODEL_REFRESH_POLICY", "manual")
+    with ExitStack() as stack:
+        mocks = system_refresh_patches(stack)
+        with pytest.raises(RefreshInterrupted):
+            run_unlocked(tmp_path, stop_requested=lambda: True)
+
+    mocks["update_release_source"].assert_not_called()
+    mocks["fail_release"].assert_called_once()
+
+
+def test_scheduler_reports_unhealthy_after_first_import_fails(tmp_path: Path):
+    stop = Event()
+    health = tmp_path / "healthy"
+    states = []
+
+    def refresh(*_args, **_kwargs):
+        states.append(health.is_file())  # healthy while the first import runs
+        stop.set()
+        raise RuntimeError("GURS unavailable")
+
+    with patch("real_estate_etl.operations.psycopg.connect", return_value=MagicMock()):
+        scheduled_refresh_loop(
+            "postgresql://example", output_dir=tmp_path, workers=1, verbose=False, health_file=health,
+            stop_event=stop, refresh=refresh, active_release=lambda: None, poll_seconds=0.01,
+        )
+
+    assert states == [True]
+    assert not health.exists()  # nothing published and no refresh running
+
+
 def test_record_source_status_distinguishes_seeded_from_failed_sources(caplog):
     from real_estate_etl.publication import record_source_status
 

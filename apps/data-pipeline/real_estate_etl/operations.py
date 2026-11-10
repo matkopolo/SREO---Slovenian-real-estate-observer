@@ -441,7 +441,11 @@ def scheduled_refresh_loop(
 
     with HealthHeartbeat(health, heartbeat_seconds):
         while not stop_event.is_set():
-            health.update(refreshing=True)
+            # After a host or Docker restart the database can still be recovering: wait for it
+            # instead of counting that as a failed refresh and sleeping for an hour unhealthy.
+            if not _wait_for_database(database_url, stop_event, poll_seconds=poll_seconds):
+                break
+            health.update(refreshing=True, published_at=_safe_active_release(active_release, health))
             try:
                 with psycopg.connect(database_url) as connection:
                     refresh(
@@ -474,6 +478,25 @@ def scheduled_refresh_loop(
             finally:
                 health.update(refreshing=False, published_at=_safe_active_release(active_release, health))
             wait_until(now() + wait, stop_event, now=now, poll_seconds=poll_seconds)
+
+
+def _wait_for_database(
+    database_url: str, stop_event: Event, *, poll_seconds: float, connect: Callable[..., Any] | None = None
+) -> bool:
+    """Block until the database accepts connections (or a stop is requested; then False)."""
+    announced = False
+    while not stop_event.is_set():
+        try:
+            (connect or psycopg.connect)(database_url).close()
+            if announced:
+                logger.info("Database is accepting connections again.")
+            return True
+        except psycopg.OperationalError as error:
+            if not announced:
+                logger.warning("Database not ready (%s); waiting.", str(error).splitlines()[0][:160])
+                announced = True
+            stop_event.wait(min(5.0, max(poll_seconds, 0.05)))
+    return False
 
 
 def _safe_active_release(read: Callable[[], datetime | None], health: WorkerHealth) -> datetime | None:
