@@ -64,3 +64,26 @@ def test_normalized_feature_rejects_non_polygon():
     collection = BoundaryCollection("TEST", "municipality", "EID_OBCINA")
     with pytest.raises(ValueError, match="Unsupported geometry"):
         normalized_feature(feature(geometry_type="Point"), collection)
+
+
+
+def test_seed_fetcher_serves_each_collection_from_the_archive(tmp_path):
+    import json
+    import zipfile
+
+    from real_estate_etl.geography import COLLECTIONS, collection_url, seed_archive_name, seed_fetcher
+
+    archive = tmp_path / "rpe-boundaries.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for collection in COLLECTIONS:
+            bundle.writestr(
+                seed_archive_name(collection.collection_id),
+                json.dumps({"type": "FeatureCollection", "features": [], "links": [{"rel": "next", "href": "x"}]}),
+            )
+    fetch = seed_fetcher(archive)
+    for collection in COLLECTIONS:
+        payload = fetch(collection_url(collection.collection_id))
+        assert payload["type"] == "FeatureCollection"
+        assert "links" not in payload
+    with pytest.raises(ValueError, match="cannot answer"):
+        fetch("https://example.invalid/collections/UNKNOWN/items")

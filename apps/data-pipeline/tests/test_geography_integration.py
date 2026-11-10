@@ -6,7 +6,7 @@ import psycopg
 import pytest
 from psycopg import sql
 
-from real_estate_etl.geography import COLLECTIONS, sync_geographies
+from real_estate_etl.geography import COLLECTIONS, export_boundary_seed, seed_fetcher, sync_geographies
 
 DATABASE_URL = os.getenv("TEST_DATABASE_URL")
 pytestmark = pytest.mark.integration
@@ -48,7 +48,7 @@ def analytics_connection():
         admin.close()
 
 
-def test_sync_geographies_populates_hierarchy_and_audit(analytics_connection):
+def test_sync_geographies_populates_hierarchy_and_audit(analytics_connection, tmp_path):
     connection, schema = analytics_connection
     region, municipality, district, community, settlement = COLLECTIONS
     features = {
@@ -76,7 +76,7 @@ def test_sync_geographies_populates_hierarchy_and_audit(analytics_connection):
         return {"type": "FeatureCollection", "features": features[collection_id], "links": []}
 
     counts = sync_geographies(connection, fetch_json=fetch, schema=schema)
-    assert counts == {
+    expected = {
         "statistical_region": 1,
         "municipality": 1,
         "city_district": 1,
@@ -84,6 +84,7 @@ def test_sync_geographies_populates_hierarchy_and_audit(analytics_connection):
         "settlement": 1,
         "country": 1,
     }
+    assert counts == expected
     assert connection.execute(sql.SQL("SELECT count(*) FROM {}.geographic_units").format(sql.Identifier(schema))).fetchone()[0] == 6
     hierarchy = connection.execute(
         sql.SQL(
@@ -99,3 +100,12 @@ def test_sync_geographies_populates_hierarchy_and_audit(analytics_connection):
     assert connection.execute(
         sql.SQL("SELECT status,details->'counts'->>'country' FROM {}.refresh_runs").format(sql.Identifier(schema))
     ).fetchone() == ("succeeded", "1")
+
+    # The stored boundaries round-trip through the seed archive a first install falls back to.
+    archive = tmp_path / "rpe-boundaries.zip"
+    assert export_boundary_seed(connection, archive, schema=schema) == {k: v for k, v in expected.items() if k != "country"}
+    assert sync_geographies(connection, fetch_json=seed_fetcher(archive), schema=schema) == expected
+    names = connection.execute(
+        sql.SQL("SELECT name FROM {}.geographic_units WHERE level='settlement'").format(sql.Identifier(schema))
+    ).fetchall()
+    assert names == [("Settlement",)]

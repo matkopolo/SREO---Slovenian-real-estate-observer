@@ -22,7 +22,7 @@ import psycopg
 from .construction import sync_construction
 from .context import sync_context
 from .demography import sync_demography
-from .geography import sync_geographies
+from .geography import export_boundary_seed, sync_geographies
 from .health import DEFAULT_MAX_AGE, check_health_file
 from .importer import import_zip
 from .logging_config import configure_logging
@@ -62,6 +62,7 @@ class Database(enum.Enum):
     NONE = "none"  # no connection
     LOCKED = "locked"  # connection held inside the maintenance lock by run()
     SELF_LOCKING = "self_locking"  # the operation takes the maintenance lock itself
+    READ_ONLY = "read_only"  # a plain connection without the lock: the command only reads
 
 
 Handler = Callable[[argparse.Namespace, "psycopg.Connection | None"], None]
@@ -87,6 +88,10 @@ def _sync_reference_data(_args: argparse.Namespace, connection: psycopg.Connecti
 
 def _sync_geographies(_args: argparse.Namespace, connection: psycopg.Connection) -> None:
     sync_geographies(connection)
+
+
+def _export_boundaries(args: argparse.Namespace, connection: psycopg.Connection) -> None:
+    export_boundary_seed(connection, Path(args.output))
 
 
 def _sync_context(_args: argparse.Namespace, connection: psycopg.Connection) -> None:
@@ -194,6 +199,9 @@ def build_parser() -> argparse.ArgumentParser:
     _command(commands, "sync-reference-data", _sync_reference_data, Database.LOCKED)
     _command(commands, "sync-geographies", _sync_geographies, Database.LOCKED,
              help="Import current GURS RPE boundaries into the analytics schema")
+    export = _command(commands, "export-boundaries", _export_boundaries, Database.READ_ONLY,
+                      help="Write the stored RPE boundaries to a seed archive for first installs")
+    export.add_argument("--output", default="/data/raw/rpe-boundaries.zip")
     _command(commands, "sync-context", _sync_context, Database.LOCKED,
              help="Import SURS wages, Banka Slovenije housing-loan rates and ECB EURIBOR")
     _command(commands, "sync-demography", _sync_demography, Database.LOCKED,
@@ -333,7 +341,7 @@ def run(args: argparse.Namespace) -> None:
         args.handler(args, None)
         return
     with psycopg.connect(args.database_url) as connection:
-        if args.database is Database.SELF_LOCKING:
+        if args.database in (Database.SELF_LOCKING, Database.READ_ONLY):
             args.handler(args, connection)
             return
         with maintenance_lock(connection):

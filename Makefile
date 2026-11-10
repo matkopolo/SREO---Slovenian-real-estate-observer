@@ -19,7 +19,7 @@ NODE_IMAGE ?= node:22-bookworm-slim
 WEB_NODE_MODULES := real_estate_observer_node_modules
 NODE_RUN := docker run --rm -v "$(CURDIR):/repo" -v $(WEB_NODE_MODULES):/repo/$(WEB_DIR)/node_modules -w /repo/$(WEB_DIR) $(NODE_IMAGE)
 NPM_CI := npm ci --prefer-offline --no-audit --no-fund >/dev/null
-.PHONY: start refresh-system reset-and-repopulate db-up db-migrate db-down db-status analytics-refresh models-refresh api-up api-down api-logs api-fmt api-vet api-staticcheck api-vulncheck api-test api-build web-setup web-up web-down web-logs web-generate-api-types web-contract-drift web-lint web-typecheck web-test web-build lint pipeline-lint test pipeline-test test-unit import-data import-data-verbose
+.PHONY: start refresh-system reset-and-repopulate db-up db-migrate db-down db-status analytics-refresh models-refresh api-up api-down api-logs api-fmt api-vet api-staticcheck api-vulncheck api-test api-build web-setup web-up web-down web-logs web-generate-api-types web-contract-drift web-lint web-typecheck web-test web-build lint pipeline-lint test pipeline-test test-unit import-data import-data-verbose boundaries-seed
 
 start:
 	docker compose up -d --build --wait
@@ -43,8 +43,13 @@ analytics-refresh: db-up
 models-refresh: db-up
 	$(PIPELINE_RUN) refresh-models --workers $(WORKERS)
 
-db-down:
-	docker compose down
+# Publish the stored GURS RPE boundaries (CC BY 4.0) as the first-install fallback:
+# release "rpe-boundaries", asset rpe-boundaries.zip (see RPE_BOUNDARIES_SEED_URL).
+boundaries-seed: db-up
+	docker compose run --rm -v "$(CURDIR):/export" pipeline-worker export-boundaries --output /export/rpe-boundaries.zip
+	gh release view rpe-boundaries >/dev/null 2>&1 || gh release create rpe-boundaries --title "RPE boundaries seed" --notes "GURS RPE administrative boundaries (statistical regions, municipalities, city districts, local communities, settlements) as last synchronised by the pipeline, in the OGC API GeoJSON shape. Source: Geodetska uprava Republike Slovenije, Register prostorskih enot, CC BY 4.0. Used only on a first install while the GURS boundary service is unavailable; the next refresh takes the live data."
+	gh release upload rpe-boundaries ./rpe-boundaries.zip --clobber
+	rm -f ./rpe-boundaries.zip
 
 db-status:
 	docker compose ps

@@ -43,3 +43,4 @@ artifacts/
 /*.png
 apps/data-pipeline/research/*/data/
 apps/data-pipeline/research/*/out/
+rpe-boundaries.zip

@@ -326,16 +326,79 @@ def test_boundary_outage_keeps_existing_boundaries(caplog):
     assert "keeping 6250 previously synchronised boundaries" in caplog.text
 
 
-def test_boundary_outage_on_first_install_still_fails():
+def test_boundary_outage_on_first_install_loads_the_seed(tmp_path: Path, caplog):
+    from real_estate_etl.operations import _sync_geographies_or_keep_existing
+
+    connection = MagicMock()
+    connection.execute.return_value.fetchone.return_value = (0,)
+    calls = []
+
+    def fake_sync(_connection, fetch_json=None):
+        calls.append(fetch_json)
+        if fetch_json is None:
+            raise RuntimeError("HTTP 403")
+        return {"municipality": 212}
+
+    def fake_download(_client, url, target):
+        import zipfile
+
+        with zipfile.ZipFile(target, "w") as bundle:
+            bundle.writestr("SI.GURS.RPE_OBCINE.geojson", '{"type":"FeatureCollection","features":[]}')
+        return target
+
+    with (
+        patch("real_estate_etl.operations.sync_geographies", side_effect=fake_sync),
+        patch("real_estate_etl.operations.http_client.download_file", side_effect=fake_download),
+    ):
+        counts, status = _sync_geographies_or_keep_existing(connection, tmp_path)
+    assert (counts, status) == ({"municipality": 212}, "seed")  # recorded as SOURCE_SEED, not a failure
+    assert calls[0] is None
+    assert callable(calls[1])
+    assert "loading the published boundary seed" in caplog.text
+
+
+def test_boundary_outage_on_first_install_fails_when_the_seed_is_unavailable(tmp_path: Path):
     from real_estate_etl.operations import _sync_geographies_or_keep_existing
 
     connection = MagicMock()
     connection.execute.return_value.fetchone.return_value = (0,)
     with (
         patch("real_estate_etl.operations.sync_geographies", side_effect=RuntimeError("HTTP 403")),
-        pytest.raises(RuntimeError),
+        patch("real_estate_etl.operations.http_client.download_file", side_effect=RuntimeError("seed 404")),
+        pytest.raises(RuntimeError, match="seed 404"),
     ):
-        _sync_geographies_or_keep_existing(connection)
+        _sync_geographies_or_keep_existing(connection, tmp_path)
+
+
+def test_scheduler_waits_for_the_database_instead_of_failing():
+    import psycopg
+
+    from real_estate_etl.operations import _wait_for_database
+
+    attempts = []
+
+    def connect(_url):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise psycopg.OperationalError("the database system is not yet accepting connections")
+        return MagicMock()
+
+    assert _wait_for_database("postgresql://x", Event(), poll_seconds=0.01, connect=connect) is True
+    assert len(attempts) == 3
+
+
+def test_scheduler_stops_waiting_for_the_database_when_asked():
+    import psycopg
+
+    from real_estate_etl.operations import _wait_for_database
+
+    stop = Event()
+
+    def connect(_url):
+        stop.set()
+        raise psycopg.OperationalError("down")
+
+    assert _wait_for_database("postgresql://x", stop, poll_seconds=0.01, connect=connect) is False
 
 
 def system_refresh_patches(stack: ExitStack, **overrides) -> dict[str, MagicMock]:
@@ -430,3 +493,13 @@ def test_scheduler_reports_unhealthy_after_first_import_fails(tmp_path: Path):
 
     assert states == [True]
     assert not health.exists()  # nothing published and no refresh running
+
+
+def test_record_source_status_distinguishes_seeded_from_failed_sources(caplog):
+    from real_estate_etl.publication import record_source_status
+
+    with patch("real_estate_etl.publication.psycopg.connect"):
+        record_source_status("postgresql://x", "release-1", {"rpe_boundaries": "seed", "surs_deaths": "HTTP 500", "ecb": "ok"})
+    assert "loaded from the published seed: rpe_boundaries" in caplog.text
+    assert "failed and kept stored values: surs_deaths" in caplog.text
+    assert "rpe_boundaries, surs_deaths" not in caplog.text

@@ -31,11 +31,12 @@ from typing import Any
 import psycopg
 from psycopg import sql
 
+from . import http_client
 from .analytics_plan import ANALYTICS_REFRESH_FUNCTIONS, format_analytics_plan
 from .construction import sync_construction
 from .context import sync_context
 from .demography import sync_demography
-from .geography import sync_geographies
+from .geography import seed_fetcher, sync_geographies
 from .health import HEARTBEAT_SECONDS, STALE_SLACK, HealthHeartbeat, WorkerHealth, utc_now
 from .models import RefreshSummary
 from .pipeline import refresh_all_national
@@ -49,7 +50,8 @@ from .publication import (
     start_release,
     update_release_source,
 )
-from .source_sync import SOURCE_OK, SourceSyncReport
+from .settings import RPE_BOUNDARIES_SEED_URL
+from .source_sync import SOURCE_OK, SOURCE_SEED, SUCCESSFUL_STATUSES, SourceSyncReport
 
 logger = logging.getLogger(__name__)
 
@@ -235,12 +237,16 @@ def reset_and_repopulate(
         )
 
 
-def _sync_geographies_or_keep_existing(connection: psycopg.Connection) -> tuple[dict[str, int], str]:
+def _sync_geographies_or_keep_existing(
+    connection: psycopg.Connection, output_dir: Path | None = None
+) -> tuple[dict[str, int], str]:
     """Refresh RPE boundaries, but never let a boundary-service outage block new GURS data.
 
     sync_geographies is atomic (rolls back and records a failed run), so on error the
-    previously synchronised boundaries are intact. A first install has none and must fail.
-    Returns the per-level counts and the source status (``"ok"`` or the error).
+    previously synchronised boundaries are intact. A first install has none: it then
+    loads the published boundary seed (the same GURS data, CC BY 4.0) so the site can
+    start, and the next refresh takes GURS again. Returns the per-level counts and the
+    source status (``"ok"``, ``"seed"`` or the error).
     """
     try:
         return sync_geographies(connection), SOURCE_OK
@@ -248,13 +254,23 @@ def _sync_geographies_or_keep_existing(connection: psycopg.Connection) -> tuple[
         connection.rollback()
         existing = connection.execute("SELECT count(*) FROM analytics.geographic_units").fetchone()[0]
         connection.commit()
-        if not existing:
-            raise
+        if existing:
+            logger.warning(
+                "Geographic boundary sync failed; keeping %s previously synchronised boundaries for this release.",
+                existing, exc_info=error,
+            )
+            return {}, f"{type(error).__name__}: {error}"[:500]
         logger.warning(
-            "Geographic boundary sync failed; keeping %s previously synchronised boundaries for this release.",
-            existing, exc_info=error,
+            "Geographic boundary sync failed on a first install (%s: %s); loading the published boundary seed from %s",
+            type(error).__name__, error, RPE_BOUNDARIES_SEED_URL,
         )
-        return {}, f"{type(error).__name__}: {error}"[:500]
+        archive = (output_dir or Path(".")) / "rpe-boundaries.zip"
+        if not archive.exists():
+            with http_client.create_client() as client:
+                http_client.download_file(client, RPE_BOUNDARIES_SEED_URL, archive)
+        counts = sync_geographies(connection, seed_fetcher(archive))
+        logger.warning("Boundaries loaded from the seed archive; the next refresh will take them from GURS again.")
+        return counts, SOURCE_SEED
 
 
 def _sync_optional_sources(connection: psycopg.Connection, output_dir: Path) -> SourceSyncReport:
@@ -321,7 +337,7 @@ def _refresh_system_unlocked(
         )
         checkpoint("geography")
         update_release_source(connection, database_url, release_id)
-        geography_counts, geography_status = _sync_geographies_or_keep_existing(connection)
+        geography_counts, geography_status = _sync_geographies_or_keep_existing(connection, output_dir)
         checkpoint("context")
         sources = {"rpe_boundaries": geography_status, **_sync_optional_sources(connection, output_dir).status()}
         record_source_status(database_url, release_id, sources)
@@ -344,7 +360,7 @@ def _refresh_system_unlocked(
                 )
             checkpoint("publication")
             publish_release(connection, release_id, model_versions)
-        failed = sorted(name for name, status in sources.items() if status != SOURCE_OK)
+        failed = sorted(name for name, status in sources.items() if status not in SUCCESSFUL_STATUSES)
         log.info(
             "published (archives imported=%s, models=%s, failed optional sources=%s)",
             archives.imported, model_versions, ", ".join(failed) or "none",
@@ -425,7 +441,11 @@ def scheduled_refresh_loop(
 
     with HealthHeartbeat(health, heartbeat_seconds):
         while not stop_event.is_set():
-            health.update(refreshing=True)
+            # After a host or Docker restart the database can still be recovering: wait for it
+            # instead of counting that as a failed refresh and sleeping for an hour unhealthy.
+            if not _wait_for_database(database_url, stop_event, poll_seconds=poll_seconds):
+                break
+            health.update(refreshing=True, published_at=_safe_active_release(active_release, health))
             try:
                 with psycopg.connect(database_url) as connection:
                     refresh(
@@ -458,6 +478,25 @@ def scheduled_refresh_loop(
             finally:
                 health.update(refreshing=False, published_at=_safe_active_release(active_release, health))
             wait_until(now() + wait, stop_event, now=now, poll_seconds=poll_seconds)
+
+
+def _wait_for_database(
+    database_url: str, stop_event: Event, *, poll_seconds: float, connect: Callable[..., Any] | None = None
+) -> bool:
+    """Block until the database accepts connections (or a stop is requested; then False)."""
+    announced = False
+    while not stop_event.is_set():
+        try:
+            (connect or psycopg.connect)(database_url).close()
+            if announced:
+                logger.info("Database is accepting connections again.")
+            return True
+        except psycopg.OperationalError as error:
+            if not announced:
+                logger.warning("Database not ready (%s); waiting.", str(error).splitlines()[0][:160])
+                announced = True
+            stop_event.wait(min(5.0, max(poll_seconds, 0.05)))
+    return False
 
 
 def _safe_active_release(read: Callable[[], datetime | None], health: WorkerHealth) -> datetime | None:

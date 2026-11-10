@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import zipfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -212,3 +214,63 @@ def _parent_eid(properties: dict[str, Any], collection: BoundaryCollection) -> s
 
 def _optional_int(value) -> int | None:
     return int(value) if value is not None and value != "" else None
+
+
+def seed_archive_name(collection_id: str) -> str:
+    """File name of one collection inside the boundary seed archive."""
+    return f"{collection_id.replace(':', '_')}.geojson"
+
+
+def seed_fetcher(archive: Path) -> Callable[[str], dict]:
+    """A ``fetch_json`` that answers collection requests from the boundary seed archive.
+
+    The archive holds one GeoJSON FeatureCollection per RPE collection, in the shape the
+    OGC API returns, with every feature on one page (no ``next`` links), so
+    :func:`sync_geographies` runs unchanged against it.
+    """
+    with zipfile.ZipFile(archive) as bundle:
+        names = set(bundle.namelist())
+
+    def fetch(url: str) -> dict:
+        for collection in COLLECTIONS:
+            if collection.collection_id.replace(":", "%3A") in url or collection.collection_id in url:
+                name = seed_archive_name(collection.collection_id)
+                if name not in names:
+                    raise ValueError(f"Boundary seed {archive.name} has no {name}")
+                with zipfile.ZipFile(archive) as bundle, bundle.open(name) as handle:
+                    payload = json.load(handle)
+                payload.pop("links", None)
+                return payload
+        raise ValueError(f"Boundary seed cannot answer {url}")
+
+    return fetch
+
+
+def export_boundary_seed(connection: psycopg.Connection, archive: Path, schema: str = "analytics") -> dict[str, int]:
+    """Write the currently stored RPE boundaries to a seed archive :func:`seed_fetcher` can serve.
+
+    Features keep the GURS properties and the WGS84 geometry (7 decimals, as published), so a
+    sync from the archive reproduces the stored units; derived units (the country) are rebuilt.
+    """
+    counts: dict[str, int] = {}
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for collection in COLLECTIONS:
+            rows = connection.execute(
+                sql.SQL(
+                    "SELECT gurs_eid, source_properties, ST_AsGeoJSON(geometry_wgs84, 7)::json "
+                    "FROM {} WHERE source_collection=%s ORDER BY gurs_eid"
+                ).format(sql.Identifier(schema, "geographic_units")),
+                (collection.collection_id,),
+            ).fetchall()
+            features = [
+                {"type": "Feature", "id": eid, "properties": properties, "geometry": geometry}
+                for eid, properties, geometry in rows
+            ]
+            bundle.writestr(
+                seed_archive_name(collection.collection_id),
+                json.dumps({"type": "FeatureCollection", "features": features}, ensure_ascii=False),
+            )
+            counts[collection.level] = len(features)
+    logger.info("Exported boundary seed %s: %s", archive, ", ".join(f"{k}={v}" for k, v in counts.items()))
+    return counts

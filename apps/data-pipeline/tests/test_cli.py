@@ -53,6 +53,7 @@ def test_invalid_arguments_are_rejected(argv):
         (["refresh-all-sales"], Database.LOCKED),
         (["refresh-all-data"], Database.LOCKED),
         (["refresh-analytics"], Database.LOCKED),
+        (["export-boundaries", "--output", "/tmp/x.zip"], Database.READ_ONLY),
         (["refresh-system"], Database.SELF_LOCKING),
         (["reset-and-repopulate", "--confirm-reset"], Database.SELF_LOCKING),
         (["fetch", "--municipality", "1", "--year", "2020"], Database.NONE),
@@ -82,6 +83,20 @@ def test_locked_command_runs_inside_the_lock():
 
     assert events == ["locked", "import", "released"]
     load.assert_called_once_with(connection, Path("archive.zip"), verbose=False)
+
+
+def test_read_only_command_runs_without_the_lock(tmp_path: Path):
+    args = parse("export-boundaries", "--output", str(tmp_path / "seed.zip"))
+    connection = MagicMock()
+    with (
+        patch("real_estate_etl.cli.psycopg.connect") as connect,
+        patch("real_estate_etl.cli.maintenance_lock") as lock,
+        patch("real_estate_etl.cli.export_boundary_seed") as export,
+    ):
+        connect.return_value.__enter__.return_value = connection
+        run(args)
+    lock.assert_not_called()
+    export.assert_called_once_with(connection, tmp_path / "seed.zip")
 
 
 def test_fetch_needs_no_database():
