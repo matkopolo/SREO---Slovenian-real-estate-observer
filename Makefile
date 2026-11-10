@@ -16,7 +16,7 @@ STATICCHECK_VERSION ?= v0.8.2
 GOVULNCHECK_VERSION ?= v1.9.0
 WEB_DIR := apps/observer
 NODE_IMAGE ?= node:22-bookworm-slim
-WEB_NODE_MODULES := domoglasnik-observer-nm
+WEB_NODE_MODULES := real_estate_observer_node_modules
 NODE_RUN := docker run --rm -v "$(CURDIR):/repo" -v $(WEB_NODE_MODULES):/repo/$(WEB_DIR)/node_modules -w /repo/$(WEB_DIR) $(NODE_IMAGE)
 NPM_CI := npm ci --prefer-offline --no-audit --no-fund >/dev/null
 .PHONY: start refresh-system reset-and-repopulate db-up db-migrate db-down db-status analytics-refresh models-refresh api-up api-down api-logs api-fmt api-vet api-staticcheck api-vulncheck api-test api-build web-setup web-up web-down web-logs web-generate-api-types web-contract-drift web-lint web-typecheck web-test web-build lint pipeline-lint test pipeline-test test-unit import-data import-data-verbose
