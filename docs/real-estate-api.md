@@ -127,6 +127,11 @@ current calendar year, expanding through 1, 2.5, 5, 10, and 20 km while
 retaining ±15% area and ±8 construction-year tolerances. Only if no current-year cohort
 reaches the 50-comparable target does it combine the previous and current
 calendar years. It is not a ±1-year window around the subject transaction.
+Comparables of the subject's package composition are searched first; for
+houses and land they are also the only ones unless fewer than five exist, for
+the other groups every composition is searched when they miss the target and
+the larger cohort wins. The response lists the comparables it used, with their
+positions, and the subject's own position.
 The result returns weighted p25/median/p75 values, sample size, actual radius,
 physical tolerances, municipality adjustment, confidence and explicit
 fallback warnings. The complete search order, weights, formulas, year example,

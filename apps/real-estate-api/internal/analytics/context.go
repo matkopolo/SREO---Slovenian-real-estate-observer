@@ -353,6 +353,41 @@ type currentMarketQuery struct {
 	municipalityID                                   *int64
 	// now is the reference time: the current year and the age of each comparable.
 	now time.Time
+	// options are the methodology switches; nil means currentMarketDefaults.
+	options *currentMarketOptions
+}
+
+// currentMarketOptions are the methodology switches of the current-market estimate. Production
+// uses currentMarketDefaults; the backtest (estimate_backtest_test.go) compares the variants
+// against real sales, and docs/statistical-methodology.md records the measurements.
+type currentMarketOptions struct {
+	// compositionAsGate: comparables of the subject's package composition are enough as soon as
+	// there are currentMarketMinimumSample of them, for every property group (the rule until
+	// November 2026). Off, that holds only for houses and land, whose parcels are the price;
+	// for the other groups the packages differ in auxiliary parts (parking, storage), so other
+	// compositions are searched too whenever the same composition misses the target sample, the
+	// larger set wins, and the composition only weighs.
+	compositionAsGate bool
+	// wideLocationSupport measures the municipality-vs-surroundings factor on every sale of the
+	// type (any age, area within ±30 %) instead of the strict physical profile, so a thin local
+	// market still gets its factor.
+	wideLocationSupport bool
+}
+
+var currentMarketDefaults = currentMarketOptions{compositionAsGate: false, wideLocationSupport: true}
+
+// compositionAsGateFor says whether the package composition gates the comparables of this group.
+func (options currentMarketOptions) compositionAsGateFor(propertyGroup string) bool {
+	return options.compositionAsGate || propertyGroup == "house" || propertyGroup == "land"
+}
+
+// locationSupportProfile is the physical profile the municipality-vs-surroundings factor is
+// measured on.
+func (options currentMarketOptions) locationSupportProfile(strict benchmarkProfile) benchmarkProfile {
+	if options.wideLocationSupport {
+		return benchmarkProfile{name: "support_area_30", areaTolerancePercent: 30}
+	}
+	return strict
 }
 
 type marketCandidate struct {
@@ -396,6 +431,7 @@ type currentMarketSelection struct {
 // have their signatures (the weights use them).
 func selectCurrentCandidates(
 	candidates []marketCandidate, packageSignature string, thisYear int, loadSignatures func(radius int) error,
+	compositionAsGate bool,
 ) (currentMarketSelection, error) {
 	var selected currentMarketSelection
 	search := func(requirePackageMatch bool) error {
@@ -421,8 +457,17 @@ func selectCurrentCandidates(
 	if err := search(true); err != nil {
 		return currentMarketSelection{}, err
 	}
-	if len(selected.candidates) < currentMarketMinimumSample {
-		selected = currentMarketSelection{}
+	// Other compositions: as the gate, only when the same composition is too thin to use at
+	// all (and from scratch); as a preference, whenever it misses the target, keeping the
+	// same-composition set unless a larger one is found.
+	enough := currentMarketTargetSample
+	if compositionAsGate {
+		enough = currentMarketMinimumSample
+	}
+	if len(selected.candidates) < enough {
+		if compositionAsGate {
+			selected = currentMarketSelection{}
+		}
 		if err := search(false); err != nil {
 			return currentMarketSelection{}, err
 		}
@@ -465,13 +510,17 @@ func loadCurrentMarketEstimate(
 		return nil, nil
 	}
 	thisYear := input.now.Year()
+	options := currentMarketDefaults
+	if input.options != nil {
+		options = *input.options
+	}
 	profile := nearbyBenchmarkProfiles(input.constructionYear)[0]
 	candidates, err := queryCurrentCandidates(ctx, tx, input, profile)
 	if err != nil {
 		return nil, err
 	}
 	selection, err := selectCurrentCandidates(candidates, input.packageSignature, thisYear,
-		signatureLoader(ctx, tx, input.transactionKind, candidates))
+		signatureLoader(ctx, tx, input.transactionKind, candidates), options.compositionAsGateFor(input.propertyGroup))
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +555,7 @@ func loadCurrentMarketEstimate(
 	}
 
 	locationFactor, rawLocationFactor, localSample, adjustmentErr := currentMarketLocationFactor(
-		ctx, tx, input, profile, selectedRadius, localCurrent,
+		ctx, tx, input, options.locationSupportProfile(profile), selectedRadius, localCurrent,
 	)
 	if adjustmentErr != nil {
 		return nil, adjustmentErr
@@ -562,7 +611,7 @@ func loadCurrentMarketEstimate(
 		LocalAdjustmentSampleSize: localSample, PackageCompositionMatched: selection.packageMatched,
 		ReferenceYear: thisYear,
 		Confidence:    confidence, Warnings: warnings,
-		MethodologyVersion: "adaptive-current-market-v4",
+		MethodologyVersion: "adaptive-current-market-v5",
 	}, nil
 }
 

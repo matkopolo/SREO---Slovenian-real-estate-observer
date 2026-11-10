@@ -124,7 +124,7 @@ func TestCurrentMarketSelectionMatchesThePerTierQueries(t *testing.T) {
 		}
 		want := previousCurrentMarketSearch(all, "2", thisYear)
 		candidates, load, _ := withLazySignatures(all)
-		got, err := selectCurrentCandidates(candidates, "2", thisYear, load)
+		got, err := selectCurrentCandidates(candidates, "2", thisYear, load, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -166,7 +166,7 @@ func TestCurrentMarketSelectionSignsOnlyTheRadiusItNeeds(t *testing.T) {
 			contractDate: time.Date(thisYear, 3, 1, 0, 0, 0, 0, time.UTC), amountPerSQM: 3000, area: 50})
 	}
 	candidates, load, signed := withLazySignatures(all)
-	selection, err := selectCurrentCandidates(candidates, "2", thisYear, load)
+	selection, err := selectCurrentCandidates(candidates, "2", thisYear, load, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,5 +175,49 @@ func TestCurrentMarketSelectionSignsOnlyTheRadiusItNeeds(t *testing.T) {
 	}
 	if *signed != 51 {
 		t.Fatalf("signed %d rows, want only the 51 within 2.5 km", *signed)
+	}
+}
+
+// With the composition as a preference the search goes on past a thin same-composition set and
+// takes a larger mixed one; as a gate it stops at the first same-composition set of five.
+func TestCurrentMarketSelectionCompositionPreferenceTakesTheLargerMixedSet(t *testing.T) {
+	thisYear := 2026
+	var candidates []marketCandidate
+	for index := 0; index < 70; index++ {
+		signature := "2"
+		if index < 8 {
+			signature = "2,3" // the subject's composition: eight, spread out to 20 km
+		}
+		candidates = append(candidates, marketCandidate{
+			transactionID: int64(index + 1), distance: float64(index) * 280, packageSignature: signature,
+			contractDate: time.Date(thisYear, 3, 1, 0, 0, 0, 0, time.UTC), amountPerSQM: 2000, area: 60,
+		})
+	}
+	stripped, load, _ := withLazySignatures(candidates)
+	gate, err := selectCurrentCandidates(stripped, "2,3", thisYear, load, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gate.candidates) != 8 || !gate.packageMatched {
+		t.Fatalf("gate: got %d candidates (matched=%v), want the 8 same-composition ones", len(gate.candidates), gate.packageMatched)
+	}
+	preference, err := selectCurrentCandidates(stripped, "2,3", thisYear, load, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preference.candidates) != 70 || preference.packageMatched || preference.radius != 20000 {
+		t.Fatalf("preference: got %d candidates (matched=%v, radius=%d), want all 70 mixed ones", len(preference.candidates), preference.packageMatched, preference.radius)
+	}
+	// A same-composition set that reaches the target is kept either way.
+	for index := range candidates {
+		candidates[index].packageSignature = "2,3"
+	}
+	stripped, load, _ = withLazySignatures(candidates)
+	full, err := selectCurrentCandidates(stripped, "2,3", thisYear, load, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !full.packageMatched || len(full.candidates) < currentMarketTargetSample {
+		t.Fatalf("full: got %d candidates (matched=%v)", len(full.candidates), full.packageMatched)
 	}
 }
