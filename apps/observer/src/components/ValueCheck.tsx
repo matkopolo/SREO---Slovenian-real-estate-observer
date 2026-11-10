@@ -278,10 +278,11 @@ function Estimates({ purchase, evidence, municipalityId, municipalityName, distr
     return { rent, rentSpread, districtRent, districtRentSpread };
   });
   // The municipality's median in the 12 months around the purchase: the local market change since then.
-  const then = useLoad(municipalityId ? `value-then|${municipalityId}|${purchase.group}|${purchase.date}` : null, (signal) => {
+  const thenLoad = useLoad(municipalityId ? `value-then|${municipalityId}|${purchase.group}|${purchase.date}` : null, (signal) => {
     const day = { from: purchase.date, to: purchase.date };
     return loadSaleOverview(municipalityId!, { propertyGroup: purchase.group }, { from: shiftWindow(day, 6).from, to: shiftWindow(day, -6).to }, signal);
-  }).data;
+  });
+  const then = thenLoad.data;
   const inflation = useLoad(cutoff ? `inflation|${purchase.date.slice(0, 7)}|${cutoff.slice(0, 7)}` : null,
     async (signal) => (await loadInflationBetween(`${purchase.date.slice(0, 7)}-01`, `${cutoff!.slice(0, 7)}-01`, signal)).factor).data;
   const area = sales.data ?? {};
@@ -333,7 +334,9 @@ function Estimates({ purchase, evidence, municipalityId, municipalityName, distr
     note: join([t("mediana {then} → {now} {unit} ({change})", { then: integer(localThen!), now: integer(localNow!), unit, change: signed(localFactor! - 1) }),
       national != null && t("v vsej Sloveniji {national}", { national: signed(national - 1) })], ", ") });
   else if (garageMismatch) rows.push({ key: "updated", title: updatedTitle, value: null, note: t("Vaše nakupne cene ne posodabljamo z gibanjem cen garaž: mediana na enoto meša nova parkirna mesta in starejše garaže.") });
-  else if (reference) rows.push({ key: "updated", title: updatedTitle, value: null, note: t("premalo prodaj te vrste v občini ob nakupu ali danes") });
+  // While the municipality's medians are still loading the row must not claim there were too few sales.
+  else if (reference) rows.push({ key: "updated", title: updatedTitle, value: null,
+    note: thenLoad.loading || sales.loading ? t("Nalagam …") : t("premalo prodaj te vrste v občini ob nakupu ali danes") });
   if (market) {
     const confidence = market.confidence === "moderate" ? t("zanesljivost srednja") : market.confidence === "low" ? t("zanesljivost nizka") : t("zanesljivost zelo nizka");
     // Comparables from a wide area are said to be so; untrusted ones (very low reliability, under 10 sales) are shown but never lead.
