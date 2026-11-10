@@ -197,6 +197,7 @@ export const value: Record<string, string> = {
   "Podobne prodaje v okolici na zemljevidu ({count})": "Similar sales nearby on the map ({count})",
   "Ocena ne temelji na njih (premalo ali preveč različne), a kažejo, kaj se je v okolici prodajalo; obroč je vaša nepremičnina. Povezava odpre prodajo.": "The estimate is not based on them (too few or too different), but they show what sold nearby; the ring is your property. A link opens the sale.",
   "Zemljevid je na dnu strani ↓": "The map is at the bottom of the page ↓",
+  "prodaje po {date}": "sales after {date}",
   "naslov ni naveden": "no address given",
   "{distance} m": "{distance} m",
   "{distance} km": "{distance} km",

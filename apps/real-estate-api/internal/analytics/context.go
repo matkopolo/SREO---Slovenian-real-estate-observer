@@ -94,6 +94,8 @@ type CurrentMarketEstimate struct {
 	Comparables      []MarketComparable `json:"comparables"`
 	SubjectLongitude float64            `json:"subjectLongitude"`
 	SubjectLatitude  float64            `json:"subjectLatitude"`
+	// ComparablesAfter is the subject's own contract date when only later agreements were compared.
+	ComparablesAfter *string `json:"comparablesAfter"`
 }
 
 // MarketComparable is one agreement behind the current-market estimate.
@@ -149,6 +151,7 @@ func benchmarkReliability(sample int64) string {
 
 type contextSubject struct {
 	year             int
+	contractDate     time.Time
 	propertyGroup    string
 	actual           float64
 	quality          QualityDecision
@@ -191,7 +194,7 @@ func (r *TransactionRepository) TransactionContext(
 		packageSignatureExpression = "analytics.rental_package_signature(fact.transaction_id)"
 	}
 	query := fmt.Sprintf(`
-		SELECT extract(year FROM fact.contract_date)::integer,fact.property_group,
+		SELECT extract(year FROM fact.contract_date)::integer,fact.contract_date,fact.property_group,
 		  fact.%s::float8,fact.is_quality_eligible,
 		  fact.representative_eligible,fact.quality_reasons,
 		  coalesce(signal.flags,ARRAY[]::text[]),evaluation.status,
@@ -207,7 +210,7 @@ func (r *TransactionRepository) TransactionContext(
 		  AND fact.%s>0`, amountColumn, packageSignatureExpression,
 		factTable, outlierTable, kind, amountColumn)
 	err = tx.QueryRow(ctx, query, id).Scan(
-		&subject.year, &subject.propertyGroup, &subject.actual,
+		&subject.year, &subject.contractDate, &subject.propertyGroup, &subject.actual,
 		&subject.quality.IsQualityEligible, &subject.quality.IsRepresentative,
 		&subject.quality.Reasons, &subject.quality.AnomalyFlags,
 		&subject.outlierStatus, &subject.regionID,
@@ -319,6 +322,7 @@ func (r *TransactionRepository) TransactionContext(
 		packageSignature: subject.packageSignature,
 		municipalityID:   subject.municipalityID,
 		now:              now,
+		since:            subject.contractDate,
 	})
 	if estimateErr != nil {
 		return TransactionContext{}, estimateErr
@@ -353,6 +357,8 @@ type currentMarketQuery struct {
 	municipalityID                                   *int64
 	// now is the reference time: the current year and the age of each comparable.
 	now time.Time
+	// since is the subject's own contract date: with afterSubject, only later agreements compare.
+	since time.Time
 	// options are the methodology switches; nil means currentMarketDefaults.
 	options *currentMarketOptions
 }
@@ -372,9 +378,13 @@ type currentMarketOptions struct {
 	// type (any age, area within ±30 %) instead of the strict physical profile, so a thin local
 	// market still gets its factor.
 	wideLocationSupport bool
+	// afterSubject compares only with agreements concluded after the subject's own (what the
+	// property would fetch now rests on what sold since it was bought), unless that leaves fewer
+	// than currentMarketMinimumSample, when the whole window is used.
+	afterSubject bool
 }
 
-var currentMarketDefaults = currentMarketOptions{compositionAsGate: false, wideLocationSupport: true}
+var currentMarketDefaults = currentMarketOptions{compositionAsGate: false, wideLocationSupport: true, afterSubject: true}
 
 // compositionAsGateFor says whether the package composition gates the comparables of this group.
 func (options currentMarketOptions) compositionAsGateFor(propertyGroup string) bool {
@@ -519,10 +529,31 @@ func loadCurrentMarketEstimate(
 	if err != nil {
 		return nil, err
 	}
-	selection, err := selectCurrentCandidates(candidates, input.packageSignature, thisYear,
-		signatureLoader(ctx, tx, input.transactionKind, candidates), options.compositionAsGateFor(input.propertyGroup))
-	if err != nil {
-		return nil, err
+	gate := options.compositionAsGateFor(input.propertyGroup)
+	var selection currentMarketSelection
+	var comparablesAfter *string
+	if options.afterSubject && !input.since.IsZero() {
+		later := make([]marketCandidate, 0, len(candidates))
+		for _, candidate := range candidates {
+			if candidate.contractDate.After(input.since) {
+				later = append(later, candidate)
+			}
+		}
+		selection, err = selectCurrentCandidates(later, input.packageSignature, thisYear,
+			signatureLoader(ctx, tx, input.transactionKind, later), gate)
+		if err != nil {
+			return nil, err
+		}
+		since := input.since.Format("2006-01-02")
+		comparablesAfter = &since
+	}
+	if len(selection.candidates) < currentMarketMinimumSample {
+		comparablesAfter = nil
+		selection, err = selectCurrentCandidates(candidates, input.packageSignature, thisYear,
+			signatureLoader(ctx, tx, input.transactionKind, candidates), gate)
+		if err != nil {
+			return nil, err
+		}
 	}
 	selected, selectedRadius := selection.candidates, selection.radius
 	if len(selected) < currentMarketMinimumSample {
@@ -597,7 +628,7 @@ func loadCurrentMarketEstimate(
 		return nil, err
 	}
 	return &CurrentMarketEstimate{
-		Comparables: comparables, SubjectLongitude: subjectAt[0], SubjectLatitude: subjectAt[1],
+		Comparables: comparables, SubjectLongitude: subjectAt[0], SubjectLatitude: subjectAt[1], ComparablesAfter: comparablesAfter,
 		LowerTotal: lower * input.area, CentralTotal: central * input.area, UpperTotal: upper * input.area,
 		UnadjustedLowerTotal: unadjustedLower * input.area, UnadjustedCentralTotal: unadjustedCentral * input.area,
 		UnadjustedUpperTotal: unadjustedUpper * input.area,
@@ -611,7 +642,7 @@ func loadCurrentMarketEstimate(
 		LocalAdjustmentSampleSize: localSample, PackageCompositionMatched: selection.packageMatched,
 		ReferenceYear: thisYear,
 		Confidence:    confidence, Warnings: warnings,
-		MethodologyVersion: "adaptive-current-market-v5",
+		MethodologyVersion: "adaptive-current-market-v6",
 	}, nil
 }
 

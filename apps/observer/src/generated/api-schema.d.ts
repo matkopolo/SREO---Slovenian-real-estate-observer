@@ -1839,6 +1839,11 @@ export interface components {
             /** @description The subject's position (WGS84) */
             subjectLongitude: number;
             subjectLatitude: number;
+            /**
+             * Format: date
+             * @description The subject's own contract date when only later agreements were compared.
+             */
+            comparablesAfter?: string | null;
         };
         MarketComparable: {
             /** Format: int64 */
