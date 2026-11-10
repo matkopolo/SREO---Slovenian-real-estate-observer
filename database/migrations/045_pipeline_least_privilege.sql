@@ -21,8 +21,14 @@ GRANT USAGE ON SCHEMA public, analytics TO real_estate_pipeline;
 GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public, analytics
     TO real_estate_pipeline;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public, analytics TO real_estate_pipeline;
--- The migration ledger belongs to the runner only.
-REVOKE ALL ON public.schema_migrations FROM real_estate_pipeline;
+-- The migration ledger belongs to the runner only. The runner creates it before
+-- applying this file; a database migrated another way may not have it yet.
+DO $$
+BEGIN
+    IF to_regclass('public.schema_migrations') IS NOT NULL THEN
+        EXECUTE 'REVOKE ALL ON public.schema_migrations FROM real_estate_pipeline';
+    END IF;
+END $$;
 
 -- Tables and sequences that later migrations create (as real_estate) get the same grants.
 ALTER DEFAULT PRIVILEGES FOR ROLE real_estate IN SCHEMA public, analytics

@@ -9,13 +9,14 @@
 # a transaction and must be idempotent.
 set -euo pipefail
 
-database_url="postgresql://real_estate:real_estate@db:5432/real_estate"
+# Compose default; CI points DATABASE_URL at its service container.
+database_url="${DATABASE_URL:-postgresql://real_estate:real_estate@db:5432/real_estate}"
 migrations_dir="${MIGRATIONS_DIR:-/migrations}"
 roles_file="${ROLES_FILE:-/roles.sql}"
 pipeline_password="${PIPELINE_DATABASE_PASSWORD:-real_estate_pipeline}"
 lock_id=724202607
 
-until pg_isready -h db -U real_estate -d real_estate >/dev/null 2>&1; do
+until pg_isready -d "$database_url" >/dev/null 2>&1; do
   sleep 1
 done
 
