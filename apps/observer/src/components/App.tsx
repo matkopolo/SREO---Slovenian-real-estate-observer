@@ -3,7 +3,7 @@ import { loadDataStatus } from "../api";
 import { dateCompact } from "../format";
 import { useLoad } from "../hooks/useLoad";
 import { LANG, setLanguage, t, tx, type Language } from "../i18n";
-import { ABOUT, hashQuery, pageOf, translateLegacyHash, trendsHref, TRENDS, type Page } from "../url-state";
+import { ABOUT, OVERVIEW, overviewHref, pageOf, parseHash, translateLegacyHash, trendsHref, TRENDS, type Page } from "../url-state";
 import { ExplorerView } from "../views/ExplorerView";
 import { DataStatusBanner } from "./DataStatusBanner";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -11,6 +11,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 const TimeView = lazy(() => import("../views/TimeView").then((module) => ({ default: module.TimeView })));
 const MarketView = lazy(() => import("../views/MarketView").then((module) => ({ default: module.MarketView })));
 const QualityView = lazy(() => import("../views/QualityView").then((module) => ({ default: module.QualityView })));
+const OverviewView = lazy(() => import("../views/OverviewView").then((module) => ({ default: module.OverviewView })));
 
 /** The product name is the same in both languages. */
 export const BRAND = "Slovenian Real Estate Observer"; // i18n-ignore (brand)
@@ -74,8 +75,10 @@ export function App() {
       <nav className="views" aria-label={t("Strani")}>
         <a href={lastArea} aria-current={page === "explorer" ? "page" : undefined}
           onClick={(event) => { if (pageOf() === "explorer") event.preventDefault(); }}>{t("Trg po območjih")}</a>
+        <a href={`#${OVERVIEW}`} aria-current={page === OVERVIEW ? "page" : undefined}
+          onClick={(event) => { if (page === OVERVIEW) { event.preventDefault(); return; } const { g, group } = parseHash(); if (g || group === "house") { event.preventDefault(); window.location.hash = overviewHref(g, group === "house"); } }}>{t("Pregled trga")}</a>
         <a href={`#${TRENDS}`} aria-current={page === TRENDS ? "page" : undefined}
-          onClick={(event) => { const g = Number(hashQuery().get("g")); if (g > 0) { event.preventDefault(); window.location.hash = trendsHref(g); } }}>{t("Trendi")}</a>
+          onClick={(event) => { const { g } = parseHash(); if (g) { event.preventDefault(); window.location.hash = trendsHref(g); } }}>{t("Trendi")}</a>
         <a href={`#${ABOUT}`} aria-current={page === ABOUT ? "page" : undefined}>{t("O podatkih")}</a>
       </nav>
       <LanguageSwitch/>
@@ -92,6 +95,7 @@ export function App() {
           </div>
           {trendPart === "time" ? <TimeView cutoff={cutoff}/> : <MarketView cutoff={cutoff}/>}
         </div>}
+        {page === OVERVIEW && <OverviewView cutoff={cutoff}/>}
         {page === ABOUT && <QualityView cutoff={cutoff}/>}
       </Suspense></ErrorBoundary>
     </main>

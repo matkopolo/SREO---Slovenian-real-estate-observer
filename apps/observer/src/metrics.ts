@@ -60,6 +60,8 @@ export const WITHHELD = "#c9cdd1";
 export interface MunicipalityValue {
   geographyId: number;
   value: number | null;
+  /** The two sides of a gross yield (rent per m² per month, price per m²), for captions. */
+  rent?: number | null; price?: number | null;
   sample: number;
 }
 

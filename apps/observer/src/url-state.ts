@@ -9,14 +9,14 @@ import { sizeBand } from "./nouns";
  */
 
 /** Page ids in the address (#trendi, #o-podatkih); the explorer has none. */
-export const TRENDS = "trendi", ABOUT = "o-podatkih"; // i18n-ignore (URL ids, never shown as text)
-export type Page = "explorer" | typeof TRENDS | typeof ABOUT;
+export const TRENDS = "trendi", ABOUT = "o-podatkih", OVERVIEW = "pregled-trga"; // i18n-ignore (URL ids, never shown as text)
+export type Page = "explorer" | typeof TRENDS | typeof ABOUT | typeof OVERVIEW;
 
 /** The page of a URL or hash ("#trendi?g=1" → trendi). */
 export function pageOf(url: string = window.location.href): Page {
   const hash = url.includes("#") ? url.slice(url.indexOf("#")) : "";
   const name = hash.replace(/^#/, "").split("?")[0];
-  return name === TRENDS ? TRENDS : name === ABOUT ? ABOUT : "explorer";
+  return name === TRENDS ? TRENDS : name === ABOUT ? ABOUT : name === OVERVIEW ? OVERVIEW : "explorer";
 }
 
 /** The query part of a hash: "#trendi?g=133" → g=133. */
@@ -89,6 +89,21 @@ export const areaHref = (id?: number) => toHash({ ...DEFAULT_STATE, g: id });
 export const transactionHref = (selected: Selected) => toHash({ ...DEFAULT_STATE, selected });
 /** The trends page, for the area of the explorer when there is one. */
 export const trendsHref = (g?: number) => g ? `#${TRENDS}?g=${g}` : `#${TRENDS}`;
+/** What the market overview reads from its address: the area and flats or houses (other types fall back to flats). */
+export function overviewState(hash: string = window.location.hash): { g?: number; group: "apartment" | "house" } {
+  const state = parseHash(hash);
+  return { g: state.g, group: state.group === "house" ? "house" : "apartment" };
+}
+/** Rewrites the address without a history entry (choices on a page that Back should leave as a whole). */
+export const replaceHash = (hash: string) => window.history.replaceState(null, "", hash);
+/** The market overview of an area (Slovenija without `g`), flats unless `houses`. */
+export function overviewHref(g?: number, houses = false) {
+  const query = new URLSearchParams();
+  if (g) query.set("g", String(g));
+  if (houses) query.set("vrsta", "hise"); // i18n-ignore (URL slug)
+  const text = query.toString();
+  return `#${OVERVIEW}${text ? `?${text}` : ""}`;
+}
 
 /** A non-numeric area id in the link (`g=abc`) is reported instead of silently showing Slovenija. */
 export function hasBadArea(hash: string = window.location.hash) {

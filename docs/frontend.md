@@ -17,6 +17,7 @@ kept so earlier links work), bound to loopback only.
 | Address | Page | Code |
 |---|---|---|
 | `#` / `#?…` | **Trg po območjih** (Market by area): the map, the area panel, sales lists, building evidence, transaction details, rent, value check | `views/ExplorerView.tsx`, `components/ExplorerMap.tsx`, `AreaPanel.tsx`, `AreaModules.tsx`, `SalesList.tsx`, `BuildingEvidence.tsx`, `TransactionDetails.tsx`, `RentSection.tsx`, `ValueCheck.tsx` |
+| `#pregled-trga?g=…&vrsta=hise` | **Pregled trga** (Market overview): headline tiles with sparklines, the ten-year price trend, cheapest and dearest municipalities, rent against purchase by region, the price histogram and monthly activity, for Slovenia or one area, flats or houses | `views/OverviewView.tsx` (lazy-loaded) |
 | `#trendi?g=…` | **Trendi** (Trends): prices over time, and distribution with extreme sales | `views/TimeView.tsx`, `views/MarketView.tsx` (lazy-loaded) |
 | `#o-podatkih` | **O podatkih** (About the data): sources, methodology and data quality | `views/QualityView.tsx` (lazy-loaded) |
 

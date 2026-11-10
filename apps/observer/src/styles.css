@@ -503,3 +503,39 @@ th[scope="row"] { text-align: left; }
 .multiple figcaption { display: flex; justify-content: space-between; gap: 8px; font-family: var(--font-display); font-size: 1rem; }
 .multiple figcaption span { font-family: var(--font-body); font-weight: 600; }
 
+/* ---------- market overview (OverviewView.tsx) ---------- */
+.overview-tiles > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "label label" "value spark" "note note"; align-items: end; column-gap: 10px; }
+.overview-tiles dt { grid-area: label; }
+.overview-tiles dd { grid-area: value; margin: 4px 0 0; font-variant-numeric: normal; white-space: nowrap; }
+/* Four tiles in a row only when all four fit; two by two in between, never three and an orphan. */
+@media (max-width: 1000px) { .overview-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .overview-tiles { grid-template-columns: minmax(0, 1fr); } }
+.overview-tiles small { grid-area: note; display: block; margin-top: 2px; }
+.overview-tiles .sparkline { grid-area: spark; width: 96px; height: 28px; align-self: end; margin-bottom: 6px; }
+.sparkline .spark-line { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.sparkline .spark-end { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.overview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.overview-grid .card.wide { grid-column: 1 / -1; }
+@media (max-width: 900px) { .overview-grid { grid-template-columns: minmax(0, 1fr); } }
+.bars { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 0.8125rem; }
+.bars li { display: grid; grid-template-columns: minmax(90px, 34%) minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0; }
+.bars .bar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bars .bar-name a { color: var(--text); text-underline-offset: 3px; }
+.bars li.current .bar-name { font-weight: 700; }
+.bars .bar-track { height: 14px; min-width: 0; background: color-mix(in srgb, var(--line) 55%, transparent); border-radius: 0 4px 4px 0; }
+.bars .bar-track i { display: block; height: 100%; background: var(--accent); border-radius: 0 4px 4px 0; }
+.bars li.pooled .bar-track i { opacity: .55; }
+.bars .bar-value { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text); }
+.bars .bar-value small { color: var(--muted); font-size: 0.7188rem; }
+.bars-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.bars-pair h3 { margin: 0 0 6px; font-size: 0.8125rem; font-weight: 600; color: var(--muted); }
+/* Phones: a name wraps at its spaces and hyphens, never inside a word; the label column is wide enough for the longest region name. */
+@media (max-width: 640px) { .bars-pair { grid-template-columns: minmax(0, 1fr); } .bars li { grid-template-columns: minmax(9.5em, 36%) minmax(0, 1fr) auto; } .bars .bar-name { white-space: normal; } }
+.chart .column { fill: var(--accent); }
+.chart .accent .series { stroke: var(--accent); } .chart .accent .series-end { fill: var(--accent); }
+.chart-legend .accent { background: transparent; height: 0; border-top: 2px solid var(--accent); border-radius: 0; }
+.chart-legend .ref { background: transparent; height: 0; border-top: 2px dashed var(--muted); border-radius: 0; }
+.chart .column.incomplete { opacity: .45; }
+.chart .marker { stroke: var(--text); stroke-width: 1.5; }
+.chart .marker-label { fill: var(--text); font-size: 0.6875rem; font-weight: 600; stroke: var(--surface); stroke-width: 3px; paint-order: stroke; }
+.overview .card > p:last-child a { color: var(--text); text-underline-offset: 3px; }

@@ -115,6 +115,15 @@ it("opens a building with its flat sales only (garages are a separate type)", as
   expect(screen.getByRole("combobox", { name: "Vrsta nepremičnine" })).toHaveTextContent("garaža / parkirišče (1)");
 });
 
+it("has a market overview page that carries the explorer's area", async () => {
+  window.location.hash = "#?g=133";
+  render(<App/>);
+  await screen.findByRole("heading", { level: 1, name: "Ljubljana" });
+  fireEvent.click(screen.getByRole("link", { name: "Pregled trga" }));
+  expect(window.location.hash).toBe("#pregled-trga?g=133");
+  expect(await screen.findByRole("heading", { level: 1, name: "Pregled trga: Ljubljana" })).toBeInTheDocument();
+});
+
 it("translates earlier links (#pregled, #kakovost)", async () => {
   window.location.hash = "#pregled?g=133";
   render(<App/>);
