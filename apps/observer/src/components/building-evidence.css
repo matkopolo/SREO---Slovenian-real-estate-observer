@@ -1,0 +1,24 @@
+/* Building view (BuildingStack in BuildingEvidence.tsx). Uses the shared tokens from styles.css. */
+.be-stack { display: grid; gap: 8px; min-width: 0; }
+.be-stack > * { min-width: 0; margin: 0; }
+.be-meta { font-size: 0.8125rem; }
+.be-count { color: var(--text); font-size: 0.875rem; overflow-wrap: break-word; }
+.be-toggles { display: flex; flex-wrap: wrap; gap: 0 16px; }
+.be-toggles:empty { display: none; }
+.be-toggles .link { min-height: 44px; }
+
+/* Per-year bars: count, bar and year are three stacked rows inside each column, so labels never sit on a bar or on text. */
+.be-years { margin: 4px 0 0; padding: 0 6px; }
+.be-years ol { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.be-years li { display: grid; grid-template-rows: 14px 72px 16px; justify-items: stretch; min-width: 0; }
+.be-count-label { font-size: 0.6562rem; line-height: 14px; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.be-bar-slot { display: flex; align-items: flex-end; border-bottom: 1px solid var(--muted); }
+.be-bar { display: block; width: 100%; border-radius: 3px 3px 0 0; background: var(--s1); }
+.be-year { font-size: 0.6562rem; line-height: 16px; color: var(--muted); text-align: center; white-space: nowrap; overflow: visible; }
+
+.be-table td, .be-table th { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.be-table th .chip { white-space: nowrap; }
+.be-register { margin-top: 4px; }
+.be-register > p { padding: 0 12px 12px; font-size: 0.7812rem; }
+
+.td-title { font-family: var(--font-display); font-size: clamp(22px, 2.4vw, 28px); font-weight: 500; line-height: 1.2; margin: 2px 0 4px; hyphens: auto; }

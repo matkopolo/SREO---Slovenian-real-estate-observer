@@ -1,0 +1,17 @@
+/* Data-update notice (App) */
+.data-banner-region:empty { display: none; }
+.data-banner { display: flex; align-items: center; gap: 10px; padding: 4px 4px 4px 12px; border: 1px solid var(--line);
+  border-left: 3px solid var(--accent); border-radius: 8px; background: var(--surface); font-size: 0.8438rem; }
+.data-banner.failed { border-left-color: var(--danger); }
+.data-banner.stale { border-left-color: var(--warn); }
+.data-banner p { flex: 1; min-width: 0; margin: 0; color: var(--muted); overflow-wrap: break-word; }
+.data-banner strong { color: var(--text); font-weight: 600; }
+.data-banner-mark { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.data-banner.processing .data-banner-mark { animation: data-banner-pulse 1.6s ease-in-out infinite; }
+.data-banner.failed .data-banner-mark { background: var(--danger); }
+.data-banner.stale .data-banner-mark { background: var(--warn); }
+.data-banner-close { flex: none; min-width: 44px; min-height: 44px; border: 0; border-radius: 6px; background: transparent; color: var(--muted);
+  font-size: 1.25rem; line-height: 1; cursor: pointer; }
+.data-banner-close:hover { color: var(--text); }
+@keyframes data-banner-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .data-banner.processing .data-banner-mark { animation: none; } }
