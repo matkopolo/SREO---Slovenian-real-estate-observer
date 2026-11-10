@@ -128,7 +128,10 @@ export function AreaPanel({ scope, parents: path, group, years, cutoff, onGroup,
       <ol>{[...path].reverse().map((item) => <li key={`${item.level}-${item.id ?? 0}`}><a href={areaHref(item.id)}>{areaName(item)}</a></li>)}
         <li aria-current="page">{areaName(scope)}</li></ol>
     </nav>
-    {street ? <h1 id="area-title" className="area-title"><Name>{titleCase(street)}</Name><span className="title-town">, {areaName(scope)}</span></h1> : <h1 id="area-title" className="area-title">{scope.level === "city_district" ? <><Name>{scope.name}</Name>{path.find((item) => item.level === "municipality") && <span className="title-town">, <Name>{path.find((item) => item.level === "municipality")!.name}</Name></span>}</> : areaName(scope)}</h1>}
+    <div className="title-row">
+      {street ? <h1 id="area-title" className="area-title"><Name>{titleCase(street)}</Name><span className="title-town">, {areaName(scope)}</span></h1> : <h1 id="area-title" className="area-title">{scope.level === "city_district" ? <><Name>{scope.name}</Name>{path.find((item) => item.level === "municipality") && <span className="title-town">, <Name>{path.find((item) => item.level === "municipality")!.name}</Name></span>}</> : areaName(scope)}</h1>}
+      <ShareLink/>
+    </div>
     {failed && <LoadFailed retry={retryAll}>{t("Nekaterih podatkov za to območje ni bilo mogoče naložiti.")}</LoadFailed>}
     <p className="area-lede">
       {!current.sale ? (current.failed ? t("Prodaj ni bilo mogoče naložiti.") : t("Nalagam posle …"))
@@ -145,7 +148,6 @@ export function AreaPanel({ scope, parents: path, group, years, cutoff, onGroup,
     {street && <SalesList scopeId={scope.id} scopeName={scope.name} segment={segment} window={windows?.sales.current} noun={noun.genitive} linkArea={scope.id}
       street={street} onClearStreet={onClearStreet} fallback={windows ? { from: `${FIRST_SALE_YEAR}-01-01`, to: windows.sales.current.to } : undefined}/>}
 
-    <ShareLink/>
     <nav className="jump" aria-label={t("Na tej strani")}>
       {[["sales-sale", t("Prodaje")], ...(group === "land" ? [] : [["rent-title", t("Najemi")]]), ["trend-title", t("Gibanje cen")], ...(isDwelling(group) ? [["afford-title", t("Dostopnost")]] : [])].map(([id, label]) =>
         <button key={id} type="button" onClick={() => { const target = document.getElementById(id); target?.scrollIntoView({ block: "start", behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); (target as HTMLElement | null)?.focus?.({ preventScroll: true }); }}>{label}</button>)}
@@ -375,13 +377,22 @@ function NewSupply({ scope, cutoff }: { scope: Scope; cutoff?: string }) {
   </details>;
 }
 
-/** Copy the link of exactly this view (area, type, size, period, layer) to share or bookmark. */
+/** Copy the link of exactly this view (area, type, size, period, layer) to share or bookmark: an icon button by the title. */
 function ShareLink() {
   const [done, setDone] = useState(false);
-  return <button type="button" className="share-link" onClick={() => {
-    const url = window.location.href;
-    const finish = () => { setDone(true); setTimeout(() => setDone(false), 2000); };
-    if (navigator.share && window.matchMedia?.("(pointer: coarse)").matches) navigator.share({ url, title: document.title }).catch(() => undefined);
-    else navigator.clipboard?.writeText(url).then(finish).catch(() => undefined);
-  }}>{done ? t("Povezava kopirana ✓") : t("Kopiraj povezavo")}</button>;
+  const label = t("Kopiraj povezavo");
+  return <span className="share">
+    <button type="button" className="share-link" aria-label={label} title={label} onClick={() => {
+      const url = window.location.href;
+      const finish = () => { setDone(true); setTimeout(() => setDone(false), 2000); };
+      if (navigator.share && window.matchMedia?.("(pointer: coarse)").matches) navigator.share({ url, title: document.title }).catch(() => undefined);
+      else navigator.clipboard?.writeText(url).then(finish).catch(() => undefined);
+    }}>
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/>
+        <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/>
+      </svg>
+    </button>
+    <span className="share-toast" role="status" aria-live="polite">{done ? t("Povezava kopirana ✓") : ""}</span>
+  </span>;
 }

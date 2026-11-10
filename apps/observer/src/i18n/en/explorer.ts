@@ -15,7 +15,7 @@ export const explorer: Record<string, string> = {
   "Koledarska leta:": "Calendar years:",
   "od {select}": "from {select}",
   "do {select}": "to {select}",
-  "Prodaje {from}–{to}, najemi {rents}": "Sales {from}–{to}, rentals {rents}",
+  "{from}–{to} · najemi {rents}": "{from}–{to} · rentals {rents}",
   "Podrobnosti ↓": "Details ↓",
 
   // Errors and loading
@@ -64,7 +64,20 @@ export const explorer: Record<string, string> = {
 
   // Legend
   "Barva zemljevida": "Map colour",
-  "Legenda": "Legend",
+  "Pojasnilo zemljevida": "About the map",
+  "prodana zemljišča · €/m²": "land sold · €/m²",
+  "stavbe z najemi · €/m²": "buildings with rentals · €/m²",
+  "stavbe s prodajami · €/m²": "buildings with sales · €/m²",
+  "1–2 posla": "1–2 transactions",
+  "regije · {unit}": "regions · {unit}",
+  "četrtne skupnosti in naselja · {unit}": "city districts and settlements · {unit}",
+  "občine · {unit}": "municipalities · {unit}",
+  "združeno": "pooled",
+  "četrtne skupnosti · €/m²": "city districts · €/m²",
+  "naselja · €/m²": "settlements · €/m²",
+  "{areas} občine {municipality} imajo lastno lestvico.": "{areas} of {municipality} have their own scale.",
+  "Četrtne skupnosti": "City districts",
+  "Naselja": "Settlements",
   "Prikaz: prodana zemljišča ({period})": "Showing: land sold ({period})",
   "Prikaz: stavbe s najemi ({period})": "Showing: buildings with rentals ({period})",
   "Prikaz: stavbe s prodajami ({period})": "Showing: buildings with sales ({period})",
@@ -86,12 +99,9 @@ export const explorer: Record<string, string> = {
   "ni objavljeno": "not published",
   "V tem obdobju ni objavljivih vrednosti po občinah ({noun}).": "No publishable municipal values in this period ({noun}).",
   "{price} skupaj": "{price} in total",
-  "Četrtne skupnosti občine {municipality} (mediana €/m², lastna modra lestvica):": "City districts of {municipality} (median €/m², own blue scale):",
-  "Naselja občine {municipality} (mediana €/m², lastna modra lestvica):": "Settlements of {municipality} (median €/m², own blue scale):",
   "Lestvica četrtnih skupnosti ali naselij": "City district or settlement scale",
   "Kliknite četrtno skupnost ali naselje za podrobnosti; približajte do ulic za stavbe.": "Click a city district or settlement for details; zoom in to street level for buildings.",
   "Kliknite območje ali približajte za podrobnejša območja.": "Click an area or zoom in for smaller areas.",
-  "3D pogled": "3D view",
 
   // Building view
   "Stavba in posli": "Building and transactions",

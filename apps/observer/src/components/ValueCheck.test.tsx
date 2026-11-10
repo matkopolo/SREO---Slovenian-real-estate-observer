@@ -51,17 +51,24 @@ it("leads with the similar-sales value, explains my purchase with the sale page'
   ] };
   open();
   expect(await screen.findByRole("heading", { level: 2, name: /^Ocena danes: okoli 289\.000\s€\s*\(verjetno\s*266\.000–314\.000\s€\s*\)$/ })).toBeInTheDocument();
-  expect(screen.getByText(/^Osnova ocene: mediana 85 podobnih prodaj v okolici\.$/)).toBeInTheDocument();
-  const own = await screen.findByText(/Vaš nakup 2021 \(130\.000\s€\), posodobljen z gibanjem cen v občini Ljubljana: 130\.000\s€\./);
-  // The same basis as the sale page ("27 % pod mediano podobnih stanovanj v naselju Ljubljana"), never the statistical model.
-  expect(own).toHaveTextContent(/Ob nakupu \(2021\) je bila cena na m² 27 % pod mediano podobnih stanovanj v naselju Ljubljana \(2\.?926\s€\/m²\)\. Zato je vaša posodobljena nakupna cena nižja od današnje ocene\./);
+  // The rows the estimate rests on: similar sales lead (the chip), the purchase explained with the sale page's benchmark, never the statistical model.
+  const similar = screen.getByText("Podobna stanovanja danes").closest(".value-row")!;
+  expect(similar).toHaveTextContent(/266\.000–314\.000\s€/);
+  expect(similar).toHaveTextContent("85 prodaj do 10 km, zanesljivost srednja");
+  expect(similar).toHaveTextContent("osnova ocene");
+  const own = (await screen.findByText("Vaš nakup (2021)")).closest(".value-row")!;
+  expect(own).toHaveTextContent(/130\.000\s€/);
+  expect(own).toHaveTextContent(/2\.?131\s€\/m², 27 % pod mediano podobnih stanovanj v naselju Ljubljana takrat/);
   expect(own).not.toHaveTextContent(/statističnega modela/);
+  expect(screen.getByText("Posodobljen s cenami v občini Ljubljana").closest(".value-row")).toHaveTextContent(/130\.000\s€/);
+  expect(screen.getByText("Zato je vaša posodobljena nakupna cena nižja od današnje ocene.")).toBeInTheDocument();
+  expect(screen.getByRole("figure", { name: "Vaš nakup in današnja ocena na isti lestvici" })).toHaveTextContent(/vaš nakup 130\.000, posodobljen nakup 130\.000/);
   expect(screen.queryByRole("button", { name: "Zapri" })).not.toBeInTheDocument();          // the explorer bar's "Nazaj na pregled trga" closes it
   fireEvent.click(screen.getByRole("checkbox", { name: "Stanovanje je v slabšem stanju od povprečnega (ni obnovljeno)" }));
   expect(await screen.findByRole("heading", { level: 2, name: /^Ocena danes: okoli 266\.000\s€\s*\(verjetno\s*266\.000–289\.000\s€\s*\)$/ })).toBeInTheDocument();
-  expect(screen.getByText(/Slabše stanje: ocena je na spodnjem robu podobnih prodaj \(spodnja četrtina, 266\.000\s€\) namesto na mediani \(289\.000\s€\)/)).toBeInTheDocument();
+  expect(similar).toHaveTextContent(/slabše stanje: ocena na spodnji četrtini \(266\.000\s€\) namesto na mediani \(289\.000\s€\)/);
   expect(screen.getByLabelText("Prodajna cena (€)")).toHaveValue("266.000");      // the sale scenario uses the headline, formatted
-  expect(screen.getByText(/Podobne prodaje so iz širše okolice, do 10 km/)).toBeInTheDocument();
+  expect(similar).toHaveTextContent("iz širše okolice, zato lahko odstopajo od cen v vaši soseski");
 });
 
 it("falls back to the municipal band when similar sales are not trusted, and never to the national index", async () => {
@@ -70,7 +77,7 @@ it("falls back to the municipal band when similar sales are not trusted, and nev
   open();
   const heading = await screen.findByRole("heading", { level: 2, name: /Ocena danes/ });
   expect(heading).not.toHaveTextContent("195.000");                         // 130.000 € × index 1,5
-  expect(screen.getByText(/Podobnih prodaj je premalo ali so si preveč različne/)).toBeInTheDocument();
+  expect(screen.getByText("Podobna stanovanja danes").closest(".value-row")).toHaveTextContent("zanesljivost zelo nizka · premalo ali preveč različne, zato ocena ne temelji na njih");
 });
 
 it("asks about condition for a house and skips the question for land", async () => {
@@ -107,8 +114,8 @@ it("values a garage per unit from the typical garage in the municipality", async
   ]);
   open();
   expect(await screen.findByRole("heading", { level: 2, name: /^Ocena danes: okoli 18\.000\s€$/ })).toBeInTheDocument();
-  expect(screen.getByText("Tipična garaža v občini Ljubljana").closest("li")).toHaveTextContent("18.000");
-  expect(screen.getByText(/V okolici ni dovolj podobnih prodaj garaž in parkirišč za primerjavo/)).toBeInTheDocument();
+  expect(screen.getByText("Tipična garaža v občini Ljubljana").closest(".value-row")).toHaveTextContent("18.000");
+  expect(screen.getByText("Podobne garaže danes").closest(".value-row")).toHaveTextContent("v okolici ni dovolj podobnih prodaj garaž in parkirišč za primerjavo");
 });
 
 it("focuses the address field when the check opens", async () => {
@@ -138,11 +145,13 @@ it("values a garage from the district's typical garage and leaves out an updated
   ]);
   open();
   expect(await screen.findByRole("heading", { level: 2, name: /^Ocena danes: okoli 18\.000\s€$/ })).toBeInTheDocument();
-  expect(screen.getByText(/^Osnova ocene: tipična cena garaže v četrtni skupnosti Jarše\.$/)).toBeInTheDocument();
-  expect(screen.getByText("Tipična garaža v četrtni skupnosti Jarše").closest("li")).toHaveTextContent("iz 40 prodaj");
-  // 18.000 € × (24.000 / 9.000) = 48.000 €, far from the typical garage: not shown, and said why.
-  expect(screen.queryByText(/Vaš nakup, posodobljen z gibanjem cen/)).not.toBeInTheDocument();
-  expect(screen.getByText(/ne posodabljamo z gibanjem cen garaž/)).toBeInTheDocument();
+  const typical = screen.getByText("Tipična garaža v četrtni skupnosti Jarše").closest(".value-row")!;
+  expect(typical).toHaveTextContent("osnova ocene");
+  expect(typical).toHaveTextContent("mediana, 40 prodaj v zadnjih 12 mesecih");
+  // 18.000 € × (24.000 / 9.000) = 48.000 €, far from the typical garage: no value, and said why.
+  const updated = screen.getByText("Posodobljen s cenami v občini Ljubljana").closest(".value-row")!;
+  expect(updated).not.toHaveTextContent("48.000");
+  expect(updated).toHaveTextContent(/ne posodabljamo z gibanjem cen garaž/);
   expect(screen.queryByRole("checkbox", { name: /slabšem stanju/ })).not.toBeInTheDocument();
   expect(screen.getByText(/Ocena ne pozna lege garaže/)).toBeInTheDocument();
 });
@@ -158,8 +167,10 @@ it("prefers the district band over comparables from a wide area, and uses the di
   open();
   // 4.000 / 4.500 / 5.000 €/m² × 61 m²
   expect(await screen.findByRole("heading", { level: 2, name: /^Ocena danes: okoli 275\.000\s€\s*\(verjetno\s*244\.000–305\.000\s€\s*\)$/ })).toBeInTheDocument();
-  expect(screen.getByText(/Podobne prodaje so iz širše okolice, do 10 km, zato ocena temelji na prodajah v četrtni skupnosti Jarše\./)).toBeInTheDocument();
-  expect(screen.getByText(/Cene v četrtni skupnosti Jarše za 61,0 m²/).closest("li")).toHaveTextContent("iz 78 prodaj");
+  expect(screen.getByText("Podobna stanovanja danes").closest(".value-row")).toHaveTextContent("iz širše okolice, zato ocena temelji na cenah v četrtni skupnosti Jarše");
+  const district = screen.getByText("Cene v četrtni skupnosti Jarše za 61 m²").closest(".value-row")!;
+  expect(district).toHaveTextContent("osnova ocene");
+  expect(district).toHaveTextContent("srednja polovica, 78 prodaj v zadnjih 12 mesecih");
   expect(await screen.findByRole("heading", { level: 2, name: /Če bi jo oddali: okoli 610\s€ na mesec/ })).toBeInTheDocument();
   expect(screen.getByText(/Srednja polovica najemnin v četrtni skupnosti Jarše za 61,0\sm²/)).toBeInTheDocument();
   expect(screen.getByText(/ne oglasi: oglasne najemnine so običajno višje/)).toBeInTheDocument();

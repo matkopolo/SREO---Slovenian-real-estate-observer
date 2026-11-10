@@ -26,24 +26,28 @@ export function ExplorerBar({ state, navigate, cutoff, windows, regions, municip
   regions: Geography[]; municipalities: Geography[]; districts: Geography[];
 }) {
   const lastYear = Number((cutoff ?? String(new Date().getFullYear())).slice(0, 4));
+  // The exact windows of the chosen period: the active button's tooltip and a muted note after the control.
+  const exact = windows ? t("{from}–{to} · najemi {rents}", { from: date(windows.sales.current.from), to: date(windows.sales.current.to), rents: windows.rentYears }) : undefined;
+  const custom = typeof state.years === "string";
   return <div className="explorer-bar">
     {!state.value && <AreaSearch regions={regions} municipalities={municipalities} districts={districts} label={t("Poiščite občino, četrtno skupnost, regijo ali naslov")} placeholder={t("npr. Domžale, Savinjska, Kozje 144")}
       onArea={(option) => navigate({ g: option.id, building: undefined, selected: undefined, street: undefined })}
       onStreet={(street, _settlement, municipalityId) => navigate({ g: municipalityId ?? state.g, street: titleCase(street), building: undefined, selected: undefined, value: false })}
       onAddress={(address) => navigate({ g: undefined, building: { ko: address.cadastralMunicipalityCode, st: address.buildingNumber }, selected: undefined })}/>}
     <button type="button" className="value-button" aria-pressed={state.value} onClick={() => navigate({ value: !state.value })}>{state.value ? t("← Nazaj na pregled trga") : t("Koliko je vredna moja nepremičnina?")}</button>
-    {!state.value && <>
+    {!state.value && <div className="period-choice">
       <div className="segmented" role="group" aria-label={t("Obdobje")}>
-        {PERIODS.map((item) => <button key={item.id} type="button" aria-pressed={state.years === item.id} onClick={() => navigate({ years: item.id })}>{item.short
+        {PERIODS.map((item) => <button key={item.id} type="button" aria-pressed={state.years === item.id} title={state.years === item.id ? exact : undefined}
+          onClick={() => navigate({ years: item.id })}>{item.short
           ? <><span className="label-long">{item.label}</span><span className="label-short" aria-hidden="true">{item.short}</span></> : item.label}</button>)}
-        <button type="button" aria-pressed={typeof state.years === "string"} onClick={() => {
-          if (typeof state.years === "string") return;
+        <button type="button" aria-pressed={custom} title={custom ? exact : undefined} onClick={() => {
+          if (custom) return;
           const last = windows ? Number(windows.sales.current.to.slice(0, 4)) : lastYear;
           navigate({ years: `${last - 3}-${last - 1}` });
         }}>{t("Po meri")}</button>
       </div>
-      {typeof state.years === "string" && <YearRange period={state.years} last={lastYear} onChange={(years) => navigate({ years })}/>}
-      {windows && <p className="period-chip">{t("Prodaje {from}–{to}, najemi {rents}", { from: date(windows.sales.current.from), to: date(windows.sales.current.to), rents: windows.rentYears })}</p>}
-    </>}
+      {custom && <YearRange period={state.years as `${number}-${number}`} last={lastYear} onChange={(years) => navigate({ years })}/>}
+      {exact && <p className="period-note">{exact}</p>}
+    </div>}
   </div>;
 }

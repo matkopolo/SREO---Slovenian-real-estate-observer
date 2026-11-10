@@ -65,23 +65,20 @@ export function App() {
 
   return <div className={page === "explorer" ? "observer full" : "observer"}>
     <a className="skip" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById("main")?.focus(); }}>{t("Na vsebino")}</a>
+    {/* One row: wordmark (with the tagline under it on wide screens), the page tabs and the language switch. */}
     <header className="masthead">
-      <a className="wordmark" href="#"><span>SREO</span><strong>{BRAND}</strong></a>
-      <p className="tagline">{cutoff
-        ? t("Dejansko sklenjeni nepremičninski posli v Sloveniji, podatki GURS do {date}", { date: dateCompact(cutoff) })
-        : t("Dejansko sklenjeni nepremičninski posli v Sloveniji")}
-        {<> <span className="source-note">{tx("· Vir GURS ETN, {licence}, obdelano", { licence: <abbr title={t("Creative Commons Priznanje avtorstva 4.0")}>CC BY 4.0</abbr> })}</span>
-          {" "}<span className="source-note">· <a href={`#${ABOUT}`}>{t("Metodologija in viri")}</a></span></>}</p>
-      <div className="masthead-end">
-        <nav className="views" aria-label={t("Strani")}>
-          <a href={lastArea} aria-current={page === "explorer" ? "page" : undefined}
-            onClick={(event) => { if (pageOf() === "explorer") event.preventDefault(); }}>{t("Trg po območjih")}</a>
-          <a href={`#${TRENDS}`} aria-current={page === TRENDS ? "page" : undefined}
-            onClick={(event) => { const g = Number(hashQuery().get("g")); if (g > 0) { event.preventDefault(); window.location.hash = trendsHref(g); } }}>{t("Trendi")}</a>
-          <a href={`#${ABOUT}`} aria-current={page === ABOUT ? "page" : undefined}>{t("O podatkih")}</a>
-        </nav>
-        <LanguageSwitch/>
+      <div className="brand">
+        <a className="wordmark" href="#"><span>SREO</span><strong>{BRAND}</strong></a>
+        <p className="tagline">{t("Dejansko sklenjeni nepremičninski posli v Sloveniji")}</p>
       </div>
+      <nav className="views" aria-label={t("Strani")}>
+        <a href={lastArea} aria-current={page === "explorer" ? "page" : undefined}
+          onClick={(event) => { if (pageOf() === "explorer") event.preventDefault(); }}>{t("Trg po območjih")}</a>
+        <a href={`#${TRENDS}`} aria-current={page === TRENDS ? "page" : undefined}
+          onClick={(event) => { const g = Number(hashQuery().get("g")); if (g > 0) { event.preventDefault(); window.location.hash = trendsHref(g); } }}>{t("Trendi")}</a>
+        <a href={`#${ABOUT}`} aria-current={page === ABOUT ? "page" : undefined}>{t("O podatkih")}</a>
+      </nav>
+      <LanguageSwitch/>
     </header>
     <DataStatusBanner status={dataStatus}/>
 
@@ -99,9 +96,13 @@ export function App() {
       </Suspense></ErrorBoundary>
     </main>
 
-    {page !== "explorer" && <footer className="colophon">
-      <p>{t("Vir: Geodetska uprava RS (GURS), Evidenca trga nepremičnin, Register prostorskih enot in Kataster nepremičnin (CC BY 4.0); SURS; Banka Slovenije; ECB; zemljevid OpenFreeMap in sodelavci OpenStreetMap.")}
-        {" "}{t("Podatki so obdelani.")} {t("Prikaz je informativen in ni uradna cenitev ali ponudba kredita.")}</p>
-    </footer>}
+    {/* The attribution (GURS ETN, CC BY 4.0) and the data date stay visible on every page; the reading pages list every source. */}
+    <footer className={page === "explorer" ? "colophon compact" : "colophon"}>
+      {page !== "explorer" && <p>{t("Vir: Geodetska uprava RS (GURS), Evidenca trga nepremičnin, Register prostorskih enot in Kataster nepremičnin (CC BY 4.0); SURS; Banka Slovenije; ECB; zemljevid OpenFreeMap in sodelavci OpenStreetMap.")}
+        {" "}{t("Podatki so obdelani.")} {t("Prikaz je informativen in ni uradna cenitev ali ponudba kredita.")}</p>}
+      <p>{tx("Vir GURS ETN, {licence}, obdelano", { licence: <abbr title={t("Creative Commons Priznanje avtorstva 4.0")}>CC BY 4.0</abbr> })}
+        {cutoff && <> · {t("podatki do {date}", { date: dateCompact(cutoff) })}</>}
+        {" "}· <a href={`#${ABOUT}`}>{t("Metodologija in viri")}</a></p>
+    </footer>
   </div>;
 }

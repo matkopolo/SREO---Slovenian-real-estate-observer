@@ -39,10 +39,24 @@
   .value-pick .pick-action { grid-area: action; justify-self: end; text-align: right; }
 }
 
-/* The answer. */
+/* The answer: the headline, then what it rests on as labelled rows (label left, value right, one muted note under them), one shared scale. */
 .value-answer h2 .value-likely { display: block; margin-top: 4px; font-size: 1rem; font-weight: 500; color: var(--muted); }
-.value-range, .value-own { margin: 0; }
-.value-own { font-size: 0.9062rem; }
+.value-own { margin: 0; font-size: 0.9062rem; }
+.value-rows { display: grid; margin: 4px 0 0; }
+.value-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 2px; align-items: baseline;
+  margin: 0 -8px; padding: 8px; border-top: 1px solid var(--line);
+}
+.value-row:last-child { border-bottom: 1px solid var(--line); }
+.value-row dt { grid-column: 1; grid-row: 1; margin: 0; font-size: 0.9062rem; font-weight: 600; overflow-wrap: break-word; }
+.value-row dd { margin: 0; min-width: 0; }
+.value-row .value-amount { grid-column: 2; grid-row: 1; justify-self: end; font-weight: 650; }
+.value-row .value-note { grid-column: 1 / -1; grid-row: 2; color: var(--muted); font-size: 0.75rem; line-height: 1.4; overflow-wrap: break-word; }
+/* The row today's estimate rests on. */
+.value-row.is-basis { border-radius: 8px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.value-row.is-basis + .value-row { border-top-color: transparent; }
+.value-row.is-basis .chip { border-color: var(--accent); color: var(--accent); }
+.value-answer .range-bar { margin: 10px 0 0; }
 .value-caveat { margin: 0; padding: 6px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); font-size: 0.8438rem; }
 
 /* Forms: 48 px fields, checkbox rows and one primary action. */

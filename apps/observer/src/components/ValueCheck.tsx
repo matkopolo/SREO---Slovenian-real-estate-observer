@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   loadBuilding, loadInflationBetween, loadPriceIndex, loadRentOverview, loadSaleAreas, loadSaleEvidence, loadSaleOverview, loadSpread, marketWindows, shiftWindow,
   type BuildingStatistics, type Distribution, type Geography, type MarketIndex, type PropertyGroup, type RentalOverview, type RentGroup, type StatisticsOverview,
 } from "../api";
 import { addressLabel, AreaSearch } from "./AreaSearch";
-import { benchmarkPlace, chooseBenchmark, perSqmText } from "./TransactionDetails";
+import { benchmarkPlace, chooseBenchmark } from "./TransactionDetails";
+import { RangeBar } from "./charts";
 import { dateCompact as date, decimal1, euro, integer, median, percent, sqm, upTo1 } from "../format";
 import { useLoad } from "../hooks/useLoad";
 import { LANG, proper, t, tx } from "../i18n";
@@ -28,6 +29,11 @@ const CONDITION: Partial<Record<PropertyGroup, string>> = {
   apartment: t("Stanovanje je v slabšem stanju od povprečnega (ni obnovljeno)"),
   house: t("Hiša je v slabšem stanju od povprečne (ni obnovljena)"),
   commercial: t("Poslovni prostor je v slabšem stanju od povprečnega (ni obnovljen)"),
+};
+/** The similar-sales row: "Podobna stanovanja danes" (nominative plural, so each type is its own key). */
+const SIMILAR_TODAY: Record<PropertyGroup, string> = {
+  apartment: t("Podobna stanovanja danes"), house: t("Podobne hiše danes"), commercial: t("Podobni poslovni prostori danes"),
+  garage: t("Podobne garaže danes"), land: t("Podobna zemljišča danes"),
 };
 /** Accusative: "Stavba ima 11 enot". */
 const UNITS = forms(["enoto", "enoti", "enote", "enot"], ["unit", "units"]); // i18n-ignore
@@ -127,6 +133,11 @@ export function ValueCheck({ building: buildingRef, transactionId, municipalityI
 /** A price and a date as they are marked up in sentences. */
 function moneyNode(amount: number) { return <span className="money">{euro(amount)}</span>; }
 function whenNode(value: string) { return <span className="when">{date(value)}</span>; }
+/** The parts of one row's note, separated; empty parts are left out. Plain text and fragments only, so the note stays one text run. */
+function join(parts: ReactNode[], separator: string): ReactNode {
+  const kept = parts.filter((part) => part != null && part !== false && part !== "");
+  return kept.length ? kept.map((part, index) => <Fragment key={index}>{index ? separator : ""}{part}</Fragment>) : null;
+}
 
 /** The building's address (a register name), else its cadastral number. */
 const buildingName = (building: BuildingStatistics) => proper(addressLabel(building))
@@ -291,23 +302,17 @@ function Estimates({ purchase, evidence, municipalityId, municipalityName, distr
   const condition = CONDITION[purchase.group];
   const where = useDistrict && district ? inDistrict(district.name) : municipalWhere;
   const year = purchase.date.slice(0, 4);
-  const basis: ReactNode = !answer ? null
-    : worse ? (reference!.kind === "market"
-      ? t("Slabše stanje: ocena je na spodnjem robu podobnih prodaj (spodnja četrtina, {low}) namesto na mediani ({mid}).", { low: euro(round(reference!.low)), mid: euro(round(reference!.mid)) })
-      : tx("Slabše stanje: ocena je na spodnjem robu cen {where} (spodnja četrtina, {low}) namesto na mediani ({mid}).", { where, low: euro(round(reference!.low)), mid: euro(round(reference!.mid)) }))
-    : reference?.kind === "market" ? t("Osnova ocene: mediana {count} podobnih prodaj v okolici.", { count: integer(trustedMarket!.comparableCount) })
-    : reference?.kind === "garage" ? (garageSource?.pooled ? tx("Osnova ocene: tipična cena garaže {where} (prodaje zadnjih 3 let).", { where }) : tx("Osnova ocene: tipična cena garaže {where}.", { where }))
-    : reference ? tx("Osnova ocene: srednja polovica prodaj {type} {where} v zadnjih 12 mesecih, preračunana na {area} m².", { type: OF_TYPE[purchase.group], where, area: decimal1(purchase.area) })
-    : t("Osnova ocene: vaš nakup, posodobljen z gibanjem cen v občini; za primerjavo s podobnimi prodajami ni dovolj podatkov.");
+  // The row today's estimate rests on: it carries the "osnova ocene" chip and, for a worse condition, where the value moved to.
+  const basisKey = reference?.kind === "market" ? "market" : reference ? "local" : anchored != null ? "updated" : null;
+  const worseNote = worse ? t("slabše stanje: ocena na spodnji četrtini ({low}) namesto na mediani ({mid})", { low: euro(round(reference!.low)), mid: euro(round(reference!.mid)) }) : null;
 
   // How the purchase compared with the market at the time: the same benchmark and words as the sale page (narrowest publishable area, never a sample of one).
   const benchmark = context ? chooseBenchmark(context.benchmarks ?? []) : undefined;
   const benchmarkPercent = benchmark ? Math.round(Math.abs(benchmark.differencePercent)) : 0;
   const paidThen: ReactNode = !benchmark ? null : (() => {
-    const vars = { similar: (benchmark.comparisonProfile === "unadjusted" ? ALL_SOLD : SIMILAR)[purchase.group], where: benchmarkPlace(benchmark),
-      median: perSqmText(benchmark.medianAmountPerSqm), year: `${benchmark.period}${context!.incompletePeriod && benchmark.period === context!.contractYear ? ` ${t("(do zdaj)")}` : ""}` };
-    return benchmarkPercent === 0 ? tx("Ob nakupu ({year}) je bila cena na m² {equal} {similar} {where} ({median} €/m²).", { ...vars, equal: t("enaka mediani") })
-      : tx("Ob nakupu ({year}) je bila cena na m² {difference} mediano {similar} {where} ({median} €/m²).", { ...vars,
+    const vars = { similar: (benchmark.comparisonProfile === "unadjusted" ? ALL_SOLD : SIMILAR)[purchase.group], where: benchmarkPlace(benchmark) };
+    return benchmarkPercent === 0 ? tx("enako mediani {similar} {where} takrat", vars)
+      : tx("{difference} mediano {similar} {where} takrat", { ...vars,
         difference: benchmark.differencePercent < 0 ? t("{percent} % pod", { percent: benchmarkPercent }) : t("{percent} % nad", { percent: benchmarkPercent }) });
   })();
   // When it explains why the owner's updated price differs from today's estimate, say so.
@@ -315,52 +320,59 @@ function Estimates({ purchase, evidence, municipalityId, municipalityName, distr
   const consequence = benchmark && benchmarkPercent > 0 && gapToday != null && Math.abs(gapToday) > 0.05 && (benchmark.differencePercent < 0) === (gapToday < 0)
     ? gapToday < 0 ? t("Zato je vaša posodobljena nakupna cena nižja od današnje ocene.") : t("Zato je vaša posodobljena nakupna cena višja od današnje ocene.")
     : null;
-  const own: ReactNode = reference && anchored != null
-    ? tx("Vaš nakup {year} ({price}), posodobljen z gibanjem cen {where}: {updated}.", { year, price: euro(purchase.price), where: municipalWhere, updated: euro(round(anchored)) })
-    : garageMismatch ? t("Vaše nakupne cene ne posodabljamo z gibanjem cen garaž: mediana na enoto meša nova parkirna mesta in starejše garaže.")
-    : reference ? t("Vaše nakupne cene ni bilo mogoče posodobiti z gibanjem cen v občini (premalo prodaj te vrste ob nakupu ali danes).") : null;
-  // Say plainly when there are no similar sales of this type, rather than borrowing another type's numbers.
-  const noComparables = trustedMarket ? null : !purchase.transactionId ? tx("Za ročno vnesen nakup podobnih prodaj ne iščemo; ocena temelji na cenah {where}.", { where })
-    : !context ? null : market ? t("Podobnih prodaj je premalo ali so si preveč različne, zato ocena ne temelji na njih.")
-    : t("V okolici ni dovolj podobnih prodaj {type} za primerjavo.", { type: OF_TYPE[purchase.group] });
 
-  const rows = [
-    market && { key: "market", title: t("Podobne nepremičnine danes"), low: market.lowerTotal, mid: market.centralTotal, high: market.upperTotal,
-      note: [t("{count} podobnih prodaj do {distance} km", { count: integer(market.comparableCount), distance: decimal1(market.maximumRadiusMeters / 1000) }),
-        market.areaTolerancePercent != null ? t("površina ±{percent} %", { percent: market.areaTolerancePercent }) : "",
-        market.constructionYearTolerance != null ? t("leto gradnje ±{years} let", { years: market.constructionYearTolerance }) : "",
-        market.confidence === "moderate" ? t("zanesljivost srednja") : market.confidence === "low" ? t("zanesljivost nizka") : t("zanesljivost zelo nizka")].filter(Boolean).join(", ") },
-    local && (garage
-      ? { key: "local", title: tx("Tipična garaža {where}", { where }), low: local.low, mid: local.mid, high: local.high,
-        note: garageSource?.pooled ? t("Mediana cen garaž in parkirišč, zadnja 3 leta, iz {sales}", { sales: count(localSales, NOUN_FORMS.prodaja) })
-          : t("Mediana cen garaž in parkirišč, zadnjih 12 mesecev, iz {sales}", { sales: count(localSales, NOUN_FORMS.prodaja) }) }
-      : { key: "local", title: tx("Cene {where} za {area} m²", { where, area: decimal1(purchase.area) }), low: local.low, mid: local.mid, high: local.high,
-        note: t("Srednja polovica prodaj {type} v zadnjih 12 mesecih, iz {sales}", { type: OF_TYPE[purchase.group], sales: count(localSales, NOUN_FORMS.prodaja) }) }),
-    anchored != null && { key: "anchored", title: tx("Vaš nakup, posodobljen z gibanjem cen {where}", { where: municipalWhere }), low: anchored, mid: anchored, high: anchored,
-      note: national
-        ? t("Mediana {type} v občini: {then} → {now} {unit} ({change}); v vsej Sloveniji {national}", { type: OF_TYPE[purchase.group], then: integer(localThen!), now: integer(localNow!),
-          unit: garage ? t("€ na enoto") : "€/m²", change: signed(localFactor! - 1), national: signed(national - 1) })
-        : t("Mediana {type} v občini: {then} → {now} {unit} ({change})", { type: OF_TYPE[purchase.group], then: integer(localThen!), now: integer(localNow!),
-          unit: garage ? t("€ na enoto") : "€/m²", change: signed(localFactor! - 1) }) },
-  ].filter(Boolean) as Array<{ key: string; title: ReactNode; low: number; mid: number; high: number; note: string }>;
-  const scaleMax = Math.max(purchase.price, ...rows.map((row) => row.high)) * 1.08;
+  // What the estimate rests on, as labelled rows: the purchase, the purchase updated with the municipality, similar sales today, the local band.
+  // Each row is a value with one muted note; a row without a value ("—") says why. Notes are fragments, parts separated by " · ".
+  type Row = { key: string; title: ReactNode; value: string | null; note: ReactNode };
+  const sold = (sales: number) => count(sales, NOUN_FORMS.prodaja);
+  const unit = garage ? t("€ na enoto") : "€/m²";
+  const rows: Row[] = [{ key: "purchase", title: t("Vaš nakup ({year})", { year }), value: euro(purchase.price),
+    note: join([!garage && `${integer(purchase.price / purchase.area)}\u00a0€/m²`, paidThen], ", ") }];
+  const updatedTitle = tx("Posodobljen s cenami {where}", { where: municipalWhere });
+  if (anchored != null) rows.push({ key: "updated", title: updatedTitle, value: euro(round(anchored)),
+    note: join([t("mediana {then} → {now} {unit} ({change})", { then: integer(localThen!), now: integer(localNow!), unit, change: signed(localFactor! - 1) }),
+      national != null && t("v vsej Sloveniji {national}", { national: signed(national - 1) })], ", ") });
+  else if (garageMismatch) rows.push({ key: "updated", title: updatedTitle, value: null, note: t("Vaše nakupne cene ne posodabljamo z gibanjem cen garaž: mediana na enoto meša nova parkirna mesta in starejše garaže.") });
+  else if (reference) rows.push({ key: "updated", title: updatedTitle, value: null, note: t("premalo prodaj te vrste v občini ob nakupu ali danes") });
+  if (market) {
+    const confidence = market.confidence === "moderate" ? t("zanesljivost srednja") : market.confidence === "low" ? t("zanesljivost nizka") : t("zanesljivost zelo nizka");
+    // Comparables from a wide area are said to be so; untrusted ones (very low reliability, under 10 sales) are shown but never lead.
+    const caveat = !trustedMarket ? t("premalo ali preveč različne, zato ocena ne temelji na njih")
+      : wideRadius == null ? null
+      : reference?.kind === "local" && districtBand ? tx("iz širše okolice, zato ocena temelji na cenah {where}", { where })
+      : t("iz širše okolice, zato lahko odstopajo od cen v vaši soseski");
+    rows.push({ key: "market", title: SIMILAR_TODAY[purchase.group], value: span(market.lowerTotal, market.upperTotal),
+      note: join([`${t("{sales} do {distance} km", { sales: sold(market.comparableCount), distance: km(market.maximumRadiusMeters) })}, ${confidence}`, caveat, basisKey === "market" && worseNote], " · ") });
+  } else if (!purchase.transactionId) rows.push({ key: "market", title: SIMILAR_TODAY[purchase.group], value: null, note: t("za ročno vnesen nakup podobnih prodaj ne iščemo") });
+  else if (context) rows.push({ key: "market", title: SIMILAR_TODAY[purchase.group], value: null, note: t("v okolici ni dovolj podobnih prodaj {type} za primerjavo", { type: OF_TYPE[purchase.group] }) });
+  if (local) rows.push(garage
+    ? { key: "local", title: tx("Tipična garaža {where}", { where }), value: euro(Math.round(local.mid / 500) * 500),
+      note: garageSource?.pooled ? t("mediana, {sales} v zadnjih 3 letih", { sales: sold(localSales) }) : t("mediana, {sales} v zadnjih 12 mesecih", { sales: sold(localSales) }) }
+    : { key: "local", title: tx("Cene {where} za {area} m²", { where, area: upTo1(purchase.area) }), value: span(local.low, local.high),
+      note: join([t("srednja polovica, {sales} v zadnjih 12 mesecih", { sales: sold(localSales) }), basisKey === "local" && worseNote], " · ") });
+  // The national index never makes the headline: with nothing local it is only a rough note (never for garages, whose index mixes kinds of parking).
+  const hasEvidence = !!(market || local || anchored != null);
+  if (!hasEvidence && indexed != null && !garage) rows.push({ key: "index", title: t("Vaš nakup × indeks cen za vso Slovenijo (samo za orientacijo)"), value: euro(round(indexed)),
+    note: t("Za oceno vaše nepremičnine ni dovolj lokalnih podatkov; indeks za vso Slovenijo je le groba orientacija.") });
+  const shownAnswer = rows.length > 1;
+
+  // One scale for everything: today's band (the headline) with the purchase and the updated purchase as markers (rounded like the rows).
+  // The other evidence's median is already a row above; a third identical dot only cluttered the bar.
+  const markers = [{ value: purchase.price, name: t("vaš nakup") }, ...(anchored != null ? [{ value: round(anchored), name: t("posodobljen nakup") }] : [])];
+  const scaleMax = Math.max(...markers.map((marker) => marker.value), answer?.high ?? 0) * 1.08;
   const events = (history?.assets ?? []).flatMap((asset) => asset.events).filter((event) => event.transactionId !== purchase.transactionId)
     .sort((a, b) => (a.contractDate ?? "").localeCompare(b.contractDate ?? ""));
 
-  // The national index never makes the headline: with nothing local it is only a rough note (never for garages, whose index mixes kinds of parking).
-  if (indexed != null && !rows.length && !garage) rows.push({ key: "index", title: t("Vaš nakup × indeks cen za vso Slovenijo (samo za orientacijo)"), low: indexed, mid: indexed, high: indexed,
-    note: t("Za oceno vaše nepremičnine ni dovolj lokalnih podatkov; indeks za vso Slovenijo je le groba orientacija.") });
   // The answer heading takes focus when it first renders after the owner picked a purchase (or when nothing has focus).
   const answerHeading = useRef<HTMLHeadingElement>(null);
   const handled = useRef(0);
-  const shownAnswer = rows.length > 0;
   useEffect(() => {
     const heading = answerHeading.current;
     if (!heading || (focusRequest === handled.current && document.activeElement !== document.body)) return;
     handled.current = focusRequest;
     heading.focus();
   }, [focusRequest, shownAnswer]);
-  if (!rows.length) return <p className="muted" role="status">{items && (sales.data || sales.error || !areaKey) ? t("Za to nepremičnino ni dovolj podatkov za oceno.") : t("Računam ocene …")}</p>;
+  if (!shownAnswer) return <p className="muted" role="status">{items && (sales.data || sales.error || !areaKey) ? t("Za to nepremičnino ni dovolj podatkov za oceno.") : t("Računam ocene …")}</p>;
   // The one value of the page: rent yield and the sale scenario use it too.
   const value = answer?.mid ?? null;
   const change = value != null ? value / purchase.price - 1 : null;
@@ -373,25 +385,18 @@ function Estimates({ purchase, evidence, municipalityId, municipalityName, distr
       {change != null && <p className="area-lede">{real != null
         ? tx("{change} od nakupa ({price}, {date}), po upoštevanju inflacije {real}.", { change: signed(change), price: moneyNode(purchase.price), date: whenNode(purchase.date), real: signed(real) })
         : tx("{change} od nakupa ({price}, {date}).", { change: signed(change), price: moneyNode(purchase.price), date: whenNode(purchase.date) })}</p>}
-      {basis && <p className="value-range">{basis}</p>}
-      {wideRadius != null && <p className="value-caveat">{reference?.kind === "local" && districtBand
-        ? tx("Podobne prodaje so iz širše okolice, do {distance} km, zato ocena temelji na prodajah {where}.", { distance: km(wideRadius), where })
-        : t("Podobne prodaje so iz širše okolice, do {distance} km, zato lahko odstopajo od cen v vaši soseski.", { distance: km(wideRadius) })}</p>}
-      {(own || paidThen) && <p className="value-own">{own}{paidThen && <>{own && " "}{paidThen}</>}{consequence && <> {consequence}</>}</p>}
+      <dl className="value-rows">{rows.map((row) => <div key={row.key} className={row.key === basisKey ? "value-row is-basis" : "value-row"}>
+        <dt>{row.title}{row.key === basisKey && <span className="chip">{t("osnova ocene")}</span>}</dt>
+        <dd className="value-amount money">{row.value ?? "—"}</dd>
+        {row.note && <dd className="value-note">{row.note}</dd>}
+      </div>)}</dl>
+      {consequence && <p className="value-own">{consequence}</p>}
+      {answer && answer.high > answer.low && <RangeBar p25={answer.low} p50={answer.mid} p75={answer.high} min={0} max={scaleMax} unit="€" markers={markers}
+        label={t("Vaš nakup in današnja ocena na isti lestvici")} caption={t("Ocena danes {range}", { range: span(answer.low, answer.high) })}/>}
       {asksCondition && <label className="value-condition">
         <input type="checkbox" checked={poorCondition} onChange={(event) => setPoorCondition(event.target.checked)}/>
         <span>{condition}</span></label>}
-      {noComparables && <p className="value-caveat">{noComparables}</p>}
-      <ul className="estimates">{rows.map((row) => <li key={row.key}>
-        <div className="estimate-head"><strong>{row.title}</strong><span>{row.high > row.low ? span(row.low, row.high) : euro(garage && row.key === "local" ? Math.round(row.mid / 500) * 500 : round(row.mid))}</span></div>
-        <div className="estimate-track" aria-hidden="true">
-          <span className="estimate-band" style={{ left: `${(row.low / scaleMax) * 100}%`, width: `${Math.max(0.8, ((row.high - row.low) / scaleMax) * 100)}%` }}/>
-          <span className="estimate-mid" style={{ left: `${(row.mid / scaleMax) * 100}%` }}/>
-          <span className="estimate-paid" style={{ left: `${(purchase.price / scaleMax) * 100}%` }} title={t("Vaša nakupna cena")}/>
-        </div>
-        <small>{row.note}</small>
-      </li>)}</ul>
-      <p className="muted">{t("Siva oznaka je vaša nakupna cena.")} {garage ? t("Ocena ne pozna lege garaže (podzemna, zunanja, z vrati).")
+      <p className="muted">{garage ? t("Ocena ne pozna lege garaže (podzemna, zunanja, z vrati).")
         : asksCondition ? t("Ocene ne poznajo nadstropja, razgleda in opreme vaše nepremičnine; slabše stanje označite zgoraj.")
         : t("Ocene ne poznajo nadstropja, razgleda in opreme vaše nepremičnine.")}</p>
     </section>

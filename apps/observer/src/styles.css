@@ -51,38 +51,43 @@ button, select { font: inherit; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
 
 /* ---------- page shell ---------- */
-/* Same masthead and top spacing on every page: the page is full width, only the reading pages limit their content. */
-.observer { margin: 0 auto; padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); padding-block: 12px 40px; display: grid; gap: 18px; }
+/* Same masthead and top spacing on every page: the page is full width, only the reading pages limit their content.
+   Spacing between the shell rows comes from margins (not a grid gap), so the empty data-notice row costs nothing. */
+.observer { margin: 0 auto; padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); padding-block: 10px 32px; display: grid; gap: 0; }
 .observer:not(.full) > main, .observer:not(.full) > .colophon { width: 100%; max-width: 1408px; margin-inline: auto; }
-.observer.full { padding-block: 12px 0; gap: 10px; }
-.observer.full .masthead { padding-bottom: 8px; }
+.observer:not(.full) .masthead { margin-bottom: 18px; }
+.observer:not(.full) .data-banner-region:not(:empty) { margin-bottom: 18px; }
+.observer.full { padding-block: 10px 0; }
+.observer.full .masthead { margin-bottom: 10px; }
+.observer.full .data-banner-region:not(:empty) { margin-bottom: 6px; }
 /* The split view fills exactly the space under the masthead (any masthead height, any window). */
 @media (min-width: 901px) {
-  .observer.full { height: 100dvh; grid-template-rows: auto auto minmax(0, 1fr); padding-block: 12px; }
+  .observer.full { height: 100dvh; grid-template-rows: auto auto minmax(0, 1fr) auto; padding-block: 10px 6px; }
   .observer.full > main { min-height: 0; display: flex; flex-direction: column; }
   .observer.full .explorer { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
   .observer.full .explorer-body { flex: 1; height: auto; min-height: 420px; }
 }
-.colophon { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.75rem; }
+.colophon { display: grid; gap: 6px; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.75rem; }
 .colophon p { margin: 0; max-width: 75ch; }
 .colophon a { color: var(--accent); }
+/* The explorer keeps only the attribution line, under the map. */
+.colophon.compact { margin-top: 6px; padding-top: 0; border-top: 0; font-size: 0.7188rem; line-height: 1.3; }
+.colophon.compact p { max-width: none; }
 
 /* ---------- masthead ---------- */
-/* A 3-column grid (wordmark | tagline | menu + language), so a longer tagline wraps in its column and never pushes the menu down. */
-.masthead { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 6px 18px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+/* One row: wordmark (tagline under it on wide screens) · page tabs · language switch. */
+.masthead { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.brand { display: grid; gap: 0; min-width: 0; flex: 1 1 auto; }
 .wordmark { display: flex; align-items: baseline; gap: 8px; color: inherit; text-decoration: none; }
 .wordmark span { font-size: 0.8125rem; font-weight: 600; color: var(--accent); }
-.wordmark strong { font-family: var(--font-display); font-size: 1.75rem; font-weight: 500; }
-.tagline { margin: 0; min-width: 0; color: var(--muted); font-size: 0.8438rem; overflow-wrap: break-word; }
-/* Source and methodology line (shown on the explorer, where the footer is hidden). */
-.source-note { white-space: normal; }
-.source-note a { color: var(--accent); }
-.masthead-end { display: flex; align-items: center; gap: 10px; min-width: 0; justify-self: end; }
-/* Page menu; the vertical padding keeps focus rings clear of the scrolling box on phones. */
-.views { display: flex; flex-wrap: nowrap; gap: 4px; min-width: 0; padding-block: 3px; }
-.views a { display: inline-flex; align-items: center; min-height: 44px; padding: 8px 12px; border-radius: 8px; color: var(--muted); text-decoration: none; font-weight: 500; font-size: 0.875rem; white-space: nowrap; }
-.views a:hover { color: var(--text); background: var(--surface); }
-.views a[aria-current="page"] { color: var(--accent-ink); background: var(--accent); }
+.wordmark strong { font-family: var(--font-display); font-size: 1.625rem; font-weight: 500; line-height: 1.25; }
+.tagline { display: none; margin: 0; min-width: 0; color: var(--muted); font-size: 0.7812rem; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (min-width: 1100px) { .tagline { display: block; } }
+/* Page tabs: the same style for all, the current page underlined in the accent and bold. */
+.views { display: flex; flex-wrap: nowrap; gap: 2px; min-width: 0; margin-left: auto; padding-block: 2px; }
+.views a { display: inline-flex; align-items: center; min-height: 44px; padding: 8px 12px; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; color: var(--muted); text-decoration: none; font-weight: 500; font-size: 0.875rem; white-space: nowrap; }
+.views a:hover { color: var(--text); background: color-mix(in srgb, var(--muted) 10%, transparent); }
+.views a[aria-current="page"] { color: var(--text); font-weight: 650; border-bottom-color: var(--accent); }
 /* Language switch (SL | EN): sits after the page menu, never wraps or moves the menu. */
 .language-switch { display: inline-flex; flex: none; padding: 2px; border: 1px solid var(--line); border-radius: 8px; }
 .language-switch button { min-width: 36px; min-height: 36px; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted);
@@ -91,23 +96,14 @@ button, select { font: inherit; }
 .language-switch button[aria-pressed="true"] { color: var(--accent-ink); background: var(--accent); cursor: default; }
 .language-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (pointer: coarse) { .language-switch button { min-width: 44px; min-height: 40px; } }
-@media (max-width: 1100px) {
-  .masthead { grid-template-columns: auto minmax(0, 1fr); }
-  .masthead-end { grid-column: 1 / -1; justify-self: stretch; }
-  .masthead-end .language-switch { margin-left: auto; }
-}
-/* Phones: short wordmark with the language switch beside it; the menu gets the full width and scrolls sideways. */
+/* Phones: short wordmark with the language switch beside it; the tabs get the full width and scroll sideways. */
 @media (max-width: 640px) {
-  .masthead { grid-template-columns: minmax(0, 1fr) auto; }
-  .masthead-end { display: contents; }
-  .wordmark { grid-column: 1; grid-row: 1; align-self: center; }
+  .masthead { gap: 0 10px; padding-bottom: 0; }
+  .brand { flex: 1; }
   .wordmark strong { display: none; }
   .wordmark span { font-size: 1.25rem; font-family: var(--font-display); color: var(--text); }
-  .language-switch { grid-column: 2; grid-row: 1; align-self: center; }
-  .masthead-end .language-switch { margin-left: 0; }
-  .tagline { grid-column: 1 / -1; font-size: 0.7812rem; }
-  .views { grid-column: 1 / -1; overflow-x: auto; width: 100%; scrollbar-width: none; mask-image: linear-gradient(to right, #000 85%, transparent); }
-  .views a { flex: none; }
+  .views { order: 2; flex: 1 0 100%; margin-left: 0; overflow-x: auto; width: 100%; scrollbar-width: none; mask-image: linear-gradient(to right, #000 85%, transparent); }
+  .views a { flex: none; min-height: 38px; padding: 5px 10px; }
 }
 
 /* ---------- shared controls ---------- */
@@ -125,7 +121,7 @@ button, select { font: inherit; }
 .dimmed { opacity: .6; }
 .eyebrow { margin: 0; font-size: 0.8125rem; color: var(--muted); }
 .fallback { position: absolute; inset: auto 16px 16px; margin: 0; padding: 12px; border-radius: 8px; background: var(--surface); color: var(--muted); }
-.chip { display: inline-block; margin-left: 8px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 0.7188rem; font-weight: 400; white-space: nowrap; }
+.chip { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 14%, transparent); color: var(--muted); font-size: 0.7188rem; font-weight: 400; white-space: nowrap; }
 .term { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
 .term-popover { max-width: min(92vw, 420px); padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); color: var(--text); font-size: 0.875rem; line-height: 1.45; }
 .disclosure { max-width: 78ch; }
@@ -154,12 +150,6 @@ button, select { font: inherit; }
   .segmented button, .segmented button:first-child, .segmented button:last-child { border-radius: 0; border-right: 1px solid var(--line); }
 }
 @media (max-width: 400px) { .segmented button { padding: 8px 10px; } }
-
-/* Map legend (swatches). */
-.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; font-size: 0.75rem; color: var(--muted); }
-.legend li { display: inline-flex; align-items: center; gap: 6px; }
-.legend i { width: 14px; height: 14px; border-radius: 3px; display: inline-block; border: 1px solid var(--line); }
-.legend .pooled-key { opacity: .55; }
 
 /* ---------- tables ---------- */
 .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; scrollbar-gutter: stable; }
@@ -275,13 +265,21 @@ th[scope="row"] { text-align: left; }
 
 /* ---------- explorer: area panel left, street map right (ExplorerView) ---------- */
 .explorer { display: grid; gap: 10px; }
-.explorer-bar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; }
-.explorer-bar .area-search { flex: 1 1 340px; max-width: 520px; }
-.period-chip { margin: 0; flex-basis: 100%; justify-self: start; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 0.8125rem; background: var(--surface); }
+.explorer-bar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: end; }
+.explorer-bar .area-search { flex: 1 1 280px; max-width: 520px; }
+/* The main field speaks for itself (the placeholder gives examples): its label is for assistive technology. */
+.explorer-bar .area-search > label { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+/* Period: the segmented control, the custom year range and the exact windows as a muted note beside it. */
+.period-choice { display: flex; flex: 1 1 320px; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
+.period-note { margin: 0; color: var(--muted); font-size: 0.7812rem; white-space: nowrap; }
+/* Phones: the lede already names the period's end; the exact windows stay in the button's tooltip. */
+@media (max-width: 640px) { .period-note { display: none; } }
 .year-range { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; font-size: 0.9rem; }
 .year-range select { margin-left: 0.35rem; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: inherit; font: inherit; }
-.value-button { min-height: 44px; padding: 8px 14px; border: 2px solid var(--accent); border-radius: 8px; background: var(--surface); color: var(--accent); font: inherit; font-weight: 650; cursor: pointer; }
-.value-button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+/* The one filled call to action, sized like the search field beside it. */
+.value-button { min-height: 48px; padding: 8px 16px; border: 2px solid var(--accent); border-radius: 10px; background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 650; cursor: pointer; }
+.value-button:hover { filter: brightness(1.06); }
+.value-button[aria-pressed="true"] { background: var(--surface); color: var(--accent); }
 .explorer-body { display: grid; grid-template-columns: minmax(360px, 460px) minmax(0, 1fr); gap: 14px; height: calc(100dvh - 190px); min-height: 560px; }
 .explorer-body > * { min-width: 0; }
 /* The panel always reserves its scrollbar (classic bars) and keeps text clear of overlay bars (macOS);
@@ -289,33 +287,47 @@ th[scope="row"] { text-align: left; }
 .explorer-panel { position: relative; min-width: 0; overflow-y: auto; padding-left: 3px; padding-right: 14px; display: grid; align-content: start; gap: 14px;
   overscroll-behavior: contain; scrollbar-gutter: stable; }
 .phone-head { display: none; }
-.new-building { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.new-building { padding: 12px; border-radius: 10px; background: var(--surface); }
 .search-empty { margin: 4px 0 0; }
 
 /* Map column. */
 .explorer-map-wrap { position: relative; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; container-type: inline-size; container-name: map; }
 .explorer-map, .explorer-map.maplibregl-map { position: absolute; inset: 0; width: 100%; height: 100%; }
-.map-overlay { position: absolute; top: 10px; left: 10px; z-index: 2; display: grid; gap: 8px; max-width: min(340px, calc(100% - 20px)); min-width: 0;
-  padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--surface) 94%, transparent); overflow-wrap: break-word; }
-.map-overlay .legend { font-size: 0.7188rem; gap: 4px 10px; }
-.map-overlay .ghost { justify-self: start; min-height: 36px; }
-.map-layer { display: grid; gap: 4px; color: var(--muted); font-size: 0.7812rem; }
-.map-layer select { min-height: 40px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 0.875rem; }
-.map-level { margin: 0; font-size: 0.7812rem; font-weight: 600; }
-.map-hint { margin: 0; color: var(--muted); font-size: 0.75rem; }
-.legend-card { display: grid; gap: 8px; }
-.legend-card > summary { cursor: pointer; font-weight: 600; font-size: 0.8125rem; min-height: 32px; display: flex; align-items: center; }
-.legend-card[open] > summary { margin-bottom: 4px; }
+/* Legend strip docked to the bottom of the map (MapLegend): layer picker · colour ramp(s) · "?" explanation, one row of 56px.
+   The map keeps its full height; its own controls (credit, zoom) sit above the strip (--strip is set from its height). */
+.map-strip { position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-height: 56px;
+  padding: 6px 10px; background: color-mix(in srgb, var(--surface) 94%, transparent); border-top: 1px solid var(--line); font-size: 0.6875rem; color: var(--muted); }
+.strip-layer { display: block; flex: 1 1 110px; max-width: 220px; min-width: 110px; }
+.strip-layer select { width: 100%; min-height: 36px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 0.8125rem; }
+.ramp { display: grid; grid-template-columns: auto auto; gap: 1px 10px; align-items: end; flex: 0 0 auto; }
+.ramp-caption { grid-column: 1 / -1; line-height: 1.2; white-space: nowrap; }
+.ramp-classes { display: flex; margin: 0; padding: 0; list-style: none; }
+.ramp-classes li { display: grid; gap: 2px; min-width: 44px; }
+.ramp-classes i { display: block; height: 10px; border: 1px solid color-mix(in srgb, var(--line) 60%, transparent); border-right: 0; }
+.ramp-classes li:first-child i { border-radius: 3px 0 0 3px; }
+.ramp-classes li:last-child i { border-right: 1px solid color-mix(in srgb, var(--line) 60%, transparent); border-radius: 0 3px 3px 0; }
+.ramp-classes span { white-space: nowrap; padding-right: 6px; line-height: 1.2; }
+.ramp-keys { display: grid; gap: 2px; margin: 0; padding: 0 0 1px; list-style: none; }
+.ramp-keys li { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; line-height: 1.2; }
+.ramp-keys i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid var(--line); }
+.ramp-keys .pooled-key { opacity: .55; }
+.strip-note { margin: 0; flex: 1 1 240px; min-width: 0; font-size: 0.75rem; }
+.strip-help-toggle { flex: none; margin-left: auto; width: 32px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
+.strip-help-toggle:hover, .strip-help-toggle[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+/* The explanation opens as a bubble above the strip, so the strip keeps its height. */
+.strip-help { position: absolute; right: 10px; bottom: calc(100% + 6px); z-index: 3; max-width: min(420px, calc(100% - 20px)); margin: 0; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); color: var(--text); font-size: 0.8125rem; line-height: 1.4; box-shadow: 0 6px 18px rgba(0, 0, 0, .18); }
 .map-chip { position: absolute; z-index: 3; top: 10px; right: 10px; max-width: min(360px, calc(100% - 20px)); min-height: 40px; padding: 8px 12px;
   border: 1px solid var(--accent); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 0.8125rem; cursor: pointer;
   box-shadow: 0 6px 18px rgba(0, 0, 0, .18); text-align: left; }
 .map-chip strong { color: var(--accent); }
 .map-tip .maplibregl-popup-content { padding: 6px 9px; border-radius: 8px; font: 13px/1.35 var(--font-body); color: #15232c; }
-/* Map credit (OpenFreeMap, OpenMapTiles, OpenStreetMap): compact control bottom-left, zoom buttons bottom-right.
+/* Map credit (OpenFreeMap, OpenMapTiles, OpenStreetMap): compact control bottom-left, zoom buttons bottom-right, both above the strip.
    The control column leaves 64px for the zoom buttons, so the expanded credit wraps instead of running into them. */
 .explorer-map .maplibregl-ctrl-bottom-left { max-width: calc(100% - 64px); }
-/* The layer/legend card never grows taller than the map and stops above the map credit. */
-@media (min-width: 641px) { .map-overlay { max-height: calc(100% - 64px); overflow: auto; overscroll-behavior: contain; } }
+@media (min-width: 901px) { .explorer-map .maplibregl-ctrl-bottom-left, .explorer-map .maplibregl-ctrl-bottom-right { bottom: var(--strip, 0px); } }
+/* A narrower map column: the second (district) ramp goes, the strip stays one row. */
+@container map (max-width: 760px) { .ramp.secondary { display: none; } }
 @media (max-width: 900px) {
   .explorer-body { grid-template-columns: 1fr; height: auto; }
   .explorer-panel { overflow: visible; padding-right: 0; scrollbar-gutter: auto; }
@@ -327,12 +339,10 @@ th[scope="row"] { text-align: left; }
   .explorer.value-mode .explorer-map-wrap { order: 1; }
   .explorer-map-wrap .explorer-map, .explorer-map-wrap .explorer-map.maplibregl-map { position: relative; height: 52vh; min-height: 280px; border: 1px solid var(--line); border-radius: 12px; }
   .map-chip { position: static; margin: 0; justify-self: stretch; max-width: none; }
-}
-/* The district chip and the layer card never cover each other: on a narrower map the chip moves to the bottom. */
-@container map (max-width: 860px) { .map-chip { top: auto; bottom: 44px; left: 10px; right: auto; max-width: calc(100% - 70px); } }
-@media (max-width: 640px) {
-  .map-overlay { position: static; max-width: none; }
-  .map-overlay .legend { font-size: 0.6875rem; }
+  /* The strip sits under the map canvas (two rows are fine) and the explanation opens in place. */
+  .map-strip { position: static; min-height: 0; padding: 4px 2px; border-top: 0; background: transparent; }
+  .strip-layer { flex: 1 1 200px; }
+  .strip-help { position: static; max-width: none; flex: 1 0 100%; }
 }
 
 /* ---------- area panel (AreaPanel, AreaModules, RentSection) ---------- */
@@ -344,21 +354,28 @@ th[scope="row"] { text-align: left; }
 .breadcrumb li + li::before { content: "›"; margin-right: 6px; color: var(--muted); }
 .breadcrumb a { color: var(--accent); text-decoration: none; display: inline-flex; min-height: 44px; align-items: center; }
 .breadcrumb [aria-current] { color: var(--text); }
-.area-title { margin: 0; font-family: var(--font-display); font-size: clamp(28px, 3vw, 38px); font-weight: 500; line-height: 1.1; }
+/* The title with the copy-link icon button beside it; the "copied" feedback is a small live text after it. */
+.title-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.area-title { margin: 0; min-width: 0; font-family: var(--font-display); font-size: clamp(28px, 3vw, 38px); font-weight: 500; line-height: 1.1; }
 .title-town { color: var(--muted); font-weight: 400; }
 .area-lede { margin: 0; font-size: 1.0312rem; max-width: 46ch; }
 .area-lede strong { font-weight: 650; }
-.share-link { justify-self: start; min-height: 36px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 0.7812rem; cursor: pointer; }
+.share { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.share-link { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
 .share-link:hover { color: var(--accent); border-color: var(--accent); }
+.share-toast { color: var(--accent); font-size: 0.7812rem; white-space: nowrap; }
+.share-toast:empty { display: none; }
+/* Jump chips: tinted, no border. */
 .jump { display: flex; flex-wrap: wrap; gap: 6px; }
-.jump button { min-height: 36px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 0.8125rem; cursor: pointer; }
-.jump button:hover { border-color: var(--accent); color: var(--accent); }
+.jump button { min-height: 36px; padding: 6px 12px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text); font: inherit; font-size: 0.8125rem; cursor: pointer; }
+.jump button:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
 .jump button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-@media (pointer: coarse) { .jump button, .share-link { min-height: 44px; } }
-/* Property-type cards: two large, three compact. */
-.type-pair { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+@media (pointer: coarse) { .jump button { min-height: 44px; } .share-link { width: 44px; height: 44px; } }
+/* Property-type cards: two large, three compact (equal heights; the meta lines sit at the bottom). */
+.type-pair { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; align-items: stretch; }
 .type-pair .type-card { grid-column: span 3; }
-.type-pair .type-card.compact { grid-column: span 2; padding: 8px 10px; gap: 2px; }
+.type-pair .type-card.compact { grid-column: span 2; display: flex; flex-direction: column; align-items: stretch; padding: 8px 10px; gap: 2px; height: 100%; }
+.type-pair .type-card.compact .type-value { margin-bottom: auto; padding-bottom: 4px; }
 .type-pair .type-card.compact.active { padding: 7px 9px; }
 .type-card { display: grid; align-content: start; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px;
   background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; min-width: 0; overflow-wrap: break-word; }
@@ -368,15 +385,16 @@ th[scope="row"] { text-align: left; }
 .type-value { font-size: 1.5rem; font-weight: 650; }
 .type-value.small { font-size: 1rem; }
 .type-meta { font-size: 0.7812rem; color: var(--muted); }
-/* Modules (collapsible sections). */
-.module { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); min-width: 0; overflow-wrap: break-word; }
-.module > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 600; font-size: 0.9375rem; }
+/* Modules (collapsible sections): spacing and a tinted summary row instead of rules. */
+.module { display: grid; gap: 8px; padding-top: 8px; min-width: 0; overflow-wrap: break-word; }
+.module > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; padding: 6px 12px; border-radius: 8px; background: color-mix(in srgb, var(--muted) 10%, transparent); font-weight: 600; font-size: 0.9375rem; }
+.module > summary:hover { background: color-mix(in srgb, var(--muted) 16%, transparent); }
 .module h2 { margin: 0; font-family: var(--font-display); font-size: 1.1875rem; font-weight: 500; }
 .module-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: center; }
 .module .card { padding: 0; border: 0; background: transparent; }
 .panel-source { margin: 0; color: var(--muted); font-size: 0.75rem; }
 .panel-source a { color: var(--accent); }
-.evidence-note { margin-top: 8px; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--surface-raised); font-size: 0.8125rem; color: var(--muted); }
+.evidence-note { margin-top: 8px; padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 10%, transparent); font-size: 0.8125rem; color: var(--muted); }
 /* Ranking among neighbours, and the areas withheld for too few sales. */
 .ranking-list { margin: 0; padding: 0; list-style: none; display: grid; }
 .ranking-list li { display: grid; grid-template-columns: 2.2em 1fr auto; gap: 0 8px; align-items: center; border-bottom: 1px solid var(--line); }

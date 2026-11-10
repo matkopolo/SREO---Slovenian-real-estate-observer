@@ -71,7 +71,6 @@ Tone: plain, modern, short (Zillow/Redfin/ONS style). No bureaucratic phrasing. 
 | Prikaži vse | Show all |
 | Legenda | Legend |
 | Barva zemljevida | Map colour |
-| 3D pogled | 3D view |
 | V pogledu | In view |
 | Odpri | Open |
 | Nalagam … | Loading … |
