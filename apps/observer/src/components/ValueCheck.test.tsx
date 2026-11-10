@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ValueCheck } from "./ValueCheck";
 import { stubApi } from "../test/api-stub";
@@ -60,7 +60,9 @@ it("leads with the similar-sales value, explains my purchase with the sale page'
   expect(own).toHaveTextContent(/130\.000\s€/);
   expect(own).toHaveTextContent(/2\.?131\s€\/m², 27 % pod mediano podobnih stanovanj v naselju Ljubljana takrat/);
   expect(own).not.toHaveTextContent(/statističnega modela/);
-  expect(screen.getByText("Posodobljen s cenami v občini Ljubljana").closest(".value-row")).toHaveTextContent(/130\.000\s€/);
+  // The updated row waits for the municipality's medians (two more requests): never assert on it synchronously.
+  const updated = screen.getByText("Posodobljen s cenami v občini Ljubljana").closest(".value-row")!;
+  await waitFor(() => expect(updated).toHaveTextContent(/130\.000\s€/));
   expect(screen.getByText("Zato je vaša posodobljena nakupna cena nižja od današnje ocene.")).toBeInTheDocument();
   expect(screen.getByRole("figure", { name: "Vaš nakup in današnja ocena na isti lestvici" })).toHaveTextContent(/vaš nakup 130\.000, posodobljen nakup 130\.000/);
   expect(screen.queryByRole("button", { name: "Zapri" })).not.toBeInTheDocument();          // the explorer bar's "Nazaj na pregled trga" closes it
