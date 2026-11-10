@@ -2,6 +2,7 @@
 !database
 !database/migrations
 !database/migrations/**
+!database/roles.sql
 !database/run-migrations.sh
 !infrastructure
 !infrastructure/docker
