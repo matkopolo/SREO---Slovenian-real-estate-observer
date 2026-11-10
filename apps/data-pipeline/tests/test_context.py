@@ -37,7 +37,8 @@ def test_wage_rows_map_measures_and_municipality_codes():
         ("net_wage_p50", "SI", 1379.49),
         ("net_wage_mean", "municipality:61", 1723.24),
     ]
-    assert rows[0].period == "2025M10" and rows[0].source_table == "SURS 0711357S"
+    assert rows[0].period == "2025M10"
+    assert rows[0].source_table == "SURS 0711357S"
 
 
 def test_latest_value_picks_newest_period_not_first_listed():
@@ -74,7 +75,34 @@ def test_one_failing_source_does_not_block_the_others(caplog):
         "value": [3.47]})
     client.euribor.return_value = ecb_observations("TIME_PERIOD,OBS_VALUE\n2026-10,2.97\n")
     connection = MagicMock()
-    counts = sync_context(connection, client)
-    assert counts == {"bsi_housing_rates": 1, "ecb_euribor_6m": 1}
+    report = sync_context(connection, client)
+    assert report.counts == {"bsi_housing_rates": 1, "ecb_euribor_6m": 1}
+    assert report.failures == {
+        "surs_wage_distribution": "RuntimeError: SURS down",
+        "surs_average_wage": "ValueError: source returned no observations",
+    }
     assert "surs_wage_distribution failed" in caplog.text
     assert "surs_average_wage failed" in caplog.text  # empty response is a failure, not a wipe
+
+
+def test_jsonstat_rows_reject_inconsistent_dimension_sizes():
+    import pytest
+
+    broken = {**WAGES, "size": [1, 3, 1, 1, 2]}
+    with pytest.raises(ValueError, match="OBČINE"):
+        list(jsonstat_rows(broken))
+
+
+def test_context_client_does_not_retry_a_bad_query():
+    import httpx
+    import pytest
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(400, json={"error": "bad query"})
+
+    with ContextClient(httpx.Client(transport=httpx.MockTransport(handler))) as client, pytest.raises(httpx.HTTPStatusError):
+        client.housing_rates()
+    assert len(calls) == 1

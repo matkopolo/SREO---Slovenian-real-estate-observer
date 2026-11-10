@@ -2,11 +2,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from real_estate_etl.operations import (
-    RefreshAlreadyRunning,
-    maintenance_lock,
-    model_training_enabled,
-)
+from real_estate_etl.operations import model_training_enabled
+from real_estate_etl.publication import RefreshAlreadyRunning, maintenance_lock
 
 
 def test_compose_keeps_automatic_training(monkeypatch):

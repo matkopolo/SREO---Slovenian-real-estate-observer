@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 
 import numpy as np
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -25,7 +25,7 @@ class TemporalFold:
     def definition(self) -> dict[str, object]:
         result = asdict(self)
         for key in ("training", "calibration", "validation"):
-            result[f"{key}_rows"] = int(len(result.pop(key)))
+            result[f"{key}_rows"] = len(result.pop(key))
         return result
 
 
@@ -38,7 +38,7 @@ def temporal_folds(
     min_validation_rows: int = 30,
 ) -> tuple[list[TemporalFold], list[dict[str, object]], int | None]:
     """Build expanding folds, reserving the latest complete year as holdout."""
-    as_of = as_of or date.today()
+    as_of = as_of or datetime.now(UTC).date()
     years = np.asarray([value.year for value in contract_dates], dtype=int)
     complete_years = sorted(int(value) for value in set(years[years < as_of.year]))
     if not complete_years:
@@ -55,9 +55,9 @@ def temporal_folds(
         calibration = np.flatnonzero(years == calibration_year)
         validation = np.flatnonzero(years == validation_year)
         counts = {
-            "training": int(len(training)),
-            "calibration": int(len(calibration)),
-            "validation": int(len(validation)),
+            "training": len(training),
+            "calibration": len(calibration),
+            "validation": len(validation),
         }
         reason = next(
             (
@@ -106,7 +106,7 @@ def final_holdout_split(
     )
     minima = (min_training_rows, min_calibration_rows, min_holdout_rows)
     labels = ("training", "calibration", "holdout")
-    for label, values, minimum in zip(labels, parts, minima):
+    for label, values, minimum in zip(labels, parts, minima, strict=True):
         if len(values) < minimum:
             raise ValueError(f"insufficient_{label}_rows:{len(values)}<{minimum}")
     return parts
@@ -133,7 +133,7 @@ def regression_metrics(actual_log: np.ndarray, predicted_log: np.ndarray) -> dic
     percentage = (predicted - actual) / actual
     absolute_percentage = np.abs(percentage)
     return {
-        "rows": int(len(actual_log)),
+        "rows": len(actual_log),
         "mae_amount_per_sqm": float(mean_absolute_error(actual, predicted)),
         "median_absolute_percentage_error": float(np.median(absolute_percentage)),
         "p75_absolute_percentage_error": float(np.quantile(absolute_percentage, 0.75)),
@@ -157,17 +157,3 @@ def interval_metrics(actual_log: np.ndarray, predicted_log: np.ndarray,
         "mean_interval_width": float(np.mean(widths)),
         "median_interval_width": float(np.median(widths)),
     }
-
-
-# Backward-compatible helper for callers outside model selection.
-def temporal_split_indices(contract_dates: list[date], as_of: date | None = None):
-    folds, _, holdout = temporal_folds(
-        contract_dates, as_of=as_of, min_training_rows=10,
-        min_calibration_rows=10, min_validation_rows=10,
-    )
-    if holdout is None:
-        raise ValueError("temporal validation requires complete calendar years")
-    return final_holdout_split(
-        contract_dates, holdout, min_training_rows=10,
-        min_calibration_rows=10, min_holdout_rows=10,
-    )

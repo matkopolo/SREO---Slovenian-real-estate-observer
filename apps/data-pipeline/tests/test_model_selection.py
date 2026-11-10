@@ -162,14 +162,14 @@ def test_detailed_progress_reports_each_temporal_fold():
 
 def test_fold_preprocessing_is_shared_without_crossing_fold_boundaries(monkeypatch):
     features, target, dates, groups = population()
-    original = model_selection.preprocessor
+    original = model_selection.feature_preprocessor
     calls = []
 
     def counting_preprocessor(*args, **kwargs):
         calls.append((args, kwargs))
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(model_selection, "preprocessor", counting_preprocessor)
+    monkeypatch.setattr(model_selection, "feature_preprocessor", counting_preprocessor)
     result = optimize_model(features, target, dates, groups, settings(), configs())
     folds, _, _ = temporal_folds(
         dates,

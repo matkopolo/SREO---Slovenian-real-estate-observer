@@ -3,8 +3,14 @@
 Run the worker through Docker Compose; no local Python environment is required.
 `MODEL_REFRESH_POLICY=manual` disables automatic model training during scheduled
 refresh and initial import; use an explicit `docker compose run --rm pipeline-worker refresh-models` command. The default
-`auto` preserves Compose's initial/new-archive training behavior. Manual analytics
-and model commands share the scheduler's PostgreSQL advisory lock.
+`auto` preserves Compose's initial/new-archive training behavior.
+
+Every command that writes to the database (imports, syncs, analytics, models,
+refresh and reset, including the per-municipality diagnostics) takes the
+scheduler's PostgreSQL advisory lock and fails fast with "already running"
+instead of interleaving with another refresh. `fetch` and `fetch-national` only
+download and need no database. Downloads go to `--output-dir`, which defaults to
+`$RAW_DATA_DIR` or `/data/raw` (the `pipeline_data` volume in the image).
 
 Detailed definitions for quality populations, robust cohort outliers,
 duplicate signals, valuation-model selection, rolling temporal validation,
@@ -31,19 +37,33 @@ Compose starts `pipeline-worker` with:
 real-estate-etl schedule --interval-days 14
 ```
 
-It runs once immediately, writes its health marker after the required
-source/geography/analytics chain succeeds, then waits 14 days. A new database
-also performs the initial model bootstrap before becoming healthy. Failures
-retry after one hour. A PostgreSQL session advisory lock prevents a scheduled
-run, manual refresh, and reset from executing concurrently.
+It runs once immediately, then every 14 days; failures retry after one hour. A
+PostgreSQL session advisory lock prevents a scheduled run, manual refresh, and
+reset from executing concurrently. On shutdown (SIGTERM) the refresh stops at the
+next stage boundary and marks its release failed instead of being killed
+mid-transaction.
+
+Health (`--health-file`): a background heartbeat rewrites the file every minute
+while the worker is healthy, and removes it while unhealthy. Healthy means the
+process is running **and** either a refresh is in progress (including the first
+import on an empty database) or a published release exists that is younger than
+`--interval-days` plus two days. A failed refresh therefore keeps the worker
+healthy while the last good release is current. `real-estate-etl healthcheck
+--health-file <path>` also fails when the heartbeat is older than five minutes.
+The API does not depend on this: it reads readiness from the publication tables.
 
 Each incremental run:
 
 - reads successful national product-years from `source_files`;
 - imports only missing BUY years from 2007 and RENT years from 2013;
-- retrieves the current-year products again to detect revised archives;
+- downloads the current and previous year again (GURS keeps adding late
+  registrations), skips unchanged archives by checksum, and removes the
+  superseded local copies;
 - keeps valid ZIPs in the `pipeline_data` Docker volume;
-- refreshes GURS RPE boundaries;
+- refreshes GURS RPE boundaries and the optional context sources (SURS, Banka
+  Slovenije, ECB, GURS buildings). A failing source keeps its stored values; its
+  error is stored in `analytics.analytical_releases.details->'sources'` and listed
+  in the "published" log line;
 - refreshes all deterministic analytics in dependency order inside one
   publication transaction;
 - retrains sale and rental models when an archive checksum changed, while
@@ -54,7 +74,8 @@ Each incremental run:
 `analytics.analytical_publication` identifies the active and pending releases.
 During processing, `/api/v1/data-status` exposes both the published analytical
 cutoff and the newer GURS source cutoff. A failed refresh rolls back derived
-changes and leaves the active release untouched.
+changes and leaves the active release untouched. Every release log line carries
+`release=<uuid>`, matching `analytics.analytical_releases.id`.
 
 Before every SQL analytics function starts, the worker prints a short statement
 of what it derives and whether the operation is non-destructive. In particular,
@@ -204,7 +225,16 @@ training:
 docker compose run --rm pipeline-worker refresh-models --workers 6
 ```
 
-## Optional local development
+## Tests
+
+Docker-only, using the image's `test` target (installs `.[dev,ml]` and `tests/`):
+
+```bash
+docker build --target test -t real-estate-data-pipeline:test apps/data-pipeline
+docker run --rm real-estate-data-pipeline:test
+```
+
+Or with a local virtual environment (Python 3.11+):
 
 ```bash
 python3 -m venv .venv
@@ -213,6 +243,8 @@ cd apps/data-pipeline
 ../../.venv/bin/ruff check .
 ../../.venv/bin/pytest -q
 ```
+
+`pyproject.toml` is the only dependency list.
 
 Database integration tests require `TEST_DATABASE_URL` to point to a disposable
 PostGIS database with **all** `database/migrations/*.sql` files applied in order
@@ -233,7 +265,11 @@ want IDE debugging and local pytest execution can optionally create `.venv`:
 make setup
 ```
 
-The following low-level commands use that optional development environment.
+The following low-level commands use that optional development environment. Outside the container, point downloads at a writable directory first:
+
+```bash
+export RAW_DATA_DIR=data/raw
+```
 
 ### Load downloaded national samples
 
@@ -303,16 +339,16 @@ The national source is preferred over municipality archives. A comparison of BUY
 
 The download/import pipeline is bounded to twice the worker count, so it does not queue thousands of archives in memory. Each worker keeps a reusable HTTP connection. PostgreSQL imports use `COPY`, and identical codebook CSVs are imported only once by checksum.
 
-Transient connection resets, timeouts, HTTP 408/425/429 responses, and server errors are retried up to five times with exponential backoff. Each retry requests a fresh download token. An exhausted retry still stops safely; rerunning the command reuses completed ZIPs and skips committed database snapshots.
+All HTTP calls (GURS, RPE, SURS, Banka Slovenije, ECB) go through `real_estate_etl/http_client.py`: one timeout policy, status checks, and up to five attempts with exponential backoff for transient errors only (connection resets, timeouts, HTTP 408/425/429 and 5xx). Client errors such as 400 or 404 fail immediately. Each archive retry requests a fresh download token. Downloads stream to a `.part` file that is validated and renamed, and removed on any failure, so no truncated archive is left behind. An exhausted retry still stops safely; rerunning the command reuses completed ZIPs and skips committed database snapshots.
 
 At the end, the command reports total elapsed time and cumulative stage timings:
 
 ```text
 Finished: imported=..., already_imported=..., unavailable=..., elapsed=...,
-download_worker_time=..., csv_parsing=..., database=...
+download_worker_time=..., member_import=..., other_database=...
 ```
 
-`download_worker_time` is cumulative across parallel workers, so it can be greater than wall-clock `elapsed` time.
+`download_worker_time` is cumulative across parallel workers, so it can be greater than wall-clock `elapsed` time. `member_import` is CSV parsing plus the PostgreSQL `COPY` it streams into; `other_database` is source registration, snapshot deletion and codebooks.
 
 ## Source-data rules
 

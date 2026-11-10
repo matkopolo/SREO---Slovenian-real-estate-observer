@@ -80,7 +80,7 @@ def converted(
         if field in DATE_FIELDS:
             if stripped in NULL_DATE_SENTINELS:
                 return None
-            return datetime.strptime(stripped, "%d.%m.%Y").date()
+            return datetime.strptime(stripped, "%d.%m.%Y").date()  # noqa: DTZ007 - calendar date, no time zone
         if field in NUMERIC_FIELDS:
             return Decimal(stripped.replace(",", "."))
         return stripped

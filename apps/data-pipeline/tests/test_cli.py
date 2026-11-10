@@ -1,116 +1,113 @@
-import zipfile
-from datetime import date
-from decimal import Decimal
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 
-from real_estate_etl.api import DatasetUnavailable, JGPClient
-from real_estate_etl.importer import converted
-from real_estate_etl.models import ArchiveResult
-from real_estate_etl.pipeline import (
-    format_duration,
-    prepare_archive,
-    prepare_national_archive,
-    validate_worker_count,
-)
+from real_estate_etl import cli
+from real_estate_etl.cli import Database, build_parser, main, run, validate_arguments
+from real_estate_etl.settings import RAW_DATA_DIR
+
+
+def parse(*argv: str):
+    parser = build_parser()
+    args = parser.parse_args(list(argv))
+    validate_arguments(parser, args)
+    return args
+
+
+def test_output_dir_defaults_to_the_container_data_directory():
+    for command in (["fetch", "--municipality", "1", "--year", "2020"], ["refresh-all-data"], ["schedule"],
+                    ["sync-construction"], ["reset-and-repopulate", "--confirm-reset"]):
+        assert parse(*command).output_dir == RAW_DATA_DIR
 
 
 @pytest.mark.parametrize(
-    ("field", "raw", "expected"),
+    "argv",
     [
-        ("transaction_id", " -42 ", -42),
-        ("vat_included", "1", True),
-        ("vat_included", "0", False),
-        ("contract_date", "09.01.2026", date(2026, 1, 9)),
-        ("rental_start_date", "00.00.0000", None),
-        ("contract_price", "12,50", Decimal("12.50")),
-        ("parcel_number", " 10/2 ", "10/2"),
-        ("cadastral_municipality_code", "", None),
+        ["fetch-national", "--type", "rent", "--year", "2012"],
+        ["reset-and-repopulate"],
+        ["schedule", "--interval-days", "0"],
+        ["schedule", "--retry-hours", "0"],
+        ["refresh-all-sales", "--start-year", "2020", "--end-year", "2019"],
+        ["refresh-all-data", "--end-year", "2006"],
+        ["refresh-system", "--workers", "0"],
+        ["refresh-models", "--workers", "100000"],
     ],
 )
-def test_converted(field, raw, expected):
-    assert converted(field, raw) == expected
+def test_invalid_arguments_are_rejected(argv):
+    with pytest.raises(SystemExit):
+        parse(*argv)
 
 
 @pytest.mark.parametrize(
-    ("seconds", "expected"),
-    [(42.9, "42s"), (125, "2m 5s"), (7384, "2h 3m 4s")],
+    ("command", "database"),
+    [
+        (["sync-reference-data"], Database.LOCKED),
+        (["sync-geographies"], Database.LOCKED),
+        (["sync-context"], Database.LOCKED),
+        (["sync-demography"], Database.LOCKED),
+        (["sync-construction"], Database.LOCKED),
+        (["refresh-models"], Database.LOCKED),
+        (["import", "x.zip"], Database.LOCKED),
+        (["refresh", "--municipality", "1", "--year", "2020"], Database.LOCKED),
+        (["refresh-all-sales"], Database.LOCKED),
+        (["refresh-all-data"], Database.LOCKED),
+        (["refresh-analytics"], Database.LOCKED),
+        (["refresh-system"], Database.SELF_LOCKING),
+        (["reset-and-repopulate", "--confirm-reset"], Database.SELF_LOCKING),
+        (["fetch", "--municipality", "1", "--year", "2020"], Database.NONE),
+        (["fetch-national", "--type", "sales", "--year", "2020"], Database.NONE),
+        (["schedule"], Database.NONE),
+        (["healthcheck", "--health-file", "/tmp/x"], Database.NONE),
+    ],
 )
-def test_format_duration(seconds, expected):
-    assert format_duration(seconds) == expected
+def test_every_database_command_takes_the_maintenance_lock(command, database):
+    assert parse(*command).database is database
 
 
-def test_worker_count_is_bounded_by_machine_threads():
-    validate_worker_count(1, available_threads=4)
-    validate_worker_count(4, available_threads=4)
-    with pytest.raises(ValueError, match="at least 1"):
-        validate_worker_count(0, available_threads=4)
-    with pytest.raises(ValueError, match="cannot exceed"):
-        validate_worker_count(5, available_threads=4)
-
-
-def test_prepare_archive_reuses_valid_zip(tmp_path: Path):
-    archive = tmp_path / "ETN_001_2026_KPP_test.zip"
-    with zipfile.ZipFile(archive, "w") as output:
-        output.writestr("test.csv", "a\n1\n")
-
-    with patch("real_estate_etl.pipeline.fetch_zip") as fetch:
-        result = prepare_archive(1, 2026, tmp_path, force=False)
-
-    assert isinstance(result, ArchiveResult)
-    assert result.path == archive
-    assert result.reused is True
-    fetch.assert_not_called()
-
-
-def test_prepare_archive_force_downloads(tmp_path: Path):
-    downloaded = tmp_path / "new.zip"
-    with patch("real_estate_etl.pipeline.fetch_zip", return_value=downloaded) as fetch:
-        result = prepare_archive(1, 2026, tmp_path, force=True)
-
-    assert result.path == downloaded
-    assert result.reused is False
-    fetch.assert_called_once_with(1, 2026, tmp_path)
-
-
-def test_prepare_national_archive_reuses_valid_zip(tmp_path: Path):
-    archive = tmp_path / "ETN_SLO_2020_KPP_test.zip"
-    with zipfile.ZipFile(archive, "w") as output:
-        output.writestr("test.csv", "a\n1\n")
-    with patch("real_estate_etl.pipeline.fetch_national_zip") as fetch:
-        result = prepare_national_archive("sales", 2020, tmp_path, force=False)
-    assert result.path == archive
-    assert result.reused is True
-    fetch.assert_not_called()
-
-
-def test_fetch_retries_transient_connection_errors(tmp_path: Path):
-    downloaded = tmp_path / "result.zip"
-    request = httpx.Request("GET", "https://example.test/data")
-    transient = httpx.ReadError("connection reset", request=request)
-    sleep = Mock()
-    client = JGPClient(tmp_path, sleep=sleep)
+def test_locked_command_runs_inside_the_lock():
+    args = parse("import", "archive.zip")
+    connection = MagicMock()
+    events = []
+    lock = MagicMock()
+    lock.return_value.__enter__.side_effect = lambda *_: events.append("locked")
+    lock.return_value.__exit__.side_effect = lambda *_: events.append("released")
     with (
-        patch.object(client, "_fetch_municipality_once", side_effect=[transient, transient, downloaded]) as fetch_once,
+        patch("real_estate_etl.cli.psycopg.connect") as connect,
+        patch("real_estate_etl.cli.maintenance_lock", lock),
+        patch("real_estate_etl.cli.import_zip", side_effect=lambda *_a, **_k: events.append("import")) as load,
     ):
-        result = client.fetch_municipality(3, 2023)
+        connect.return_value.__enter__.return_value = connection
+        run(args)
 
-    assert result == downloaded
-    assert fetch_once.call_count == 3
-    assert [call.args[0] for call in sleep.call_args_list] == [1, 2]
+    assert events == ["locked", "import", "released"]
+    load.assert_called_once_with(connection, Path("archive.zip"), verbose=False)
 
 
-def test_fetch_does_not_retry_unavailable_dataset(tmp_path: Path):
-    sleep = Mock()
-    client = JGPClient(tmp_path, sleep=sleep)
+def test_fetch_needs_no_database():
+    args = parse("fetch-national", "--type", "sales", "--year", "2020", "--output-dir", "/tmp/raw")
     with (
-        patch.object(client, "_fetch_municipality_once", side_effect=DatasetUnavailable("missing")) as fetch_once,
-        pytest.raises(DatasetUnavailable),
+        patch("real_estate_etl.cli.psycopg.connect") as connect,
+        patch("real_estate_etl.cli.fetch_national_zip") as fetch,
     ):
-        client.fetch_municipality(3, 2023)
+        run(args)
+    connect.assert_not_called()
+    fetch.assert_called_once_with("sales", 2020, Path("/tmp/raw"))
 
-    fetch_once.assert_called_once()
-    sleep.assert_not_called()
+
+def test_main_logs_failures_and_exits_non_zero(caplog):
+    with (
+        patch.object(cli, "configure_logging"),
+        patch("real_estate_etl.cli.fetch_national_zip", side_effect=RuntimeError("GURS down")),
+        pytest.raises(SystemExit) as exited,
+    ):
+        main(["fetch-national", "--type", "sales", "--year", "2020"])
+    assert exited.value.code == 1
+    assert "command fetch-national failed" in caplog.text
+    assert "GURS down" in caplog.text
+
+
+def test_healthcheck_command_fails_without_health_file(tmp_path: Path):
+    with patch.object(cli, "configure_logging"), pytest.raises(SystemExit) as exited:
+        main(["healthcheck", "--health-file", str(tmp_path / "missing")])
+    assert "unhealthy" in str(exited.value.code)

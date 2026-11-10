@@ -5,6 +5,8 @@ import uuid
 import psycopg
 import pytest
 
+pytestmark = pytest.mark.integration
+
 
 def _model_run(connection, run_id, version):
     connection.execute(

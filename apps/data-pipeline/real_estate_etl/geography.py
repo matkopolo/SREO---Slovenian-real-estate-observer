@@ -6,12 +6,13 @@ import json
 import logging
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
+from typing import Any
 
+import psycopg
 from psycopg import sql
 
-from .api import client_for
+from . import http_client
 from .settings import RPE_OGC_BASE
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,7 @@ def normalized_feature(feature: dict, collection: BoundaryCollection) -> tuple:
         _optional_int(properties.get("SIFRA")),
         _optional_int(properties.get("SESTAVLJENA_SIFRA")),
         str(name),
-        str(properties.get(collection.parent_eid_field)) if collection.parent_eid_field and properties.get(collection.parent_eid_field) else None,
+        _parent_eid(properties, collection),
         properties.get("DATUM_SYS"),
         json.dumps(properties, ensure_ascii=False),
         json.dumps(geometry, ensure_ascii=False),
@@ -80,20 +81,25 @@ def normalized_feature(feature: dict, collection: BoundaryCollection) -> tuple:
 
 
 def sync_geographies(
-    connection,
-    fetch_json: Callable[[str], dict] | None = None,
+    connection: psycopg.Connection,
+    fetch_json: Callable[[str], dict[str, Any]] | None = None,
     schema: str = "analytics",
 ) -> dict[str, int]:
     """Atomically refresh current RPE boundaries and their hierarchy."""
     if fetch_json is None:
-        client = client_for(Path("data/raw"))
+        with http_client.create_client() as client:
+            return sync_geographies(
+                connection,
+                lambda url: http_client.fetch_json(client, url, "RPE boundary request"),
+                schema,
+            )
 
-        def fetch_json(url):
-            return client.get_json_retried(url, "RPE boundary request")
-
-    token = datetime.now(timezone.utc)
+    token = datetime.now(UTC)
     run_id = connection.execute(
-        sql.SQL("INSERT INTO {}.refresh_runs(process,status,started_at) VALUES ('geographies','running',%s) RETURNING id").format(
+        sql.SQL(
+            "INSERT INTO {}.refresh_runs(process,status,started_at) "
+            "VALUES ('geographies','running',%s) RETURNING id"
+        ).format(
             sql.Identifier(schema)
         ),
         (token,),
@@ -108,7 +114,7 @@ def sync_geographies(
             for collection in COLLECTIONS:
                 count = 0
                 for page in iter_collection_pages(fetch_json, collection):
-                    rows = [normalized_feature(feature, collection) + (token,) for feature in page["features"]]
+                    rows = [(*normalized_feature(feature, collection), token) for feature in page["features"]]
                     if rows:
                         cursor.executemany(
                             sql.SQL(
@@ -197,6 +203,11 @@ def _assign_hierarchy(cursor, table) -> None:
                   AND child.parent_gurs_eid=municipality.gurs_eid"""
         ).format(table, table)
     )
+
+
+def _parent_eid(properties: dict[str, Any], collection: BoundaryCollection) -> str | None:
+    parent = properties.get(collection.parent_eid_field) if collection.parent_eid_field else None
+    return str(parent) if parent else None
 
 
 def _optional_int(value) -> int | None:
