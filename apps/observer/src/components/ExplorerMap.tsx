@@ -15,7 +15,7 @@ const STYLE = "https://tiles.openfreemap.org/styles/liberty"; // streets, buildi
 const SLOVENIA: LngLatBoundsLike = [[13.3, 45.4], [16.65, 46.9]];
 
 /** How one area is drawn: `label` ("Šiška: 4.538 €/m², …") is `name` and `value` joined, kept apart for the panel header. */
-export interface AreaPaint { color: string; height: number; name: string; value: string; label: string; pooled?: boolean }
+export interface AreaPaint { color: string; name: string; value: string; label: string; pooled?: boolean }
 export interface MapBuildingPoint { key: string; lon: number; lat: number; color: string; radius: number; label: string }
 export interface MapAgreementPoint { id: number; lon: number; lat: number; color: string; label: string }
 export interface MapView { bbox: Bbox; zoom: number; /** Moved by the user (drag, wheel, buttons), not by a fit to the selected area. */ byUser?: boolean }
@@ -23,16 +23,26 @@ export interface MapView { bbox: Bbox; zoom: number; /** Moved by the user (drag
 type Collection = FeatureCollection<Geometry, Record<string, unknown>>;
 const collection = (features: Collection["features"]): Collection => ({ type: "FeatureCollection", features });
 
+/** Municipal fill with no sub-areas drawn: the layer's colour, lighter when pooled, fading into the streets. */
+const AREA_COLOR: maplibregl.ExpressionSpecification = ["get", "color"];
+// "zoom" may only drive a top-level interpolate, so the pooled case sits inside each stop.
+const AREA_OPACITY: maplibregl.ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], 7, ["case", ["get", "pooled"], 0.42, 0.78], 11, ["case", ["get", "pooled"], 0.25, 0.45], 13, 0.12];
+/**
+ * One colour scale per map: while districts or settlements are drawn, every municipality underneath is a neutral
+ * grey (the colour of a withheld value, lighter), so only the sub-areas carry the ramp.
+ */
+const MUTED_OPACITY: maplibregl.ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], 7, 0.35, 11, 0.25, 13, 0.08];
+
 /**
  * The navigator: municipalities (or the selected municipality's districts/settlements) coloured by the chosen
  * measure, buildings from street zoom and single agreements at the closest zoom. Clicks drill down.
  */
-export default function ExplorerMap({ municipalities, regions, paint, subAreas, subPaint, buildings, agreements, selected, selectedSub = null, focus, marker = null, extrude,
+export default function ExplorerMap({ municipalities, regions, paint, subAreas, subPaint, buildings, agreements, selected, selectedSub = null, focus, marker = null,
   onArea, onSubArea, onBuilding, onAgreement, onView }: {
   municipalities: MunicipalityShape[]; regions: MunicipalityShape[]; paint: Map<number, AreaPaint>; // i18n-ignore: TypeScript generics, not JSX text
   subAreas: MunicipalityShape[]; subPaint: Map<number, AreaPaint>;
   buildings: MapBuildingPoint[]; agreements: MapAgreementPoint[];
-  selected: number | null; focus: Bbox | null; extrude: boolean;
+  selected: number | null; focus: Bbox | null;
   /** The district or settlement shown in the panel: outlined on the map. */
   selectedSub?: number | null;
   /** The opened building or sale: drawn as a ring so it stays findable among the other points. */
@@ -83,14 +93,8 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
         }
         const empty = collection([]);
         for (const id of ["areas", "regions", "sub", "buildings", "agreements", "marker"]) instance.addSource(id, { type: "geojson", data: empty, promoteId: "id" });
-        // Area fills fade as the user zooms into streets, so the basemap takes over.
-        instance.addLayer({ id: "areas-fill", type: "fill", source: "areas", paint: {
-          "fill-color": ["get", "color"],
-          // Pooled (3 or 5 years) values are drawn lighter than the selected period.
-          // "zoom" may only drive a top-level interpolate, so the pooled case sits inside each stop.
-          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 7, ["case", ["get", "pooled"], 0.42, 0.78], 11, ["case", ["get", "pooled"], 0.25, 0.45], 13, 0.12] } });
-        instance.addLayer({ id: "areas-extrude", type: "fill-extrusion", source: "areas", layout: { visibility: "none" }, paint: {
-          "fill-extrusion-color": ["get", "color"], "fill-extrusion-height": ["get", "height"], "fill-extrusion-opacity": 0.85 } });
+        // Area fills fade as the user zooms into streets, so the basemap takes over; pooled (3 or 5 years) values are drawn lighter.
+        instance.addLayer({ id: "areas-fill", type: "fill", source: "areas", paint: { "fill-color": AREA_COLOR, "fill-opacity": AREA_OPACITY } });
         instance.addLayer({ id: "areas-line", type: "line", source: "areas", paint: {
           "line-color": ["case", ["boolean", ["feature-state", "selected"], false], "#0f2a33", "#ffffff"],
           "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 2.6, ["boolean", ["feature-state", "hover"], false], 1.8, 0.6] } });
@@ -178,9 +182,18 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
     (instance.getSource("areas") as GeoJSONSource).setData(collection(municipalities.map((shape) => {
       const style = paint.get(shape.id);
       return { type: "Feature", id: shape.id, geometry: shape.geometry, properties: { id: shape.id, name: shape.name,
-        color: style?.color ?? WITHHELD, height: style?.height ?? 0, label: style?.label ?? shape.name, pooled: !!style?.pooled } };
+        color: style?.color ?? WITHHELD, label: style?.label ?? shape.name, pooled: !!style?.pooled } };
     })));
   }, [municipalities, paint, ready]);
+
+  // While sub-areas are drawn (a selected municipality's, or every district in view), the municipalities go neutral.
+  const muted = subAreas.length > 0;
+  useEffect(() => {
+    const instance = map.current;
+    if (!ready || !instance) return;
+    instance.setPaintProperty("areas-fill", "fill-color", muted ? WITHHELD : AREA_COLOR);
+    instance.setPaintProperty("areas-fill", "fill-opacity", muted ? MUTED_OPACITY : AREA_OPACITY);
+  }, [muted, ready]);
 
   useEffect(() => {
     const instance = map.current;
@@ -238,16 +251,6 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
     if (focus) instance.fitBounds([[focus[0], focus[1]], [focus[2], focus[3]]], { padding: 40, duration: reduced ? 0 : 700, maxZoom: 16.5 });
     else instance.fitBounds(SLOVENIA, { padding: 24, duration: reduced ? 0 : 700 });
   }, [focus, ready]);
-
-  // Only a real 3D toggle animates the pitch; an easeTo on first load would cancel the fitBounds zoom.
-  const extruded = useRef(false);
-  useEffect(() => {
-    const instance = map.current;
-    if (!ready || !instance) return;
-    instance.setLayoutProperty("areas-extrude", "visibility", extrude ? "visible" : "none");
-    if (extrude !== extruded.current) instance.easeTo({ pitch: extrude ? 50 : 0, duration: 500 });
-    extruded.current = extrude;
-  }, [extrude, ready]);
 
   return <div className="explorer-map" ref={host} role="region" aria-label={t("Zemljevid: izberite območje ali stavbo; enako vsebino ima lestvica v levem stolpcu")}>
     {failed && <p className="fallback" role="status">{t("Zemljevid v tem brskalniku ni na voljo. Območje izberite z iskalnikom zgoraj.")}</p>}

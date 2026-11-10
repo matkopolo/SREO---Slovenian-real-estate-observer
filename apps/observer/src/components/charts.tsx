@@ -38,7 +38,7 @@ export function LineChart({ series, unit, label, height = 220, yMax, xLabel = (v
 }) {
   const [ref, measured] = useWidth(compact ? 320 : 640);
   const width = Math.max(220, measured);
-  const pad = compact ? { top: 10, right: 10, bottom: 22, left: 44 } : { top: 14, right: 16, bottom: 26, left: 52 };
+  const pad = compact ? { top: 10, right: 12, bottom: 22, left: 44 } : { top: 14, right: 16, bottom: 26, left: 52 };
   const xs = series.flatMap((item) => item.points.map((point) => point.x));
   const ys = series.flatMap((item) => item.points.flatMap((point) => point.y == null ? [] : [point.y]));
   if (!xs.length || !ys.length) return <figure className="chart" ref={ref}><p className="muted">{t("Ni objavljivih podatkov.")}</p></figure>;
@@ -48,6 +48,8 @@ export function LineChart({ series, unit, label, height = 220, yMax, xLabel = (v
   const x = (value: number) => pad.left + ((value - x0) / Math.max(1e-9, x1 - x0)) * (width - pad.left - pad.right);
   const y = (value: number) => pad.top + (1 - (value - y0) / Math.max(1e-9, y1 - y0)) * (height - pad.top - pad.bottom);
   const visible = series.filter((item) => item.points.some((point) => point.y != null));
+  // A year label is centred under its tick unless that would run past the edge: the first and last are nudged inside, so "2025" never ends as "202".
+  const labelX = (value: number, text: string) => { const half = Math.max(8, text.length * 3.4); return Math.min(width - half, Math.max(half, x(value))); };
   return <figure className="chart" ref={ref}>
     {legend && series.length > 1 && <ul className="chart-legend">{series.map((item, index) => <li key={index}><i className={item.className}/>{item.name}
       {visible.includes(item) ? "" : ` ${t("(premalo podatkov)")}`}</li>)}</ul>}
@@ -55,7 +57,8 @@ export function LineChart({ series, unit, label, height = 220, yMax, xLabel = (v
       {ticks.map((tick) => <g key={tick}><line x1={pad.left} x2={width - pad.right} y1={y(tick)} y2={y(tick)} className="grid"/>
         <text x={pad.left - 6} y={y(tick) + 4} textAnchor="end" className="axis">{(ticks.at(-1)! < 10 ? fine : number).format(tick)}</text></g>)}
       <line x1={pad.left} x2={width - pad.right} y1={y(y0)} y2={y(y0)} className="baseline"/>
-      {(x0 === x1 ? [x0] : [x0, (x0 + x1) / 2, x1]).map((tick) => <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="axis">{xLabel(tick)}</text>)}
+      {(x0 === x1 ? [x0] : [x0, (x0 + x1) / 2, x1]).map((tick) => { const text = xLabel(tick);
+        return <text key={tick} x={labelX(tick, text)} y={height - 8} textAnchor="middle" className="axis">{text}</text>; })}
       {series.map((item, index) => {
         const segments: string[] = [];
         let open = false;
@@ -167,10 +170,13 @@ export function Pyramid({ groups, period, earlierPeriod, label }: {
   </figure>;
 }
 
-/** P25–P75 band with the median tick on a shared scale; optional markers (e.g. a building or parent areas). */
-export function RangeBar({ p25, p50, p75, min, max, unit, markers = [], label }: {
+/**
+ * P25–P75 band with the median tick on a shared scale; optional markers (e.g. a building or parent areas).
+ * The caption names the band as the middle half of transactions unless the caller says what it is (`caption`).
+ */
+export function RangeBar({ p25, p50, p75, min, max, unit, markers = [], label, caption }: {
   p25: number; p50: number; p75: number; min: number; max: number; unit: string; label: string;
-  markers?: Array<{ value: number; name: string }>;
+  markers?: Array<{ value: number; name: string }>; caption?: string;
 }) {
   const span = Math.max(1e-9, max - min);
   const at = (value: number) => `${Math.min(100, Math.max(0, ((value - min) / span) * 100))}%`;
@@ -181,7 +187,7 @@ export function RangeBar({ p25, p50, p75, min, max, unit, markers = [], label }:
       <span className="range-median" style={{ left: at(p50) }}/>{/* i18n-ignore (code, not text) */}
       {markers.map((marker, index) => <span key={index} className="range-marker" style={{ left: at(marker.value) }} title={`${marker.name}: ${format.format(marker.value)} ${unit}`}/>)}{/* i18n-ignore (code, not text) */}
     </div>
-    <figcaption>{t("Srednja polovica poslov: {low}–{high} {unit}", { low: format.format(p25), high: format.format(p75), unit })}
+    <figcaption>{caption ?? t("Srednja polovica poslov: {low}–{high} {unit}", { low: format.format(p25), high: format.format(p75), unit })}
       {markers.length > 0 && <>; {markers.map((marker) => `${marker.name} ${format.format(marker.value)}`).join(", ")}</>}</figcaption>
   </figure>;
 }

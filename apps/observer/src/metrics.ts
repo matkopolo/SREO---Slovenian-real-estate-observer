@@ -2,7 +2,7 @@ import type { PropertyGroup } from "./api";
 import { t } from "./i18n";
 import { decimal1, integer, percent as percentOf } from "./format";
 
-/** The measures the municipality map can extrude. Every value comes from a published API endpoint. */
+/** The measures the municipality map can colour. Every value comes from a published API endpoint. */
 export type MetricId = "salePrice" | "saleVolume" | "rentPrice" | "newBuildings" | "affordableSqm" | "share65" | "netMigration" | "releases" | "grossYield";
 
 /** The API publishes a median from 30 representative agreements; every view uses the same threshold. */
@@ -16,7 +16,7 @@ interface MetricDefinition {
   short: string;
   unit: string;
   source: string;
-  /** Minimum sample before a municipality is extruded (below it the value is shown as withheld). */
+  /** Minimum sample before a municipality is coloured (below it the value is shown as withheld). */
   minimumSample: number;
   format: (value: number) => string;
   /** Whether the value depends on the selected years (demographic values are the latest published). */
@@ -63,14 +63,13 @@ export interface MunicipalityValue {
   sample: number;
 }
 
+/** The one sequential ramp of the map (five teal classes, light → dark): municipalities, districts and buildings alike. */
+const TEAL = ["#d4ece3", "#93cfba", "#4fa894", "#24786c", "#0e4a45"];
+
 /** Single-hue sequential ramp (light → dark) on the light map; withheld values use a neutral grey. */
-export function colorScale(values: Array<number | null>, palette: "teal" | "blue" = "teal") {
+export function colorScale(values: Array<number | null>) {
   // Five classes (ONS guidance for choropleths); the classes are the rounded legend breaks, so colour and legend agree.
-  const ramps = {
-    teal: ["#d4ece3", "#93cfba", "#4fa894", "#24786c", "#0e4a45"],
-    blue: ["#dfe9f6", "#a9c6ec", "#5d9be3", "#2a6fc2", "#123f7a"],
-  };
-  const stops = ramps[palette];
+  const stops = TEAL;
   const withheld = WITHHELD;
   const breaks = classBreaks(values);
   return (value: number | null) => {

@@ -28,15 +28,18 @@ export type Selected = { kind: "sale" | "rent"; id: number };
 /** Everything the explorer shows. */
 export interface ExplorerState {
   g?: number; building?: { ko: number; st: string }; selected?: Selected; group: PropertyGroup; landScope: LandScope; landChosen: boolean;
-  size?: string; street?: string; years: Period; layer: MetricId; extrude: boolean; value: boolean;
+  size?: string; street?: string; years: Period; layer: MetricId; value: boolean;
 }
-export const DEFAULT_STATE: ExplorerState = { group: "apartment", landScope: "strict", landChosen: false, years: 1, layer: "salePrice", extrude: false, value: false };
+export const DEFAULT_STATE: ExplorerState = { group: "apartment", landScope: "strict", landChosen: false, years: 1, layer: "salePrice", value: false };
 
 const GROUP_SLUGS: Record<PropertyGroup, string> = { apartment: "", house: "hise", land: "zemljisca", commercial: "poslovni", garage: "garaze" }; // i18n-ignore: URL slugs (links keep working)
 const LAND_SLUGS: Record<LandScope, string> = { strict: "zazidljiva", agricultural: "kmetijska", forest: "gozdna", all: "vsa" }; // i18n-ignore: URL slugs (links keep working)
 const bySlug = <K extends string>(slugs: Record<K, string>, slug: string | null) => (Object.entries(slugs) as Array<[K, string]>).find(([, value]) => value && value === slug)?.[0];
 
-/** `#?g=133&b=1734-1710&posel=985416&vrsta=hise&obdobje=3&sloj=rentPrice&3d=1`; a chosen year range is `od=2019&do=2021`. */
+/**
+ * `#?g=133&b=1734-1710&posel=985416&vrsta=hise&obdobje=3&sloj=rentPrice`; a chosen year range is `od=2019&do=2021`.
+ * Unknown parts are ignored and dropped on the next write (`3d=1` of links to the former 3D view among them).
+ */
 export function parseHash(hash: string = window.location.hash): ExplorerState {
   const query = hashQuery(hash);
   const g = Number(query.get("g"));
@@ -56,7 +59,6 @@ export function parseHash(hash: string = window.location.hash): ExplorerState {
     street: query.get("ulica") ?? undefined, // i18n-ignore: URL parameter names (links keep working)
     years: parsePeriod(query.get("od"), query.get("do")) ?? (years === 3 || years === 5 ? years : 1), // i18n-ignore: URL parameter names (links keep working)
     layer: layer && layer in METRICS ? layer : "salePrice",
-    extrude: query.get("3d") === "1",
     value: query.get("vrednost") === "1", // i18n-ignore: URL slugs (links keep working)
   };
 }
@@ -74,7 +76,6 @@ export function toHash(state: ExplorerState) {
   if (typeof state.years === "string") { const [from, to] = state.years.split("-"); query.set("od", from); query.set("do", to); } // i18n-ignore: URL parameter names (links keep working)
   else if (state.years !== 1) query.set("obdobje", String(state.years)); // i18n-ignore: URL parameter names (links keep working)
   if (state.layer !== "salePrice") query.set("sloj", state.layer); // i18n-ignore: URL parameter names (links keep working)
-  if (state.extrude) query.set("3d", "1");
   if (state.value) query.set("vrednost", "1"); // i18n-ignore: URL slugs (links keep working)
   const text = query.toString();
   return text ? `#?${text}` : "#";

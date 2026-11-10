@@ -14,7 +14,7 @@ import { useAreaChain, useGeographyLists, useShapes, type GeographyLists } from 
 import { FINE_LAYERS, FINE_ZOOM, REGION_ZOOM, useChoropleth, usePeriodWindows, useSubAreas, useViewLayers } from "../explorer/useMapLayers";
 import { useUrlState } from "../explorer/useUrlState";
 import { useLoad } from "../hooks/useLoad";
-import { Name, t, tx } from "../i18n";
+import { Name, proper, t, tx } from "../i18n";
 import { classBreaks, colorScale, divergingBreaks, divergingScale, layersFor, METRICS } from "../metrics";
 import { sizeBand } from "../nouns";
 import { count, form, forms, NOUN_FORMS, type Forms } from "../plural";
@@ -26,12 +26,10 @@ const ExplorerMap = lazy(() => import("../components/ExplorerMap"));
 const REGION_FORMS = forms(["regija", "regiji", "regije", "regij"], ["region", "regions"]); // i18n-ignore (plural forms, both languages)
 const DISTRICT_FORMS = forms(["četrtna skupnost", "četrtni skupnosti", "četrtne skupnosti", "četrtnih skupnosti"], ["city district", "city districts"]); // i18n-ignore (plural forms, both languages)
 const NO_LISTS: GeographyLists = { regions: [], municipalities: [], districts: [] };
-/** Extrusion height of the largest municipal value in 3D (metres). */
-const EXTRUDE_TO = 40000;
 
 interface RankItem { id: number; name: string; value: number | null; sample: number; format: (value: number) => string; label: string; pooled?: number; populationSample?: boolean; unit?: Forms }
 
-const scaleOf = (values: Array<number | null>, palette: "teal" | "blue" = "teal"): Scale => ({ breaks: classBreaks(values), ramp: colorScale(values, palette) });
+const scaleOf = (values: Array<number | null>): Scale => ({ breaks: classBreaks(values), ramp: colorScale(values) });
 
 /** The market by area: map navigator, area panel, building and sale evidence, and the value check, all in the address. */
 export function ExplorerView({ cutoff }: { cutoff?: string }) {
@@ -84,13 +82,13 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
     const numbers = regionShown.map((item) => item.value);
     return { breaks: classBreaks(numbers), ramp: definition.signed ? divergingScale(numbers) : colorScale(numbers) };
   }, [definition.signed, regionShown]);
-  const paint = useMemo(() => areaPaint(municipalShapes, shown, { metric: layer, ramp: municipalScale.ramp, period: periodShort, extrudeTo: EXTRUDE_TO, countWithheld: true }),
+  const paint = useMemo(() => areaPaint(municipalShapes, shown, { metric: layer, ramp: municipalScale.ramp, period: periodShort, countWithheld: true }),
     [layer, municipalScale, municipalShapes, periodShort, shown]);
   const regionPaint = useMemo(() => areaPaint(regionShapes, regionShown, { metric: layer, ramp: regionScale.ramp, period: periodShort }), [layer, periodShort, regionScale, regionShapes, regionShown]);
   // Districts/settlements get their own scale (they would all share the top municipal class) and their own legend.
-  const subScale = useMemo(() => scaleOf(subAreas.values.map((item) => item.value), "blue"), [subAreas.values]);
+  const subScale = useMemo(() => scaleOf(subAreas.values.map((item) => item.value)), [subAreas.values]);
   const subPaint = useMemo(() => finePaint(sub?.shapes ?? [], subAreas.values, { ramp: subScale.ramp, period: periodShort }), [periodShort, sub, subAreas.values, subScale]);
-  const fineScale = useMemo(() => scaleOf(fine.values.map((item) => item.value), "blue"), [fine.values]);
+  const fineScale = useMemo(() => scaleOf(fine.values.map((item) => item.value)), [fine.values]);
   const fineAreaPaint = useMemo(() => finePaint(fine.shapes, fine.values, { ramp: fineScale.ramp, period: periodShort, metric: layer }), [fine, fineScale, layer, periodShort]);
   // Buildings get their own scale from the buildings in view (the municipal scale would make every city building the darkest class).
   const landPoints = state.group === "land";
@@ -155,16 +153,16 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
     });
   }, [definition, measure, municipalityId, names, populationSample, regionShown, regions, scope.level, sub, subAreas.values]);
 
-  // The area under the middle of the map, when it is not the one in the panel: one tap opens it.
+  // The area under the middle of the map, when it is not the one in the panel: one tap opens it (its value is in the hover tooltip, not here).
   const inView = useMemo(() => {
     // Only after the user moved the map: right after opening an area its fit may centre on a neighbour.
     if (!view || streetLevel || !view.byUser) return undefined;
     const center: [number, number] = [(view.bbox[0] + view.bbox[2]) / 2, (view.bbox[1] + view.bbox[3]) / 2];
-    const [areas, paints] = mapLevel === "fine" ? [fine.shapes, fineAreaPaint] : mapLevel === "municipality" ? [municipalShapes, paint] : [regionShapes, regionPaint];
+    const areas = mapLevel === "fine" ? fine.shapes : mapLevel === "municipality" ? municipalShapes : regionShapes;
     const hit = areas.find((shape) => containsPoint(shape.geometry, center));
     if (!hit || hit.id === scope.id) return undefined;
-    return { id: hit.id, label: paints.get(hit.id)?.label ?? hit.name };
-  }, [fine.shapes, fineAreaPaint, mapLevel, municipalShapes, paint, regionPaint, regionShapes, scope.id, streetLevel, view]);
+    return { id: hit.id, name: hit.name };
+  }, [fine.shapes, mapLevel, municipalShapes, regionShapes, scope.id, streetLevel, view]);
   const scrollToPanel = () => { if (window.matchMedia?.("(max-width: 900px)").matches) requestAnimationFrame(() => document.getElementById("area-title")?.scrollIntoView({ block: "start" })); };
   const openArea = (id: number) => { navigate({ g: id, building: undefined, selected: undefined }); scrollToPanel(); };
   const scopeValue = scope.id == null ? undefined
@@ -229,7 +227,7 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
             paint={mapLevel === "statistical_region" ? regionPaint : paint}
             subAreas={mapLevel === "fine" && fine.shapes.length ? fine.shapes : sub?.shapes ?? []} subPaint={mapLevel === "fine" && fine.shapes.length ? fineAreaPaint : subPaint}
             buildings={buildingDots} agreements={agreementDots} selected={municipalityId ?? null}
-            selectedSub={scope.level === "city_district" ? scope.id ?? null : (unit?.level === "settlement" ? unit.id : null)} focus={focus} marker={marker} extrude={state.extrude && !definition.signed}
+            selectedSub={scope.level === "city_district" ? scope.id ?? null : (unit?.level === "settlement" ? unit.id : null)} focus={focus} marker={marker}
             onArea={openArea} onSubArea={openArea}
             onBuilding={(key) => { const [ko, ...rest] = key.split("-"); navigate({ building: { ko: Number(ko), st: rest.join("-") }, selected: undefined }); }}
             onAgreement={(id) => {
@@ -240,13 +238,13 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
             onView={setView}/></Suspense>
         </ErrorBoundary>
         {inView && <button type="button" className="map-chip" onClick={() => openArea(inView.id)}>
-          {tx("V pogledu: {area} · {open}", { area: inView.label, open: <strong>{t("Odpri →")}</strong> })}</button>}
+          {tx("V pogledu: {area} · {open}", { area: proper(inView.name), open: <strong>{t("Odpri →")}</strong> })}</button>}
         {!(state.value && !state.building) && <MapLegend layer={layer} layers={layers} group={state.group} band={band} windows={windows} level={mapLevel}
           street={streetLevel} land={landPoints} buildingSpan={buildingSpan}
           scales={{ municipal: municipalScale, region: regionScale, fine: fineScale, buildings: buildingScale }}
           pooled={{ municipal: shown.some((item) => item.pooled), fine: fine.values.some((item) => item.pooled) }} fineShown={fine.shapes.length > 0}
           sub={sub && municipalityId ? { level: sub.level, municipality: names.get(municipalityId) ?? "", scale: subScale } : undefined}
-          extrude={state.extrude} onLayer={(next) => navigate({ layer: next }, true)} onExtrude={() => navigate({ extrude: !state.extrude }, true)}/>}
+          onLayer={(next) => navigate({ layer: next }, true)}/>}
       </div>
     </div>
   </div>;

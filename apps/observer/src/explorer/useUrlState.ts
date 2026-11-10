@@ -16,7 +16,7 @@ export function useUrlState(panel: RefObject<HTMLElement | null>) {
   const current = useRef(state);
   const scrollMemory = useRef(new Map<string, number>());
 
-  // An invalid or unknown hash part (obdobje=7, od>do, raba for flats) is dropped from the address bar.
+  // An invalid or unknown hash part (obdobje=7, od>do, raba for flats, 3d=1 of an old link) is dropped from the address bar.
   useEffect(() => {
     const clean = toHash(parseHash());
     if (clean !== window.location.hash && (window.location.hash || clean !== "#")) window.history.replaceState(null, "", clean);

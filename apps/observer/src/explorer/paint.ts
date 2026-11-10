@@ -20,34 +20,34 @@ const paintOf = (name: string, value: string, extra: Omit<AreaPaint, "name" | "v
 const byId = (values: AreaValue[]) => new Map(values.map((item) => [item.geographyId, item]));
 
 /** Municipalities (or regions) coloured by the layer; labels name the period and sample, pooled values say so. */
-export function areaPaint(shapes: MunicipalityShape[], values: AreaValue[], { metric, ramp, period, extrudeTo = 0, countWithheld = false }: {
+export function areaPaint(shapes: MunicipalityShape[], values: AreaValue[], { metric, ramp, period, countWithheld = false }: {
   metric: MetricId; ramp: (value: number | null) => string; period: string;
-  /** Height of the largest value in 3D (0: flat). */
-  extrudeTo?: number;
   /** Name the count of a withheld area ("premalo poslov (12)"). */
   countWithheld?: boolean;
 }) {
   const definition = METRICS[metric];
   const lookup = byId(values);
-  const max = Math.max(1, ...values.map((item) => Math.abs(item.value ?? 0)));
   return new Map(shapes.map((shape) => {
     const item = lookup.get(shape.id);
     const value = item?.value ?? null;
     const text = value == null ? (countWithheld ? t("premalo poslov ({count})", { count: integer(item?.sample ?? 0) }) : t("premalo poslov"))
       : [definition.format(value), item?.pooled ? t("združeno {years}", { years: count(item.pooled, NOUN_FORMS.leto) }) : "",
         definition.usesYears ? `n = ${integer(item!.sample)}, ${period}` : ""].filter(Boolean).join(", ");
-    return [shape.id, paintOf(shape.name, text, { color: ramp(value), height: value == null ? 0 : (Math.abs(value) / max) * extrudeTo, pooled: !!item?.pooled })];
+    return [shape.id, paintOf(shape.name, text, { color: ramp(value), pooled: !!item?.pooled })];
   }));
 }
 
-/** Districts and settlements: their own (blue) scale; sale or rent medians only. */
+/**
+ * Districts and settlements: their own classes on the same teal ramp (on the municipal classes they would all share
+ * the top one; the municipalities underneath are drawn neutral meanwhile); sale or rent medians only.
+ */
 export function finePaint(shapes: MunicipalityShape[], values: AreaValue[], { ramp, period, metric = "salePrice" }: { ramp: (value: number | null) => string; period: string; metric?: MetricId }) {
   const lookup = byId(values);
   return new Map(shapes.map((shape) => {
     const item = lookup.get(shape.id);
     const text = !item || item.value == null ? t("premalo poslov ({count})", { count: integer(item?.sample ?? 0) })
       : `${METRICS[metric === "rentPrice" ? "rentPrice" : "salePrice"].format(item.value)}, n = ${integer(item.sample)}, ${item.pooled ? t("združeno 5 let") : period}`;
-    return [shape.id, paintOf(shape.name, text, { color: ramp(item?.value ?? null), height: 0, pooled: !!item?.pooled })];
+    return [shape.id, paintOf(shape.name, text, { color: ramp(item?.value ?? null), pooled: !!item?.pooled })];
   }));
 }
 

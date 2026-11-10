@@ -154,10 +154,10 @@ it("leads today's value with similar sales and moves it to the lower quarter of 
   expect(await screen.findByRole("heading", { level: 1, name: "Koliko je vredna vaša nepremičnina?" })).toBeInTheDocument();
   expect(await screen.findByRole("heading", { level: 2, name: /Ocena danes: okoli 289\.000\s€\s*\(verjetno\s*266\.000–314\.000\s€\s*\)/ })).toBeInTheDocument();
   // The stubbed municipal median is the same then and now, so the purchase updated with the local market stays 130.000 €.
-  expect(await screen.findByText(/Vaš nakup 2021 \(130\.000\s€\), posodobljen z gibanjem cen v občini/)).toBeInTheDocument();
+  expect((await screen.findByText(/^Posodobljen s cenami v občini/)).closest(".value-row")).toHaveTextContent(/130\.000\s€/);
   fireEvent.click(screen.getByRole("checkbox", { name: /je v slabšem stanju od povprečnega/ }));
   expect(await screen.findByRole("heading", { level: 2, name: /Ocena danes: okoli 266\.000\s€\s*\(verjetno\s*266\.000–289\.000\s€\s*\)/ })).toBeInTheDocument();
-  expect(screen.getByText("Podobne nepremičnine danes").closest("li")).toHaveTextContent("85 podobnih prodaj");
+  expect(screen.getByText("Podobna stanovanja danes").closest(".value-row")).toHaveTextContent("85 prodaj do 10 km");
 });
 
 it("Back from a sale opened in the recent list returns to the area (no trapped history)", async () => {

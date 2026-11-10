@@ -31,10 +31,11 @@ The hash is the application state, so every view can be shared, reloaded and
 navigated with Back/Forward. `src/url-state.ts` is the only module that reads or
 writes it:
 
-- `parseHash()` turns `#?g=133&b=1734-1710&posel=985416&vrsta=hise&obdobje=3&sloj=rentPrice&3d=1`
+- `parseHash()` turns `#?g=133&b=1734-1710&posel=985416&vrsta=hise&obdobje=3&sloj=rentPrice`
   into an `ExplorerState` (area `g`, building `b`, opened sale `posel` or rental
   `najem`, property type `vrsta`, land use `raba`, size band `m2`, street `ulica`,
-  period `obdobje` or `od`/`do`, map layer `sloj`, `3d`, `vrednost`).
+  period `obdobje` or `od`/`do`, map layer `sloj`, `vrednost`). Unknown parts
+  (such as `3d=1` in links to the former 3D view) are ignored and dropped.
 - `toHash()` writes the canonical form back; defaults and invalid parts are left
   out, so equal states always have equal addresses.
 - URL words (page ids, parameter names, slugs) are Slovenian in both languages,
@@ -77,8 +78,11 @@ saved choice (`localStorage` key `sreo-language`), then Slovenian.
 `components/ExplorerMap.tsx` uses MapLibre GL with the OpenFreeMap "liberty" style
 (`https://tiles.openfreemap.org/styles/liberty`, OpenMapTiles schema, OpenStreetMap
 data). No map token is needed. Place labels prefer `name:sl`. Area shapes, metric
-colours, optional 3D extrusion and sale/rental points are SREO layers drawn on top;
-`map-zoom.ts` decides which geography level a zoom shows. Map attribution
+colours and sale/rental points are SREO layers drawn on top; `map-zoom.ts` decides
+which geography level a zoom shows. One colour scale per map: while districts or
+settlements are drawn (inside a selected municipality, or every one in view from
+zoom 11), the municipalities underneath turn neutral grey and only the sub-areas
+carry the teal ramp (classed on their own values). Map attribution
 (OpenFreeMap, OpenMapTiles, OpenStreetMap contributors) must stay visible; see
 [data licensing](data-licensing-privacy.md).
 
@@ -176,7 +180,7 @@ their loading, failure and empty states.
 
 ## Provenance and attribution in the interface
 
-The masthead names the source (GURS ETN, CC BY 4.0, processed) and links to
+The footer of every page names the source (GURS ETN, CC BY 4.0, processed) and links to
 **O podatkih**. The footer on the Trends and About pages lists every source:
 GURS (ETN, RPE, Kataster nepremičnin), SURS, Banka Slovenije, ECB, OpenFreeMap and
 OpenStreetMap contributors, and states that the figures are informative and are
