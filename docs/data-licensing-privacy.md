@@ -20,6 +20,34 @@ GURS does not sponsor, endorse, certify, or accept responsibility for this
 application or its derived results. The official GURS terms remain controlling:
 <https://www.e-prostor.gov.si/dostopi/javni-dostop/>.
 
+## Sources
+
+| Source | Used for | Terms | Attribution shown |
+|---|---|---|---|
+| GURS Evidenca trga nepremičnin (ETN), BUY/KPP and RENT/NP | Transactions, prices, rents, all market statistics and models | CC BY 4.0 | "Vir GURS ETN, CC BY 4.0, obdelano" in the masthead; full list in the footer and on **O podatkih** |
+| GURS Register prostorskih enot (RPE) | Region, municipality, district and settlement boundaries | CC BY 4.0 | Footer and **O podatkih** |
+| GURS Kataster nepremičnin, stavbe (building cadastre) | Building year, floors, dwellings, type and location (construction views, building evidence). Ownership files in the archive are not imported | CC BY 4.0 | Footer and **O podatkih** |
+| SURS (Statistični urad RS), PX-Web | Net wages, building permits, population, deaths, migration, dwellings and households (`analytics.context_series`) | SURS terms of use: free reuse, including commercial, with the source cited ("Vir: SURS") | Footer and next to each context figure |
+| Banka Slovenije | Housing-loan interest rates; macroprudential lending limits (`analytics.lending_rules`) | Free reuse with the source cited | Footer and the affordability view |
+| European Central Bank (ECB) Data Portal | 6-month EURIBOR | ECB reuse policy: free reuse with the source cited | Footer and the affordability view |
+| OpenStreetMap contributors, via OpenMapTiles and OpenFreeMap | Base map tiles and the "liberty" style | Map data ODbL 1.0; OpenMapTiles schema and style under their open licences; OpenFreeMap is a free public tile service | "© OpenFreeMap © OpenMapTiles © OpenStreetMap contributors" must be visible on or directly next to the map |
+| Fraunces, Instrument Sans | Interface fonts, self-hosted from `apps/observer/public/fonts` | SIL Open Font License 1.1 (licence texts shipped beside the fonts) | Not required in the UI |
+
+The demographic series are context only: they are not used in any price
+statistic, index or model ([demographics](demographics.md)). Keep this table in
+step with the footer text in `apps/observer/src/components/App.tsx` when a
+source is added.
+
+## Third-party requests from the browser
+
+The page loads its code and fonts from its own origin. The only third-party
+requests are the OpenFreeMap tiles, style, glyphs and sprites needed to draw the
+map, which reveal the visitor's IP address and the viewed map area to that
+service. No analytics, advertising or font CDN (for example Google Fonts) is
+used, and nothing is loaded before the visitor opens the page. The interface
+language choice is kept in the browser's `localStorage` (`sreo-language`) and
+never sent to the server.
+
 ## Provenance shown to users
 
 The optional Google Maps link sends a selected ETN coordinate to Google only
@@ -72,10 +100,9 @@ the importer deliberately ignores:
 - `OPOMBE_O_NEPREMICNINI`;
 - `OPOMBE_O_ODDANIH_PROSTORIH`.
 
-Application account display names and authenticated anomaly-review notes are
-application-owned data, not GURS transaction-party data. They require the
-normal privacy, access-control, retention, and deletion policy of the eventual
-commercial service.
+SREO has no user accounts, logins or saved preferences on the server (the
+earlier identity tables are dropped by migration 044), so it stores no personal
+data about its visitors. The API is read-only for the public frontend.
 
 Exact addresses, transaction dates, and prices can still contribute to
 re-identification when combined with external information. The product must

@@ -1,22 +1,45 @@
+# Local configuration
 .env
+.env.*
+!.env.example
+
+# OS and editor
 .DS_Store
-**/.DS_Store
+
+# Python
 __pycache__/
 *.py[cod]
-.pytest_cache/
-.venv/
-apps/real-estate-api/coverage.out
-apps/real-estate-api/real-estate-api
 *.egg-info/
-data/raw/*.zip
-data/extracted/
-apps/data-pipeline/data/raw/*.zip
-apps/data-pipeline/data/extracted/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node and frontend builds
 node_modules/
-.next/
-.open-next/
-.wrangler/
+dist/
 coverage/
 *.tsbuildinfo
+test-results/
+playwright-report/
+
+# Go
+apps/real-estate-api/coverage.out
+apps/real-estate-api/real-estate-api
+
+# Downloaded source archives (the Compose worker keeps them in the pipeline_data volume)
+data/raw/*
+!data/raw/.gitkeep
+data/extracted/
+apps/data-pipeline/data/raw/*
+apps/data-pipeline/data/extracted/
+
+# Database dumps
 *.dump
-dist/
+
+# Working material kept locally, not in the repository
+reports/
+research_notes/
+artifacts/
+/*.png
+apps/data-pipeline/research/*/data/
+apps/data-pipeline/research/*/out/

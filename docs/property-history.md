@@ -198,8 +198,8 @@ Verification commands executed:
   subsequent targeted additions were rerun with `make api-test` and
   `make web-test` (106 frontend tests).
 - `make web-build` and `make api-build`: production images built successfully.
-- `MIGRATION_TEST_DATABASE_URL=... .venv/bin/pytest database/tests/test_production_migrate.py -q`:
-  all three checks passed, including fresh schema and privileges.
+- The production-migration tests passed at the time (that runner has since been
+  removed; Compose is the only runtime).
 - `make web-generate-api-types`: OpenAPI types regenerated; repeated generation
   produced the same file hash.
 - `git diff --check`: passed.
