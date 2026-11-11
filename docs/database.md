@@ -72,9 +72,13 @@ null; analytical code never invents missing prices, rents, areas, or locations.
 - model runs, valuation predictions, index calculation runs, market indices,
   and repeat-sale pairs retain versioned analytical outputs.
 - `refresh_runs` records deterministic refresh status and diagnostics.
-- `cadastre_buildings` and `cadastre_codebooks` hold the GURS building cadastre
-  snapshot (construction views); `context_series` and `lending_rules` hold SURS,
-  Banka Slovenije and ECB context (affordability, demography, permits). See the
+- `cadastre_buildings`, `cadastre_building_parts` and `cadastre_codebooks` hold the
+  GURS building cadastre snapshot (construction views, building facts);
+  `energy_certificates`, `generalised_values`, `register_codebooks`,
+  `flood_hazard_zones`, `flood_hazard_areas` and `flood_study_areas` hold the other
+  building registers (energy certificates, GURS generalised values, DRSV flood classes);
+  `context_series` and `lending_rules` hold SURS, Banka Slovenije and ECB context
+  (affordability, demography, permits). See the
   [data dictionary](../database/documentation/data-dictionary.md).
 
 ### Atomic analytical publication

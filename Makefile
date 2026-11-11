@@ -8,7 +8,7 @@ WORKERS ?= 6
 PYTHON_IMAGE ?= python:3.11-slim
 PY_RUN := docker run --rm -v "$(CURDIR)/$(PIPELINE_DIR):/src" -v real_estate_pip_cache:/root/.cache/pip -w /src $(PYTHON_IMAGE)
 PY_DEV_INSTALL := pip install --quiet --root-user-action=ignore -e '.[dev,ml]'
-GO_IMAGE ?= golang:1.26.10-bookworm
+GO_IMAGE ?= golang:1.26.11-bookworm
 API_DIR := apps/real-estate-api
 API_TEST_DATABASE_URL ?= postgresql://real_estate:real_estate@host.docker.internal:5432/real_estate
 GO_RUN := docker run --rm --add-host=host.docker.internal:host-gateway -v "$(CURDIR)/$(API_DIR):/src" -v real_estate_go_mod_cache:/go/pkg/mod -v real_estate_go_build_cache:/root/.cache/go-build -w /src $(GO_IMAGE)

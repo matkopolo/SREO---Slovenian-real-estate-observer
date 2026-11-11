@@ -558,6 +558,50 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+  /api/v1/hazards/floods:
+    get:
+      operationId: listFloodZones
+      tags: [Hazards]
+      summary: DRSV flood hazard classes and studied areas inside the map's view
+      description: >-
+        Polygons of the Integralna karta razredov poplavne nevarnosti (Pv velika, Ps srednja, Pm majhna,
+        Pp preostala nevarnost) and of the areas with a hydraulic study, clipped to `bbox`
+        (west,south,east,north; at most about one municipality) and simplified by `detail`. Outside the
+        studied areas the absence of a class means "not studied", never "no flood risk". At most 2000
+        polygons; `truncated` marks a cut list. Source DRSV, CC BY 4.0.
+      parameters:
+        - name: bbox
+          in: query
+          required: true
+          schema: { type: string, example: "15.48,46.50,15.56,46.56" }
+        - name: detail
+          in: query
+          required: false
+          schema: { type: string, enum: [low, medium, high], default: medium }
+      responses:
+        "200":
+          description: GeoJSON FeatureCollection; properties carry `kind` (zone or study) and `hazardClass`.
+          content:
+            application/geo+json:
+              schema:
+                type: object
+                required: [type, features, count, truncated, sources]
+                properties:
+                  type: { type: string, enum: [FeatureCollection] }
+                  features: { type: array, items: { type: object } }
+                  count: { type: integer }
+                  truncated: { type: boolean }
+                  sources:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, licence, note]
+                      properties:
+                        name: { type: string }
+                        licence: { type: string }
+                        note: { type: string }
+        "400":
+          $ref: "#/components/responses/Error"
   /api/v1/sales/statistics/resales:
     get:
       operationId: getResaleSummary
@@ -2209,6 +2253,7 @@ components:
         - geographies
         - buildingParts
         - landParcels
+        - building
       properties:
         transactionId: {type: integer, format: int64}
         contractDate: {type: [string, "null"], format: date}
@@ -2237,6 +2282,107 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SaleLandParcel"
+        building:
+          description: Register facts about the sold unit and its building; null when no register knows the building.
+          oneOf:
+            - $ref: "#/components/schemas/BuildingFacts"
+            - type: "null"
+    BuildingFacts:
+      type: object
+      description: >-
+        Official register facts joined to the sale by the cadastral key (cadastral municipality, building,
+        part of building). Each block is null when its register has nothing for this building. None of the
+        registers names an owner.
+      required: [energyCertificate, buildingEnergyClasses, buildingCertificates, cadastre, generalisedValue, flood]
+      properties:
+        energyCertificate:
+          oneOf:
+            - $ref: "#/components/schemas/EnergyCertificate"
+            - type: "null"
+        buildingEnergyClasses:
+          description: Distinct classes of the valid certificates in the building (newest per unit), best first.
+          type: array
+          items: { type: string }
+        buildingCertificates: { type: integer, description: Units (or the whole building) with a valid certificate. }
+        cadastre:
+          oneOf:
+            - $ref: "#/components/schemas/CadastreFacts"
+            - type: "null"
+        generalisedValue:
+          oneOf:
+            - $ref: "#/components/schemas/GeneralisedValue"
+            - type: "null"
+        flood:
+          oneOf:
+            - $ref: "#/components/schemas/FloodHazard"
+            - type: "null"
+    EnergyCertificate:
+      type: object
+      description: >-
+        The newest valid energy performance certificate for the unit, or for the whole building when the unit
+        has none (`scope`). Register energetskih izkaznic (Ministry of the Environment, Climate and Energy),
+        public by ZURE Art. 32. Indicators are per m² for computed certificates and absolute per year for
+        measured ones.
+      required: [id, scope, type, class, issuedOn, validUntil, buildingUse, heatingDemand, primaryEnergy, co2, conditionedArea, sourceDate]
+      properties:
+        id: { type: string }
+        scope: { type: string, enum: [unit, building] }
+        type: { type: string, enum: [computed, measured] }
+        class: { type: [string, "null"], description: "A1, A2, B1, B2, C, D, E, F or G; measured certificates carry none." }
+        issuedOn: { type: string, format: date }
+        validUntil: { type: [string, "null"], format: date }
+        buildingUse: { type: [string, "null"], description: EPBD category as registered (STANOVANJE, HISA, BLOKI, …). }
+        heatingDemand: { type: [number, "null"], description: kWh/m²a for computed certificates. }
+        primaryEnergy: { type: [number, "null"] }
+        co2: { type: [number, "null"], description: kg/m²a for computed certificates. }
+        conditionedArea: { type: [number, "null"] }
+        sourceDate: { type: string, format: date, description: "\"Stanje na dan\" of the register export." }
+    CadastreFacts:
+      type: object
+      description: GURS Kataster nepremičnin (CC BY 4.0), building row plus the sold unit's row when the cadastre knows it.
+      required: [buildingEid, yearBuilt, floors, dwellings, facadeRenovated, roofRenovated, unitKnown, windowsRenovated, installationsRenovated, elevator, actualUse, area, usableArea, sourceDate]
+      properties:
+        buildingEid: { type: string }
+        yearBuilt: { type: [integer, "null"] }
+        floors: { type: [integer, "null"] }
+        dwellings: { type: [integer, "null"] }
+        facadeRenovated: { type: [integer, "null"], description: Year more than half of the façade was renewed. }
+        roofRenovated: { type: [integer, "null"] }
+        unitKnown: { type: boolean, description: Whether the sold part of building exists in the cadastre snapshot. }
+        windowsRenovated: { type: [integer, "null"] }
+        installationsRenovated: { type: [integer, "null"] }
+        elevator: { type: [boolean, "null"], description: The unit's entry, or the building's when the unit has none. }
+        actualUse: { type: [string, "null"] }
+        area: { type: [number, "null"] }
+        usableArea: { type: [number, "null"] }
+        sourceDate: { type: string, format: date }
+    GeneralisedValue:
+      type: object
+      description: >-
+        GURS's posplošena vrednost of the sold unit from the Evidenca vrednotenja (public by ZMVN-1 Art. 44),
+        an administrative value for the models' market date, not a market price.
+      required: [value, model, modelLabel, valueLevel, floor, position, packageValue, packageParts, valuationDate, sourceDate]
+      properties:
+        value: { type: [number, "null"], description: "€; null when GURS has no value for the unit." }
+        model: { type: string, description: Valuation model code (STA, HIS, GAR, PPL, …). }
+        modelLabel: { type: [string, "null"] }
+        valueLevel: { type: [string, "null"], description: Value level within the model, e.g. 8/21. }
+        floor: { type: [integer, "null"] }
+        position: { type: [string, "null"], description: Position in the building as registered (pritličje, mansarda, …). }
+        packageValue: { type: [number, "null"], description: Sum over the sold parts with a value, when the sale has several. }
+        packageParts: { type: integer }
+        valuationDate: { type: string, format: date, description: Market date of the models in force. }
+        sourceDate: { type: string, format: date }
+    FloodHazard:
+      type: object
+      description: >-
+        The building centroid's class on the DRSV Integralna karta razredov poplavne nevarnosti (CC BY 4.0).
+        `studied` is false where no hydraulic study exists; there a missing class means "not studied".
+      required: [hazardClass, studied, sourceDate]
+      properties:
+        hazardClass: { type: [string, "null"], enum: [Pv, Ps, Pm, Pp, null] }
+        studied: { type: boolean }
+        sourceDate: { type: string, format: date }
     SaleBuildingPart:
       type: object
       required: [id]

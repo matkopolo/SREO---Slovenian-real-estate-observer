@@ -5,6 +5,7 @@ import { Name, t, tx } from "../i18n";
 import { METRICS, type MetricId } from "../metrics";
 import { NOUNS, type Band } from "../nouns";
 import { typedLabel } from "./paint";
+import { FLOOD_COLORS } from "../palette";
 
 /** Legend classes and their colour. */
 export interface Scale { breaks: number[]; ramp: (value: number | null) => string }
@@ -62,7 +63,25 @@ export function ComparablesLegend({ count, radiusMeters, trusted }: { count: num
   </div>;
 }
 
-export function MapLegend({ layer, layers, group, band, windows, level, street, land, buildingSpan, scales, pooled, fineShown, sub, onLayer }: {
+/** The flood overlay's switch and keys in the strip. */
+export interface FloodControl { on: boolean; available: boolean; loading: boolean; failed: boolean; truncated: boolean; onToggle: () => void }
+
+/** The flood overlay's keys: the four classes and the studied-area outline, or why nothing is drawn yet. */
+function FloodKeys({ floods }: { floods: FloodControl }) {
+  if (!floods.available) return <span className="strip-note">{t("približajte do mesta")}</span>;
+  if (floods.failed) return <span className="strip-note">{t("ni na voljo")}</span>;
+  return <ul className="ramp-keys flood-keys" aria-label={t("Razredi poplavne nevarnosti (DRSV)")}>
+    <li title={t("velika: globina nad 1,5 m ob stoletnih poplavah")}><i className="flood-swatch" style={{ background: FLOOD_COLORS.Pv }}/>{t("Pv velika")}</li>
+    <li title={t("srednja: globina 0,5–1,5 m ob stoletnih poplavah ali poplave vsakih 10 let")}><i className="flood-swatch" style={{ background: FLOOD_COLORS.Ps }}/>{t("Ps srednja")}</li>
+    <li title={t("majhna: globina do 0,5 m ob stoletnih poplavah")}><i className="flood-swatch" style={{ background: FLOOD_COLORS.Pm }}/>{t("Pm majhna")}</li>
+    <li title={t("preostala: med stoletnimi in petstoletnimi poplavami")}><i className="flood-swatch" style={{ background: FLOOD_COLORS.Pp }}/>{t("Pp preostala")}</li>
+    <li title={t("črtkano: območje s poplavno študijo; zunaj njega razredi niso določeni")}><svg className="key-dash" width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18" y2="3" stroke={FLOOD_COLORS.Pv} strokeWidth="2" strokeDasharray="4 3"/></svg>{t("preučeno območje")}</li>
+    {floods.truncated && <li className="strip-note">{t("prikaz je okrnjen, približajte")}</li>}
+    {floods.loading && <li className="strip-note">{t("Nalagam …")}</li>}
+  </ul>;
+}
+
+export function MapLegend({ layer, layers, group, band, windows, level, street, land, buildingSpan, scales, pooled, fineShown, sub, floods, onLayer }: {
   layer: MetricId; layers: MetricId[]; group: PropertyGroup; band?: Band; windows?: PeriodWindows; level: MapLevel;
   /** Street zoom: buildings (or land sales) instead of areas. */
   street: boolean; land: boolean; buildingSpan: string;
@@ -73,6 +92,8 @@ export function MapLegend({ layer, layers, group, band, windows, level, street, 
   fineShown: boolean;
   /** The selected municipality's districts or settlements on their own scale. */
   sub?: { level: "city_district" | "settlement"; municipality: string; scale: Scale };
+  /** The DRSV flood hazard overlay: on request, from town zoom. */
+  floods?: FloodControl;
   onLayer: (layer: MetricId) => void;
 }) {
   const definition = METRICS[layer];
@@ -122,8 +143,12 @@ export function MapLegend({ layer, layers, group, band, windows, level, street, 
       </select></label>
     {ramps.map((ramp) => <Ramp key={ramp.id} ramp={ramp}/>)}
     {note && <p className="strip-note">{note}</p>}
+    {floods && <div className="strip-floods">
+      <label><input type="checkbox" checked={floods.on} onChange={floods.onToggle}/> {t("Poplavna nevarnost (DRSV)")}</label>
+      {floods.on && <FloodKeys floods={floods}/>}
+    </div>}
     <button type="button" className="strip-help-toggle" aria-expanded={help} aria-controls={helpId} aria-label={t("Pojasnilo zemljevida")} title={t("Pojasnilo zemljevida")}
       onClick={() => setHelp(!help)}>?</button>
-    {help && <p id={helpId} className="strip-help">{shown}{band ? `, ${band.label}` : ""}. {definition.usesYears && span ? `${typedLabel(layer, group)}, ${date(span.from)}–${date(span.to)}. ` : ""}{hint}{own ? <> {tx("{areas} občine {municipality} imajo lastno lestvico.", { areas: own.level === "city_district" ? t("Četrtne skupnosti") : t("Naselja"), municipality: <Name>{own.municipality}</Name> })}</> : null}</p>}
+    {help && <p id={helpId} className="strip-help">{shown}{band ? `, ${band.label}` : ""}. {definition.usesYears && span ? `${typedLabel(layer, group)}, ${date(span.from)}–${date(span.to)}. ` : ""}{hint}{own ? <> {tx("{areas} občine {municipality} imajo lastno lestvico.", { areas: own.level === "city_district" ? t("Četrtne skupnosti") : t("Naselja"), municipality: <Name>{own.municipality}</Name> })}</> : null}{floods?.on ? ` ${t("Pv: globina nad 1,5 m ob stoletnih poplavah; Ps: 0,5–1,5 m ali poplave vsakih 10 let; Pm: do 0,5 m; Pp: med stoletnimi in petstoletnimi poplavami. Črtkano: poplavno preučeno območje; zunaj njega razredi niso določeni.")}` : ""}</p>}
   </div>;
 }

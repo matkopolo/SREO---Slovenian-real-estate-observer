@@ -10,6 +10,7 @@ import {
   BuildingComparables, HowCalculated, mainUnit, MapsLink, partialSaleReasons, perSqmText, PriceVerdict, RegisterDetails, TransactionFacts, TransactionHistory,
   TransactionQuality, transactionSubtitle, transactionTitle,
 } from "./TransactionDetails";
+import { BuildingFacts } from "./BuildingFacts";
 import { RangeBar } from "./charts";
 import "./building-evidence.css"; // i18n-ignore (code)
 
@@ -264,6 +265,7 @@ export function TransactionEvidence({ selected, onChoose, onBuilding, building, 
       <a href={hrefWith({ value: true, building: { ko, st }, selected: { kind: "sale", id: selected.id } })}>{t("Je to vaša nepremičnina? Ocena današnje vrednosti →")}</a></p>}
     {detail && <MapsLink detail={detail} building={own}/>}
     {detail && <TransactionFacts sale={saleDetail} rent={rentDetail}/>}
+    {saleDetail?.building && <BuildingFacts facts={saleDetail.building} compact/>}
     {detail && <TransactionQuality detail={detail}/>}
     {detail && own ? <OtherSales building={own} transactionId={selected.id} group={detail.propertyGroup} perSqm={perSqm} band={sameBand} kind={selected.kind} onChoose={onChoose}/>
       : context && (!ko || !st || loaded === null) && <BuildingComparables context={context} kind={selected.kind} onChoose={onChoose}/>}

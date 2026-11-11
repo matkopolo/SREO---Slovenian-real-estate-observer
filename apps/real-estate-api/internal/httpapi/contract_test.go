@@ -46,6 +46,7 @@ var contractRequests = map[string]string{
 	"/api/v1/construction/summary":                                  "/api/v1/construction/summary",
 	"/api/v1/construction/map":                                      "/api/v1/construction/map?bbox=14.4,46.0,14.6,46.1&zoom=15",
 	"/api/v1/construction/buildings/{eid}":                          "/api/v1/construction/buildings/1",
+	"/api/v1/hazards/floods":                                        "/api/v1/hazards/floods?bbox=14.4,46.0,14.6,46.1",
 	"/api/v1/sales/statistics/resales":                              "/api/v1/sales/statistics/resales",
 	"/api/v1/sales/transactions/{id}/history":                       "/api/v1/sales/transactions/1/history",
 	"/api/v1/geographies":                                           "/api/v1/geographies?level=municipality",

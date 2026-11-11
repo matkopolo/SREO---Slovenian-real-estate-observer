@@ -543,6 +543,17 @@ export async function loadBoundariesInView(level: FineLevel, bbox: Bbox, signal?
     parentId: feature.properties.parentId ?? undefined, geometry: feature.geometry }));
 }
 
+/** One polygon of the DRSV flood hazard overlay: a hazard class, or an area with a hydraulic study. */
+export type FloodZoneProperties = { kind: "zone" | "study"; hazardClass: "Pv" | "Ps" | "Pm" | "Pp" | null };
+export interface FloodZones { features: FeatureCollection<Geometry, FloodZoneProperties>; truncated: boolean }
+
+/** The flood hazard classes and studied areas inside the visible map (the API serves views up to about one municipality). */
+export async function loadFloodZones(bbox: Bbox, detail: "low" | "medium" | "high", signal?: AbortSignal): Promise<FloodZones> {
+  const collection = await api("/api/v1/hazards/floods", { query: { bbox: bboxText(bbox), detail } }, signal) as
+    unknown as FeatureCollection<Geometry, FloodZoneProperties> & { truncated: boolean };
+  return { features: { type: "FeatureCollection", features: collection.features }, truncated: collection.truncated };
+}
+
 export const loadDistrictList = (signal?: AbortSignal) => api("/api/v1/geographies", { query: { level: "city_district" } }, signal)
   .then((response) => ({ ...response, items: response.items.map(clean) }));
 

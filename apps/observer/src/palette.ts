@@ -31,3 +31,5 @@ export function familyOf(metric: MetricId): Family {
     default: return "price";
   }
 }
+/** The DRSV flood hazard classes in the rent (water) ramp: Pv velika, Ps srednja, Pm majhna, Pp preostala. */
+export const FLOOD_COLORS = { Pv: RAMPS.rent[4], Ps: RAMPS.rent[3], Pm: RAMPS.rent[2], Pp: RAMPS.rent[1] };

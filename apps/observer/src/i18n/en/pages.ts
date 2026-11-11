@@ -19,8 +19,8 @@ export const pages: Record<string, string> = {
   "Del strani": "Page section",
   "Cene skozi čas": "Prices over time",
   "Porazdelitev in skrajni posli": "Distribution and extremes",
-  "Vir: Geodetska uprava RS (GURS), Evidenca trga nepremičnin, Register prostorskih enot in Kataster nepremičnin (CC BY 4.0); SURS; Banka Slovenije; ECB; zemljevid OpenFreeMap in sodelavci OpenStreetMap.":
-    "Sources: Surveying and Mapping Authority of the Republic of Slovenia (GURS), Real Estate Market Register, Register of Spatial Units and Real Estate Cadastre (CC BY 4.0); SURS; Bank of Slovenia; ECB; map by OpenFreeMap and OpenStreetMap contributors.",
+  "Vir: Geodetska uprava RS (GURS), Evidenca trga nepremičnin, Register prostorskih enot, Kataster nepremičnin in Evidenca vrednotenja (CC BY 4.0); Register energetskih izkaznic (MOPE); DRSV (CC BY 4.0); SURS; Banka Slovenije; ECB; zemljevid OpenFreeMap in sodelavci OpenStreetMap.":
+    "Sources: Surveying and Mapping Authority of the Republic of Slovenia (GURS), Real Estate Market Register, Register of Spatial Units, Real Estate Cadastre and valuation register (CC BY 4.0); Register of energy performance certificates (Ministry of the Environment, Climate and Energy); DRSV (CC BY 4.0); SURS; Bank of Slovenia; ECB; map by OpenFreeMap and OpenStreetMap contributors.",
   "Podatki so obdelani.": "The data has been processed.",
   "Prikaz je informativen in ni uradna cenitev ali ponudba kredita.": "This is for information only and is not an official valuation or a loan offer.",
 
@@ -185,7 +185,10 @@ export const pages: Record<string, string> = {
     "SURS: salaries, population, migration, deaths, census of dwellings and households, inflation.",
   "Banka Slovenije: obrestne mere in omejitve kreditiranja.": "Bank of Slovenia: interest rates and lending limits.",
   "ECB: EURIBOR.": "ECB: EURIBOR.",
-  "GURS kataster stavb: nove stavbe.": "GURS Building Cadastre: new buildings.",
+  "GURS kataster nepremičnin: nove stavbe, prenove in dvigala.": "GURS real estate cadastre: new buildings, renovations and lifts.",
+  "GURS evidenca vrednotenja: posplošene vrednosti.": "GURS valuation register: generalised values.",
+  "Register energetskih izkaznic (MOPE): energijski razredi.": "Register of energy performance certificates (Ministry of the Environment, Climate and Energy): energy classes.",
+  "DRSV: razredi poplavne nevarnosti.": "DRSV (Slovenian Water Agency): flood hazard classes.",
   "Vrednosti so obdelane in informativne; niso uradna cenitev ali ponudba kredita.":
     "The values are processed and for information only; they are not an official valuation or a loan offer.",
   "Za analitike: opozorila in izločena odstopanja": "For analysts: flags and excluded outliers",

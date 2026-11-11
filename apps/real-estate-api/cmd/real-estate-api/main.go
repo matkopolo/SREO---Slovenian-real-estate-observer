@@ -97,6 +97,7 @@ func run() error {
 		Construction:     construction.NewRepository(pool),
 		Demography:       demography.NewRepository(pool),
 		Recent:           repositories.Transactions,
+		Hazards:          repositories.Hazards,
 		Metrics:          registry,
 		RequestTimeout:   cfg.RequestTimeout,
 		AllowedOrigins:   cfg.AllowedOrigins,

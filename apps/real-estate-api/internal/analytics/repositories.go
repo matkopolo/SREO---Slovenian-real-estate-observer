@@ -65,6 +65,7 @@ type Repositories struct {
 	Buildings     *BuildingRepository
 	Valuations    *ValuationRepository
 	Releases      *ReleaseRepository
+	Hazards       *HazardRepository
 }
 
 // NewRepositories returns the repositories reading through db (a pool, or a test transaction).
@@ -83,6 +84,7 @@ func NewRepositories(db database.Querier) Repositories {
 		Buildings:     buildings,
 		Valuations:    &ValuationRepository{shared},
 		Releases:      releases,
+		Hazards:       &HazardRepository{shared},
 	}
 }
 
@@ -93,6 +95,7 @@ var (
 	_ MapStore               = (*MapRepository)(nil)
 	_ TransactionDetailStore = (*TransactionRepository)(nil)
 	_ HistoryStore           = (*TransactionRepository)(nil)
+	_ HazardStore            = (*HazardRepository)(nil)
 	_ RecentStore            = (*TransactionRepository)(nil)
 	_ BuildingStore          = (*BuildingRepository)(nil)
 	_ ModelStore             = (*ValuationRepository)(nil)

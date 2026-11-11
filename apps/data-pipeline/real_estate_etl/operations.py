@@ -50,6 +50,7 @@ from .publication import (
     start_release,
     update_release_source,
 )
+from .registers import sync_registers
 from .settings import RPE_BOUNDARIES_SEED_URL
 from .source_sync import SOURCE_OK, SOURCE_SEED, SUCCESSFUL_STATUSES, SourceSyncReport
 
@@ -274,11 +275,12 @@ def _sync_geographies_or_keep_existing(
 
 
 def _sync_optional_sources(connection: psycopg.Connection, output_dir: Path) -> SourceSyncReport:
-    """Affordability, demographic and construction context; failures keep stored values."""
+    """Affordability, demographic, construction and building-register context; failures keep stored values."""
     return (
         sync_context(connection)
         .merge(sync_demography(connection))
         .merge(sync_construction(connection, output_dir))
+        .merge(sync_registers(connection, output_dir))
     )
 
 

@@ -1,7 +1,9 @@
 """Official construction sources for "Gradbeni projekti" v1.
 
 - GURS Kataster nepremičnin buildings (JGP product 14): every registered building with its
-  point, year built, floors, dwellings and floor area. Ownership files are never read.
+  point, year built, floors, dwellings, floor area and the façade and roof renovation years,
+  and every part of building (del stavbe) with its use, elevator, area and the window and
+  installation renovation years. Ownership files in the archive are never read.
 - SURS 1970717S: building permits per municipality and year (counts only).
 
 Registered buildings are completed or measurable buildings, not construction in progress.
@@ -36,12 +38,20 @@ JGP_BUILDINGS = f"{API_BASE}/display-views/groups/121/composite-products/14"
 JGP_FILTER = "filterParam=DRZAVA&filterValue=1"
 SURS_PERMITS = "https://pxweb.stat.si/SiStatData/api/v1/sl/Data/1970717S.px"
 CODEBOOKS = {"TIPI_STAVB": "building_type", "NOSILNE_KONSTRUKCIJE": "load_bearing_structure",
-             "STATUSI_VPISA_STAVBE": "registration_status"}
+             "STATUSI_VPISA_STAVBE": "registration_status", "VRSTE_DEJANSKIH_RAB_DEL_ST": "actual_use"}
 PERMIT_MEASURES = {"1": ("permit_buildings", "buildings"), "2": ("permit_floor_area", "m2"),
                    "4": ("permit_dwellings", "dwellings")}
 BUILDING_COLUMNS = ("eid", "cadastral_code", "building_number", "year_built", "floors", "dwellings",
                     "business_units", "building_type", "load_bearing_structure", "registration_status",
-                    "gross_floor_area", "municipality_eid", "record_changed_on", "location", "source_date")
+                    "gross_floor_area", "municipality_eid", "record_changed_on", "location", "source_date",
+                    "facade_renovated", "roof_renovated")
+PART_COLUMNS = ("eid", "building_eid", "part_number", "actual_use", "elevator", "windows_renovated",
+                "installations_renovated", "area", "usable_area", "record_changed_on", "source_date")
+#: Members of the archive that are read. Everything else, in particular the owner files
+#: (imetniki_lastnistva, pravice_lastnistva, osebe), stays unopened.
+PARTS_MEMBER = re.compile(r"_STAVBE_SLO_deli_stavb_\d{8}\.csv$")
+#: DVIGALO / DA_NE codebook: 1 = yes, 2 = no, 0 = unknown.
+YES_NO = {"1": True, "2": False}
 #: Shapefile point records are the only geometry this product publishes.
 SHAPE_POINT = 1
 
@@ -151,9 +161,34 @@ def building_rows(archive: zipfile.ZipFile, snapshot: date) -> Iterator[tuple]:
                     _changed_on(attributes.get("DATUM_SYS", "")),
                     f"SRID=3794;POINT({point[0]} {point[1]})" if point else None,
                     snapshot,
+                    # dBASE truncates LETO_OBNOVE_FASADE and LETO_OBNOVE_STREHE to these two names, in this order.
+                    _integer(attributes.get("LETO_OBNOV", "")), _integer(attributes.get("LETO_OBNO0", "")),
                 )
         except ValueError as error:
             raise ValueError(f"{inner_name}/{base}: {error}") from error
+
+
+def _year(raw: str) -> int | None:
+    raw = raw.strip()
+    return int(raw) if raw.isdigit() and len(raw) == 4 else None
+
+
+def part_rows(archive: zipfile.ZipFile, snapshot: date) -> Iterator[tuple]:
+    """Stream the parts of buildings (deli stavb) CSV: about 1.9 million rows, comma-separated."""
+    member = next(n for n in archive.namelist() if PARTS_MEMBER.search(n))
+    with archive.open(member) as raw:
+        reader = csv.DictReader(io.TextIOWrapper(raw, encoding="utf-8-sig", newline=""))
+        for row in reader:
+            eid, building = row["EID_DEL_STAVBE"].strip(), row["EID_STAVBA"].strip()
+            number = _integer(row["ST_DELA_STAVBE"])
+            if not eid or not building or number is None:
+                continue
+            yield (
+                eid, building, number, _integer(row["VRSTA_DEJANSKE_RABE_DEL_ST_ID"]),
+                YES_NO.get(row["DVIGALO"].strip()), _year(row["LETO_OBNOVE_OKEN"]),
+                _year(row["LETO_OBNOVE_INSTALACIJ"]), _number(row["POVRSINA"]), _number(row["UPORABNA_POVRSINA"]),
+                row["DATUM_SYS"][:10] or None, snapshot,
+            )
 
 
 def codebook_rows(archive: zipfile.ZipFile) -> list[tuple[str, int, str]]:
@@ -231,6 +266,38 @@ def load_buildings(connection: psycopg.Connection, path: Path) -> int:
     return loaded
 
 
+def load_building_parts(connection: psycopg.Connection, path: Path) -> int:
+    """Replace the parts of buildings from the same snapshot as the buildings, atomically."""
+    snapshot = source_date(path.name)
+    current = connection.execute("SELECT max(source_date) FROM analytics.cadastre_building_parts").fetchone()[0]
+    if current == snapshot:
+        logger.info("GURS building parts snapshot %s already loaded", snapshot)
+        return 0
+    connection.commit()
+    started = time.monotonic()
+    with zipfile.ZipFile(path) as archive, connection.transaction(), connection.cursor() as cursor:
+        cursor.execute("CREATE TEMP TABLE staging_parts (LIKE analytics.cadastre_building_parts) ON COMMIT DROP")
+        count = 0
+        statement = sql.SQL("COPY staging_parts ({}) FROM STDIN").format(
+            sql.SQL(",").join(map(sql.Identifier, PART_COLUMNS)))
+        with cursor.copy(statement) as copy:
+            for row in part_rows(archive, snapshot):
+                copy.write_row(row)
+                count += 1
+        cursor.execute("DELETE FROM analytics.cadastre_building_parts")
+        cursor.execute(
+            """INSERT INTO analytics.cadastre_building_parts
+               SELECT DISTINCT ON (eid) * FROM staging_parts
+               ORDER BY eid, record_changed_on DESC NULLS LAST"""
+        )
+        loaded = cursor.rowcount
+    if count > loaded >= 0:
+        logger.warning("GURS building parts %s: dropped %s duplicate EID record(s)", snapshot, f"{count - loaded:,}")
+    logger.info("Loaded %s GURS parts of buildings (snapshot %s) in %.0fs", f"{loaded:,}", snapshot,
+                time.monotonic() - started)
+    return loaded
+
+
 # --------------------------------------------------------------------------- SURS permits
 
 def permit_observations(payload: dict) -> list[Observation]:
@@ -276,6 +343,7 @@ def sync_construction(
         {
             "surs_permits": lambda: sync_permits(connection, client),
             "gurs_buildings": lambda: load_buildings(connection, download_buildings(client, output_dir)),
+            "gurs_building_parts": lambda: load_building_parts(connection, download_buildings(client, output_dir)),
         },
         group="construction sources",
     )

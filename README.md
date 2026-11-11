@@ -99,6 +99,7 @@ Documentation:
 docker compose run --rm pipeline-worker refresh-system --output-dir /data/raw   # refresh now
 docker compose run --rm pipeline-worker refresh-models --workers 6              # retrain deliberately
 docker compose run --rm pipeline-worker sync-demography                         # refresh SURS demographics only
+docker compose run --rm pipeline-worker sync-registers --output-dir /data/raw   # energy certificates, GURS generalised values, DRSV flood classes
 docker compose up -d --build --force-recreate --no-deps observer                # rebuild only the frontend
 ```
 
@@ -124,8 +125,11 @@ runs `nginx -t` and the smoke test.
 ## Data source and licence
 
 Sources: Geodetska uprava Republike Slovenije (GURS): Evidenca trga
-nepremičnin (ETN), Register prostorskih enot (RPE) and Kataster nepremičnin,
-used under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.sl);
+nepremičnin (ETN), Register prostorskih enot (RPE), Kataster nepremičnin and
+Evidenca vrednotenja, used under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.sl); the public
+Register energetskih izkaznic (Ministry of the Environment, Climate and Energy,
+re-use of public-sector information); DRSV flood hazard classes (CC BY 4.0);
 SURS, Banka Slovenije and the ECB for context; map © OpenFreeMap, OpenMapTiles
 and OpenStreetMap contributors (ODbL). The data is processed; results are
 informative and are not an official or certified valuation. See

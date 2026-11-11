@@ -46,6 +46,16 @@ timeouts, graceful shutdown, and readiness checks.
   and per-property-group sale/rental counts constrained by the requested
   `from`/`to` dates, so clients can suggest a relevant market without guessing
   or switching filters automatically.
+- Building registers: the sale detail carries a `building` block with the register
+  facts about the sold unit and its building, joined by the cadastral key: the newest
+  valid energy certificate (unit, else whole building) with the classes present in
+  the building, the cadastre's renovation years, elevator and counts, GURS's
+  generalised value (posplošena vrednost, an administrative value for the models'
+  market date, never a price) with the sum over a package's parts, and the DRSV
+  flood hazard class of the building centroid with whether the area has a hydraulic
+  study. `/api/v1/hazards/floods?bbox=&detail=` serves the dissolved flood classes
+  and studied areas of a view up to about one municipality as GeoJSON. None of the
+  registers names an owner.
 - Quality: anomaly list and summary (read-only).
 - Models: market indices and versioned transaction valuation estimates with
   uncertainty and diagnostics.

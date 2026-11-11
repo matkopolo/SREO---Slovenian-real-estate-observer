@@ -61,7 +61,12 @@ Each incremental run:
   superseded local copies;
 - keeps valid ZIPs in the `pipeline_data` Docker volume;
 - refreshes GURS RPE boundaries and the optional context sources (SURS, Banka
-  Slovenije, ECB, GURS buildings). A failing source keeps its stored values; its
+  Slovenije, ECB, GURS buildings and parts of buildings, and the building
+  registers: the energy-certificate register, GURS generalised values per
+  municipality and the DRSV flood hazard classes; `sync-registers` runs those
+  three alone; `ENERGY_CERTIFICATES_URL` pins one register export instead of the
+  link on the register page, `DRSV_FLOOD_BASE_URL` overrides the DRSV download
+  folder). A failing source keeps its stored values; its
   error is stored in `analytics.analytical_releases.details->'sources'` and listed
   in the "published" log line. A first install has no stored boundaries: when
   the GURS boundary service fails, the worker downloads the published seed

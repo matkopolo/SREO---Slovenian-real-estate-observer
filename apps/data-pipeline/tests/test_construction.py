@@ -14,7 +14,9 @@ from real_estate_etl.construction import (
     download_buildings,
     iter_dbf,
     iter_points,
+    load_building_parts,
     load_buildings,
+    part_rows,
     permit_observations,
     source_date,
     sync_construction,
@@ -22,7 +24,17 @@ from real_estate_etl.construction import (
 
 FIELDS = [("EID_STAVBA", 40), ("KO_ID", 8), ("ST_STAVBE", 8), ("STEVILO_ET", 4), ("STEVILO_ST", 4),
           ("STEVILO_PO", 4), ("TIP_STAVBE", 4), ("NOSILNA_KO", 4), ("STATUS_VPI", 3), ("LETO_IZGRA", 6),
-          ("BRUTO_TLOR", 12), ("EID_OBCINA", 40), ("DATUM_SYS", 8)]
+          ("BRUTO_TLOR", 12), ("EID_OBCINA", 40), ("DATUM_SYS", 8), ("LETO_OBNOV", 4), ("LETO_OBNO0", 4)]
+
+PARTS_CSV = (
+    "FEATUREID,EID_DEL_STAVBE,EID_STAVBA,EID_HISNA_STEVILKA,UPRAVNIK_ID,VRSTA_DEJANSKE_RABE_DEL_ST_ID,DVIGALO,"
+    "LETO_OBNOVE_INSTALACIJ,LETO_OBNOVE_OKEN,POVRSINA,STATUS,ST_DELA_STAVBE,EID_STANOVANJE,ST_STANOVANJA,"
+    "VRSTA_STANOVANJA_ID,UPORABNA_POVRSINA,DATUM_SYS,PROSTORNINA_CISTERN_SILOSOV,"
+    "NACIN_DOLOCITVE_POVRSINE_DELA_STAVBE_ID,UPRAVNIK_STATUS,ETAZNA_LASTNINA,SKUPNI_DEL_ETAZNA_LASTNINA\r\n"
+    "DELI_STAVB.1003,1003,100200000250893316,,,2,1,1993,,93.5,4,2,,,,88.1,2022-05-30T04:36:33,,-1,,2,2\r\n"
+    "DELI_STAVB.1004,1004,100200000250893316,,,28,0,,,37.8,4,1,,,,37.8,2022-05-30T04:36:33,,-1,,2,2\r\n"
+    "DELI_STAVB.1005,,100200000250893316,,,28,2,,2001,12,4,3,,,,12,2023-03-01T08:52:32,,-1,,2,2\r\n"
+)
 
 
 def dbf(rows: list[dict[str, str] | None]) -> bytes:
@@ -56,6 +68,7 @@ def archive_bytes(rows, points) -> bytes:
     with zipfile.ZipFile(outer, "w") as z:
         z.writestr("KN_SLO_STAVBE_SLO_stavbe_20261101.zip", inner.getvalue())
         z.writestr("sifranti/TIPI_STAVB.CSV", "id,sifra,nazivSl\n1,1,samostoječa stavba\n")
+        z.writestr("KN_SLO_STAVBE_SLO_deli_stavb_20261101.csv", PARTS_CSV)
         z.writestr("KN_SLO_STAVBE_SLO_imetniki_lastnistva_20261101.csv", "owner data that must never be read\n")
     return outer.getvalue()
 
@@ -67,7 +80,7 @@ def archive(rows, points) -> zipfile.ZipFile:
 BUILDING = {"EID_STAVBA": "100200000250893316", "KO_ID": "2551.0", "ST_STAVBE": "1.0", "STEVILO_ET": "2",
             "STEVILO_ST": "4", "STEVILO_PO": "0", "TIP_STAVBE": "1", "NOSILNA_KO": "5", "STATUS_VPI": "4",
             "LETO_IZGRA": "2024.0", "BRUTO_TLOR": "************", "EID_OBCINA": "110200000110277170",
-            "DATUM_SYS": "20250717"}
+            "DATUM_SYS": "20250717", "LETO_OBNOV": "****", "LETO_OBNO0": "2017"}
 
 
 def test_dbf_and_points_stream_in_file_order():
@@ -79,7 +92,22 @@ def test_dbf_and_points_stream_in_file_order():
 def test_building_rows_parse_numbers_overflow_and_geometry():
     rows = list(building_rows(archive([BUILDING], [(437356.56, 41931.08)]), date(2026, 11, 1)))
     assert rows == [("100200000250893316", 2551, 1, 2024, 2, 4, 0, 1, 5, 4, None, "110200000110277170",
-                     "2025-07-17", "SRID=3794;POINT(437356.56 41931.08)", date(2026, 11, 1))]
+                     "2025-07-17", "SRID=3794;POINT(437356.56 41931.08)", date(2026, 11, 1), None, 2017)]
+
+
+def test_part_rows_read_only_the_parts_table():
+    rows = list(part_rows(archive([BUILDING], [None]), date(2026, 11, 1)))
+    assert rows == [
+        ("1003", "100200000250893316", 2, 2, True, None, 1993, 93.5, 88.1, "2022-05-30", date(2026, 11, 1)),
+        ("1004", "100200000250893316", 1, 28, None, None, None, 37.8, 37.8, "2022-05-30", date(2026, 11, 1)),
+    ]  # the third row has no EID and is skipped; DVIGALO 0 is "unknown"
+
+
+def test_load_building_parts_skips_an_already_loaded_snapshot(tmp_path: Path):
+    connection = MagicMock()
+    connection.execute.return_value.fetchone.return_value = (date(2026, 11, 1),)
+    assert load_building_parts(connection, tmp_path / "KN_SLO_STAVBE_SLO_20261101.zip") == 0
+    connection.transaction.assert_not_called()
 
 
 def test_building_rows_skip_records_without_identity_and_keep_null_shapes():
@@ -205,8 +233,9 @@ def test_one_failing_construction_source_keeps_the_other(tmp_path: Path):
         patch("real_estate_etl.construction.sync_permits", side_effect=httpx.ConnectError("down")),
         patch("real_estate_etl.construction.download_buildings", return_value=tmp_path / "b.zip"),
         patch("real_estate_etl.construction.load_buildings", return_value=12),
+        patch("real_estate_etl.construction.load_building_parts", return_value=30),
     ):
         report = sync_construction(connection, tmp_path, client=MagicMock())
-    assert report.counts == {"gurs_buildings": 12}
-    assert report.status() == {"gurs_buildings": "ok", "surs_permits": "ConnectError: down"}
+    assert report.counts == {"gurs_buildings": 12, "gurs_building_parts": 30}
+    assert report.status() == {"gurs_buildings": "ok", "gurs_building_parts": "ok", "surs_permits": "ConnectError: down"}
     connection.rollback.assert_called_once()

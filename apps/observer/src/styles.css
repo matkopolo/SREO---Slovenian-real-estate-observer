@@ -341,6 +341,14 @@ th[scope="row"] { text-align: left; }
 .ramp-keys i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid var(--line); }
 .ramp-keys .pooled-key { opacity: .55; }
 .strip-note { margin: 0; flex: 1 1 240px; min-width: 0; font-size: 0.75rem; }
+/* The flood overlay switch and its keys share one row of the strip. */
+.strip-floods { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 0.75rem; }
+.strip-floods > label { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; white-space: nowrap; cursor: pointer; }
+.strip-floods input { margin: 0; accent-color: var(--accent); }
+.strip-floods .flood-keys { display: flex; flex-wrap: wrap; gap: 2px 10px; margin: 0; }
+.strip-floods .strip-note { flex: 0 1 auto; }
+/* The swatches at the map's fill opacity, so the legend shows the blues as they are drawn. */
+.strip-floods .flood-swatch { opacity: 0.55; border-color: rgba(28, 31, 36, 0.35); }
 /* The value check's map legend: the comparables, the property's ring and the search circle. */
 .comparables-strip .ramp-keys { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .comparables-strip .key-dot { border-radius: 50%; background: var(--c-price); border-color: #ffffff; }
@@ -375,6 +383,8 @@ th[scope="row"] { text-align: left; }
   .map-chip { position: static; margin: 0; justify-self: stretch; max-width: none; }
   /* The strip sits under the map canvas (two rows are fine) and the explanation opens in place. */
   .map-strip { position: static; min-height: 0; padding: 4px 2px; border-top: 0; background: transparent; }
+  /* On a phone the flood switch and its keys take the first row under the map, so the blue is explained at once. */
+  .strip-floods { flex: 1 0 100%; order: -1; }
   .strip-layer { flex: 1 1 200px; }
   .strip-help { position: static; max-width: none; flex: 1 0 100%; }
 }
