@@ -149,12 +149,14 @@ export function TimeView({ cutoff }: { cutoff?: string }) {
           { name: t("Nominalno"), className: "s1", points: nominal },
           { name: t("V cenah {year}", { year: THIS_YEAR }), className: "s2", points: real },
         ]}/></section>
-      <section className="card index-card" aria-labelledby="index-title"><h2 id="index-title">{indexTitle}</h2>
-        <div className="segmented small" role="group" aria-label={t("Vrsta nepremičnine za indekse")}>
-          {INDEX_GROUPS.map((item) => <button key={item.id} type="button" aria-pressed={indexGroup === item.id}
-            onClick={() => setIndexGroup(item.id)}>{item.label}</button>)}
-        </div>
-        <p className="muted">{bases ? t("Prvo leto serije = 100 ({bases}).", { bases }) : t("Prvo leto serije = 100.")} {t("Indeksi upoštevajo kakovost (modelska ocena), zato se lahko razlikujejo od median.")}
+      <section className="card index-card" aria-labelledby="index-title">
+        {/* The title never changes; the type is a compact choice beside it (six options would wrap as pills in a card this narrow). */}
+        <div className="card-head"><h2 id="index-title">{t("Indeksi cen in najemnin")}</h2>
+          <label className="card-select"><span className="sr-only">{t("Vrsta nepremičnine za indekse")}</span>
+            <select value={indexGroup} onChange={(event) => setIndexGroup(event.target.value as IndexGroup)}>
+              {INDEX_GROUPS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select></label></div>
+        <p className="muted"><strong>{groupDefinition.label}</strong> · {bases ? t("Prvo leto serije = 100 ({bases}).", { bases }) : t("Prvo leto serije = 100.")} {t("Indeksi upoštevajo kakovost (modelska ocena), zato se lahko razlikujejo od median.")}
           {indexGroup === "land" ? ` ${t("Za zemljišča indeksa najemnin ni.")}` : indexGroup === "room" ? ` ${t("Za sobe se objavljajo samo najemnine.")}` : ""}</p>
         {indexLoad.error ? <LoadFailed retry={indexLoad.retry}>{t("Indeksov za {noun} ni bilo mogoče naložiti.", { noun })}</LoadFailed> // i18n-ignore (code, not text)
           : !indexLoad.data ? <p className="muted" role="status">{t("Nalagam indekse …")}</p> // i18n-ignore (code, not text)
