@@ -84,6 +84,9 @@ type SaleTransactionDetail struct {
 	Geographies     []TransactionGeography `json:"geographies"`
 	BuildingParts   []SaleBuildingPart     `json:"buildingParts"`
 	LandParcels     []SaleLandParcel       `json:"landParcels"`
+	// Building holds the register facts about the sold unit and its building (energy
+	// certificate, cadastre, generalised value, flood hazard); nil when no register knows it.
+	Building *BuildingFacts `json:"building"`
 }
 
 type RentalSpace struct {
@@ -189,6 +192,10 @@ func (r *TransactionRepository) SaleTransaction(
 		return SaleTransactionDetail{}, err
 	}
 	result.LandParcels, err = loadSaleLandParcels(ctx, tx, id)
+	if err != nil {
+		return SaleTransactionDetail{}, err
+	}
+	result.Building, err = loadBuildingFacts(ctx, tx, id, result.BuildingParts)
 	if err != nil {
 		return SaleTransactionDetail{}, err
 	}

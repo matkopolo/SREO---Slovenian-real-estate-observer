@@ -46,6 +46,7 @@ type Dependencies struct {
 	Construction  construction.Store
 	Demography    demography.Store
 	Recent        analytics.RecentStore
+	Hazards       analytics.HazardStore
 	// Metrics receives the request metrics and is served at GET /metrics (outside /api/, so the
 	// frontend's proxy never exposes it).
 	Metrics *metrics.Registry
@@ -78,6 +79,7 @@ type server struct {
 	construction       construction.Store
 	demography         demography.Store
 	recent             analytics.RecentStore
+	hazards            analytics.HazardStore
 	environment        string
 	applicationName    string
 	applicationBuild   string
@@ -115,6 +117,7 @@ func New(dependencies Dependencies) (http.Handler, error) {
 		construction:       dependencies.Construction,
 		demography:         dependencies.Demography,
 		recent:             dependencies.Recent,
+		hazards:            dependencies.Hazards,
 		environment:        dependencies.Environment,
 		applicationName:    dependencies.ApplicationName,
 		applicationBuild:   dependencies.ApplicationBuild,

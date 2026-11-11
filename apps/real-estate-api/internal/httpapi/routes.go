@@ -22,6 +22,7 @@ func (s *server) routes() *http.ServeMux {
 	router.HandleFunc("GET /api/v1/construction/summary", contentCached(publicCacheControl, s.constructionSummary))
 	router.HandleFunc("GET /api/v1/construction/map", contentCached(publicCacheControl, s.constructionMap))
 	router.HandleFunc("GET /api/v1/construction/buildings/{eid}", contentCached(publicCacheControl, s.constructionBuilding))
+	router.HandleFunc("GET /api/v1/hazards/floods", contentCached(publicCacheControl, s.floodZones))
 	router.HandleFunc("GET /api/v1/sales/statistics/resales", s.releaseCached(s.resaleSummary))
 	router.HandleFunc("GET /api/v1/sales/transactions/{id}/history", s.releaseCached(s.propertyHistory))
 	router.HandleFunc("GET /api/v1/geographies", contentCached(publicCacheControl, s.listGeographies))

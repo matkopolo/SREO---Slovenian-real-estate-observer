@@ -148,7 +148,17 @@ func (store fakeDistributions) RentalDistribution(
 }
 
 func (store fakeTransactions) SaleTransaction(context.Context, int64) (analytics.SaleTransactionDetail, error) {
-	return analytics.SaleTransactionDetail{TransactionID: 1, PropertyGroup: "apartment"}, store.err
+	// Every register block is set, so the contract test validates each of their schemas.
+	class, hazard, value, packageValue := "C", "Pm", 120900.0, 127700.0
+	return analytics.SaleTransactionDetail{TransactionID: 1, PropertyGroup: "apartment", Building: &analytics.BuildingFacts{
+		EnergyCertificate: &analytics.EnergyCertificate{ID: "2025-1", Scope: "unit", Type: "computed", Class: &class,
+			IssuedOn: "2025-11-13", SourceDate: "2026-10-21"},
+		BuildingEnergyClasses: []string{"B1", "C"}, BuildingCertificates: 2,
+		Cadastre: &analytics.CadastreFacts{BuildingEID: "1002", UnitKnown: true, SourceDate: "2026-11-01"},
+		GeneralisedValue: &analytics.GeneralisedValue{Value: &value, Model: "STA", PackageValue: &packageValue, PackageParts: 2,
+			ValuationDate: "2025-01-01", SourceDate: "2026-11-07"},
+		Flood: &analytics.FloodHazard{HazardClass: &hazard, Studied: true, SourceDate: "2026-11-05"},
+	}}, store.err
 }
 
 func (store fakeTransactions) RentalTransaction(context.Context, int64) (analytics.RentalTransactionDetail, error) {
@@ -367,6 +377,7 @@ func testDependencies() Dependencies {
 		Construction:     fakeConstruction{},
 		Demography:       fakeDemography{},
 		Recent:           fakeRecent{},
+		Hazards:          fakeHazards{},
 		ApplicationName:  "test-api",
 		ApplicationBuild: "test",
 		Environment:      "test",
@@ -391,4 +402,12 @@ func newTestHandler(databaseError error, store fakeGeographies) http.Handler {
 		d.Database = fakeDatabase{err: databaseError}
 		d.Geographies = store
 	})
+}
+
+type fakeHazards struct{ err error }
+
+func (store fakeHazards) FloodZones(context.Context, [4]float64, float64) ([]analytics.FloodZone, bool, error) {
+	class := "Pm"
+	return []analytics.FloodZone{{ID: 1, Kind: "zone", HazardClass: &class,
+		Geometry: []byte(`{"type":"Polygon","coordinates":[[[14.5,46.0],[14.6,46.0],[14.6,46.1],[14.5,46.0]]]}`)}}, false, store.err
 }
