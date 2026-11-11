@@ -499,6 +499,79 @@ Kataster nepremičnin (stavbe) national snapshot, replaced as a whole by
 published with the archive. Primary key `(codebook, code)`; `codebook` is one of
 `building_type`, `load_bearing_structure`, `registration_status`.
 
+### Building registers (migration 049)
+
+Registers that join ETN sales by the cadastral key (`cadastral_municipality_code`,
+`building_number`, `building_part_number` of `building_parts`, cast to integers). None
+of them carries owner or party data; the owner, right and person files of the GURS
+archives are never opened (`registers.py`, `construction.py`). All are replaced as a
+whole (generalised values per municipality) by `sync-registers` / `sync-construction`
+and read by the sale detail endpoint
+(`building` block) and the flood overlay (`/api/v1/hazards/floods`).
+
+`analytics.energy_certificates`: the public Register energetskih izkaznic (Ministry of the
+Environment, Climate and Energy; ZURE Art. 32), one row per certificate and part of
+building (one certificate can cover several parts). Primary key
+`(certificate_id, cadastral_code, building_number, part_number)`; `part_number` 0 is a
+whole-building certificate.
+
+| Column | Type | Source field | Meaning |
+|---|---|---|---|
+| `certificate_id` | text | `ID energetske izkaznice` | Certificate number |
+| `issued_on`, `valid_until` | date | `Datum izdelave`, `Velja do` | Issue date; validity (ten years) |
+| `cadastral_code`, `building_number`, `part_number` | integer | `Šifra KO`, `Številka stavbe`, `Številka dela stavbe` | Cadastral key |
+| `certificate_type` | text | `Tip izkaznice` | `computed` (računska) or `measured` (merjena) |
+| `energy_class` | text, null | `Energijski razred` | A1 … G; measured certificates carry none |
+| `heating_demand`, `delivered_energy`, `total_energy`, `electricity`, `primary_energy`, `co2` | numeric, null | | Per m² and year for computed certificates, absolute per year for measured ones |
+| `conditioned_area` | numeric, null | `Kondicionirana površina stavbe` | m² |
+| `building_use` | text, null | `EPBD` | Building category (STANOVANJE, HISA, BLOKI, …) |
+| `source_date` | date | register page | "Stanje na dan" of the export |
+
+`analytics.cadastre_building_parts`: parts of buildings (deli stavb) from the same GURS
+Kataster nepremičnin snapshot as `cadastre_buildings`, which gained `facade_renovated`
+and `roof_renovated` (`LETO_OBNOVE_FASADE`, `LETO_OBNOVE_STREHE`).
+
+| Column | Type | Source field | Meaning |
+|---|---|---|---|
+| `eid` | text, PK | `EID_DEL_STAVBE` | Part identifier |
+| `building_eid` | text | `EID_STAVBA` | `cadastre_buildings.eid` |
+| `part_number` | integer | `ST_DELA_STAVBE` | Part number; with the building's key it matches ETN |
+| `actual_use` | integer, null | `VRSTA_DEJANSKE_RABE_DEL_ST_ID` | Code in `cadastre_codebooks` (`actual_use`) |
+| `elevator` | boolean, null | `DVIGALO` | 1 = yes, 2 = no, 0 = unknown |
+| `windows_renovated`, `installations_renovated` | integer, null | `LETO_OBNOVE_OKEN`, `LETO_OBNOVE_INSTALACIJ` | Year more than half of the element was replaced (self-reported) |
+| `area`, `usable_area` | numeric, null | `POVRSINA`, `UPORABNA_POVRSINA` | m² |
+| `record_changed_on`, `source_date` | date | `DATUM_SYS`, file name | Record change; snapshot date |
+
+`analytics.generalised_values`: the official posplošena vrednost of every part of
+building from the GURS Evidenca vrednotenja (public by ZMVN-1 Art. 44(3)), loaded per
+municipality from the JGP product "Evidenca vrednotenja za območje občine" (weekly
+exports). Only the `stavba`, `del_stavbe`, `del_stavbe_enota`, `SIF_MODEL` and
+`SIF_LEGA` tables of each archive are read.
+
+| Column | Type | Source field | Meaning |
+|---|---|---|---|
+| `part_eid` | text, PK | `EID_DEL_STAVBE` | Part identifier |
+| `building_eid`, `cadastral_code`, `building_number`, `part_number` | | `EID_STAVBA`, `KO_SIFKO`, `STEV_ST`, `STEV_DST` | Cadastral key |
+| `model` | text | `ID_MODEL` | Valuation model (STA, HIS, GAR, PPL, …); label in `register_codebooks` (`valuation_model`) |
+| `value_level` | text, null | `RAVEN` | Value level within the model, e.g. `8/21` |
+| `value` | numeric, null | `POSPLOSENA_VREDNOST` | €, for the models' market date (1 January 2025 under the 2025 Uredba); null when GURS has none |
+| `floor`, `position` | integer, null | `ST_NADSTROPJA`, `ID_LEGA` | Floor; position label in `register_codebooks` (`position`) |
+| `municipality_code` | integer | `RPE_OBCINE_SIFRA` | Municipality of the export |
+| `source_date` | date | file name | Export date |
+
+`analytics.register_codebooks (codebook, code text, label)`: labels for text-coded
+register columns.
+
+`analytics.flood_hazard_zones`: the DRSV Integralna karta razredov poplavne nevarnosti
+(IKRPN, CC BY 4.0), one row per source polygon with `hazard_class` (`Pv` velika, `Ps`
+srednja, `Pm` majhna, `Pp` preostala), `source_id`, `valid_from` (`DATP_ZAC`), `geom`
+(MultiPolygon, 3794) and `source_date` (DBF update date). The source polygons are
+raster-like fragments (median 4 m²), so `analytics.flood_hazard_areas` holds the same
+classes dissolved per class within 2 km tiles and simplified to 1.5 m for drawing.
+`analytics.flood_study_areas` are the areas with a hydrological-hydraulic model
+(`DRSV_OPKP_OBM_HHM`): outside them a missing class means "not studied", never "safe".
+The sale detail tests the building centroid (`sale_facts.location`) against the zones.
+
 ### Context series and lending rules (migration 041)
 
 `analytics.context_series`: long-format official context data used next to,
