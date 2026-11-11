@@ -44,6 +44,7 @@ from .pipeline import (
     validate_worker_count,
 )
 from .publication import maintenance_lock
+from .registers import sync_registers
 from .settings import (
     AVAILABLE_THREADS,
     DEFAULT_DATABASE_URL,
@@ -104,6 +105,10 @@ def _sync_demography(_args: argparse.Namespace, connection: psycopg.Connection) 
 
 def _sync_construction(args: argparse.Namespace, connection: psycopg.Connection) -> None:
     sync_construction(connection, args.output_dir)
+
+
+def _sync_registers(args: argparse.Namespace, connection: psycopg.Connection) -> None:
+    sync_registers(connection, args.output_dir)
 
 
 def _refresh_models(args: argparse.Namespace, connection: psycopg.Connection) -> None:
@@ -209,6 +214,9 @@ def build_parser() -> argparse.ArgumentParser:
     construction = _command(commands, "sync-construction", _sync_construction, Database.LOCKED,
                             help="Import GURS buildings and SURS permits")
     _add_output_dir(construction)
+    registers = _command(commands, "sync-registers", _sync_registers, Database.LOCKED,
+                         help="Import energy certificates, GURS generalised values and DRSV flood classes")
+    _add_output_dir(registers)
 
     models = _command(commands, "refresh-models", _refresh_models, Database.LOCKED,
                       help="Cross-fit hedonic and Isolation Forest models and refresh anomaly scores")
