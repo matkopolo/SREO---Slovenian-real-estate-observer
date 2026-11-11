@@ -5,11 +5,11 @@ import "maplibre-gl/dist/maplibre-gl.css";
 // Vite emits the worker as an asset and returns its URL (a bare specifier inside new URL() is not resolved).
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import type { FeatureCollection, Geometry } from "geojson";
-import type { Bbox, MunicipalityShape } from "../api";
+import type { Bbox, FloodZoneProperties, MunicipalityShape } from "../api";
 import { t } from "../i18n";
 import { WITHHELD } from "../metrics";
 import { circlePolygon } from "./map-geometry";
-import { marks } from "../palette";
+import { FLOOD_COLORS, marks } from "../palette";
 import { AGREEMENT_ZOOM, BUILDING_ZOOM } from "./map-zoom";
 
 /** Street basemap (OpenFreeMap "liberty", OpenStreetMap data); area colours fade as the user zooms into streets. */
@@ -38,6 +38,7 @@ const AREA_OPACITY: maplibregl.ExpressionSpecification = ["interpolate", ["linea
  * One colour scale per map: while districts or settlements are drawn, every municipality underneath is a neutral
  * grey (the colour of a withheld value, lighter), so only the sub-areas carry the ramp.
  */
+export type FloodCollection = FeatureCollection<Geometry, FloodZoneProperties>;
 const MUTED_OPACITY: maplibregl.ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], 7, 0.35, 11, 0.25, 13, 0.08];
 
 /**
@@ -45,7 +46,7 @@ const MUTED_OPACITY: maplibregl.ExpressionSpecification = ["interpolate", ["line
  * measure, buildings from street zoom and single agreements at the closest zoom. Clicks drill down.
  */
 export default function ExplorerMap({ municipalities, regions, paint, subAreas, subPaint, buildings, agreements, selected, selectedSub = null, focus, marker = null,
-  comparables = NO_COMPARABLES, highlight = null, radius = null, onArea, onSubArea, onBuilding, onAgreement, onComparable, onView }: {
+  comparables = NO_COMPARABLES, highlight = null, radius = null, floods = null, onArea, onSubArea, onBuilding, onAgreement, onComparable, onView }: {
   municipalities: MunicipalityShape[]; regions: MunicipalityShape[]; paint: Map<number, AreaPaint>; // i18n-ignore: TypeScript generics, not JSX text
   subAreas: MunicipalityShape[]; subPaint: Map<number, AreaPaint>;
   buildings: MapBuildingPoint[]; agreements: MapAgreementPoint[];
@@ -58,6 +59,8 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
   comparables?: MapComparablePoint[]; highlight?: number | null;
   /** The circle those sales were searched in. */
   radius?: MapRadius | null;
+  /** The DRSV flood hazard overlay for the view, when the visitor switched it on. */
+  floods?: FloodCollection | null;
   onArea: (id: number) => void; onSubArea: (id: number) => void; onBuilding: (key: string) => void; onAgreement: (id: number) => void;
   onComparable?: (id: number) => void;
   onView: (view: MapView) => void;
@@ -108,7 +111,7 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
           }
         }
         const empty = collection([]);
-        for (const id of ["areas", "regions", "sub", "buildings", "agreements", "radius", "comparables", "marker"]) instance.addSource(id, { type: "geojson", data: empty, promoteId: "id" });
+        for (const id of ["areas", "regions", "sub", "floods", "buildings", "agreements", "radius", "comparables", "marker"]) instance.addSource(id, { type: "geojson", data: empty, promoteId: "id" });
         // Area fills fade as the user zooms into streets, so the basemap takes over; pooled (3 or 5 years) values are drawn lighter.
         instance.addLayer({ id: "areas-fill", type: "fill", source: "areas", paint: { "fill-color": AREA_COLOR, "fill-opacity": AREA_OPACITY } });
         instance.addLayer({ id: "areas-line", type: "line", source: "areas", paint: {
@@ -125,6 +128,14 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
           "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 3, ["boolean", ["feature-state", "hover"], false], 2, 0.8] } });
         instance.addLayer({ id: "sub-label", type: "symbol", source: "sub", minzoom: 9.5, maxzoom: 14.5, layout: {
           "text-field": ["get", "name"], "text-size": 11, "text-font": ["Noto Sans Regular"] }, paint: { "text-color": "#1c1f24", "text-halo-color": "#ffffff", "text-halo-width": 1.4 } });
+        // Flood hazard (DRSV): water blues from the rent ramp, deepest for the highest class; studied areas as a dashed
+        // outline. Drawn under the basemap's labels (and under the area fills), so street names stay readable.
+        const firstLabel = (instance.getStyle().layers ?? []).find((layer) => layer.type === "symbol")?.id;
+        instance.addLayer({ id: "floods-fill", type: "fill", source: "floods", filter: ["==", ["get", "kind"], "zone"], paint: {
+          "fill-color": ["match", ["get", "hazardClass"], "Pv", FLOOD_COLORS.Pv, "Ps", FLOOD_COLORS.Ps, "Pm", FLOOD_COLORS.Pm, FLOOD_COLORS.Pp],
+          "fill-opacity": 0.55, "fill-outline-color": FLOOD_COLORS.Pv } }, firstLabel);
+        instance.addLayer({ id: "floods-study", type: "line", source: "floods", filter: ["==", ["get", "kind"], "study"], paint: {
+          "line-color": FLOOD_COLORS.Pv, "line-width": 1.2, "line-dasharray": [3, 2], "line-opacity": 0.8 } }, firstLabel);
         instance.addLayer({ id: "buildings", type: "circle", source: "buildings", minzoom: BUILDING_ZOOM, paint: {
           "circle-color": ["get", "color"], "circle-radius": ["get", "radius"], "circle-stroke-color": "#1c1f24", "circle-stroke-width": 1.4,
           "circle-opacity": ["interpolate", ["linear"], ["zoom"], BUILDING_ZOOM, 0.7, AGREEMENT_ZOOM, 0.35] } });
@@ -267,6 +278,12 @@ export default function ExplorerMap({ municipalities, regions, paint, subAreas, 
     if (!ready || !instance) return;
     (instance.getSource("radius") as GeoJSONSource).setData(collection(radius ? [{ type: "Feature", geometry: circlePolygon(radius.center, radius.meters), properties: { id: 1 } }] : []));
   }, [radius, ready]);
+
+  useEffect(() => {
+    const instance = map.current;
+    if (!ready || !instance) return;
+    (instance.getSource("floods") as GeoJSONSource).setData(floods ?? collection([]));
+  }, [floods, ready]);
 
   useEffect(() => {
     const instance = map.current;

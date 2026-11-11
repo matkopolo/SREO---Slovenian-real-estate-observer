@@ -170,4 +170,22 @@ export const explorer: Record<string, string> = {
   "Pike so podobne prodaje v okolici; kliknite piko za podrobnosti prodaje.": "Dots are similar sales nearby; click a dot for the sale's details.",
   "iskalni polmer {distance} km": "search radius {distance} km",
   "Pike so prodaje, na katerih temelji ocena. Kliknite piko za podrobnosti prodaje.": "Dots are the sales the estimate is based on; click a dot for the sale's details.",
+
+  // flood hazard overlay (MapLegend.tsx)
+  "Poplavna nevarnost (DRSV)": "Flood hazard (DRSV)",
+  "približajte do mesta": "zoom in to a town",
+  "ni na voljo": "not available",
+  "Razredi poplavne nevarnosti (DRSV)": "Flood hazard classes (DRSV)",
+  "velika: globina nad 1,5 m ob stoletnih poplavah": "high: depth over 1.5 m in a 100-year flood",
+  "srednja: globina 0,5–1,5 m ob stoletnih poplavah ali poplave vsakih 10 let": "medium: depth 0.5–1.5 m in a 100-year flood, or flooding every 10 years",
+  "majhna: globina do 0,5 m ob stoletnih poplavah": "low: depth up to 0.5 m in a 100-year flood",
+  "preostala: med stoletnimi in petstoletnimi poplavami": "residual: between the 100-year and 500-year floods",
+  "črtkano: območje s poplavno študijo; zunaj njega razredi niso določeni": "dashed: area with a flood study; outside it no classes are set",
+  "Pv velika": "Pv high",
+  "Ps srednja": "Ps medium",
+  "Pm majhna": "Pm low",
+  "Pp preostala": "Pp residual",
+  "preučeno območje": "studied area",
+  "Pv: globina nad 1,5 m ob stoletnih poplavah; Ps: 0,5–1,5 m ali poplave vsakih 10 let; Pm: do 0,5 m; Pp: med stoletnimi in petstoletnimi poplavami. Črtkano: poplavno preučeno območje; zunaj njega razredi niso določeni.": "Pv: depth over 1.5 m in a 100-year flood; Ps: 0.5–1.5 m or flooding every 10 years; Pm: up to 0.5 m; Pp: between the 100-year and 500-year floods. Dashed: area with a flood study; outside it no classes are set.",
+  "prikaz je okrnjen, približajte": "not everything is drawn; zoom in",
 };

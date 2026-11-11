@@ -5,6 +5,7 @@ import {
 } from "../api";
 import { addressLabel, AreaSearch } from "./AreaSearch";
 import { benchmarkPlace, chooseBenchmark } from "./TransactionDetails";
+import { BuildingFacts } from "./BuildingFacts";
 import { RangeBar } from "./charts";
 import { dateCompact as date, decimal1, euro, integer, median, percent, sqm, upTo1 } from "../format";
 import { useLoad } from "../hooks/useLoad";
@@ -302,6 +303,7 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
 
   const context = settled(evidence?.context);
   const history = settled(evidence?.history);
+  const registers = settled(evidence?.detail)?.building ?? null;
   const market = context?.currentMarketEstimate ?? null;
   const items = index.data ?? (index.error ? [] : undefined);
   const latest = items ? items.filter((item) => item.isPublishable).sort((a, b) => a.period.localeCompare(b.period)).at(-1) : undefined;
@@ -450,6 +452,8 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
         : asksCondition ? t("Ocene ne poznajo nadstropja, razgleda in opreme vaše nepremičnine; slabše stanje označite zgoraj.")
         : t("Ocene ne poznajo nadstropja, razgleda in opreme vaše nepremičnine.")}</p>
     </section>
+
+    {registers && <div className="module open value-registers"><BuildingFacts facts={registers} heading="h2" title={t("Vaša nepremičnina v uradnih registrih")}/></div>}
 
     {events.length > 0 && <section className="module open">
       <h2>{t("Druge evidentirane prodaje te enote")}</h2>

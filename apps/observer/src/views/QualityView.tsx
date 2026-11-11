@@ -48,7 +48,8 @@ export function QualityView({ cutoff }: { cutoff?: string }) {
           {" "}{t("Preizkus bomo ponovili, ko bodo na voljo podatki za 2027–2030.")}</p></section>
       <section className="card"><h2>{t("Drugi viri")}</h2>
         <p>{t("SURS: plače, prebivalstvo, selitve, umrli, popis stanovanj in gospodinjstev, inflacija.")}
-          {" "}{t("Banka Slovenije: obrestne mere in omejitve kreditiranja.")} {t("ECB: EURIBOR.")} {t("GURS kataster stavb: nove stavbe.")}
+          {" "}{t("Banka Slovenije: obrestne mere in omejitve kreditiranja.")} {t("ECB: EURIBOR.")} {t("GURS kataster nepremičnin: nove stavbe, prenove in dvigala.")}
+          {" "}{t("GURS evidenca vrednotenja: posplošene vrednosti.")} {t("Register energetskih izkaznic (MOPE): energijski razredi.")} {t("DRSV: razredi poplavne nevarnosti.")}
           {" "}{t("Vrednosti so obdelane in informativne; niso uradna cenitev ali ponudba kredita.")}</p></section>
     </div>
     <details className="disclosure analysts">

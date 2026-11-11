@@ -62,3 +62,23 @@
 .td-benchmarks li strong { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; font-weight: 600; }
 .td-register-facts { margin-top: 4px; }
 .td-register-facts dd { font-size: 0.8125rem; font-weight: 500; }
+
+/* Register facts about the building and the unit: one column, each value with its muted note under it. */
+.building-facts { margin-top: 16px; }
+.building-facts h2, .building-facts h3 { margin: 0 0 8px; }
+.building-facts-rows.facts { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.building-facts-rows dd { font-size: 0.9375rem; }
+.building-facts-rows dd small { display: block; margin-top: 2px; font-size: 0.75rem; font-weight: 400; line-height: 1.4; }
+.building-facts .energy-kind { font-weight: 500; }
+.building-facts .td-note { margin: 10px 0 0; font-size: 0.75rem; }
+/* The EU label scale: a chip per class, dark green to red, with white or ink text for contrast. */
+.energy-class { display: inline-block; min-width: 2.2em; padding: 1px 6px; border-radius: 4px; text-align: center; font-weight: 700; font-size: 0.875rem; color: #fff; background: #6b7280; vertical-align: baseline; }
+.energy-class[data-class="A1"] { background: #1f6b3a; }
+.energy-class[data-class="A2"] { background: #26753c; }
+.energy-class[data-class="B1"] { background: #5ea33b; color: #1c1f24; }
+.energy-class[data-class="B2"] { background: #8fbb34; color: #1c1f24; }
+.energy-class[data-class="C"] { background: #d4c21e; color: #1c1f24; }
+.energy-class[data-class="D"] { background: #e9a21b; color: #1c1f24; }
+.energy-class[data-class="E"] { background: #e3761c; color: #1c1f24; }
+.energy-class[data-class="F"] { background: #c23f1a; }
+.energy-class[data-class="G"] { background: #b3261e; }

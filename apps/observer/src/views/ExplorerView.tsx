@@ -1,5 +1,5 @@
 import { lazy, Suspense, useMemo, useRef, useState } from "react";
-import { bboxOf, loadBuilding, loadNewBuilding, type Bbox, type MarketComparable, type Segment } from "../api";
+import { bboxOf, loadBuilding, loadFloodZones, loadNewBuilding, type Bbox, type MarketComparable, type Segment } from "../api";
 import { AreaPanel } from "../components/AreaPanel";
 import { SLOVENIA, type Scope } from "../components/AreaModules";
 import { addressLabel } from "../components/AreaSearch";
@@ -7,8 +7,8 @@ import { ErrorBoundary } from "../components/ErrorBoundary";
 import { LoadFailed } from "../components/LoadState";
 import { ValueCheck, type ShownComparables } from "../components/ValueCheck";
 import { radiusBbox } from "../components/map-geometry";
-import { BUILDING_ZOOM } from "../components/map-zoom";
 import type { MapComparablePoint, MapRadius, MapView } from "../components/ExplorerMap";
+import { BUILDING_ZOOM, FLOOD_ZOOM } from "../components/map-zoom";
 import { dateCompact, sqm } from "../format";
 import { ExplorerBar } from "../explorer/ExplorerBar";
 import { ComparablesLegend, MapLegend, type MapLevel, type Scale } from "../explorer/MapLegend";
@@ -30,6 +30,16 @@ const ExplorerMap = lazy(() => import("../components/ExplorerMap"));
 const REGION_FORMS = forms(["regija", "regiji", "regije", "regij"], ["region", "regions"]); // i18n-ignore (plural forms, both languages)
 const DISTRICT_FORMS = forms(["četrtna skupnost", "četrtni skupnosti", "četrtne skupnosti", "četrtnih skupnosti"], ["city district", "city districts"]); // i18n-ignore (plural forms, both languages)
 const NO_LISTS: GeographyLists = { regions: [], municipalities: [], districts: [] };
+/** The widest view (degrees) the flood endpoint serves (0.26 after snapping); a wider view is cut to its centre. */
+const FLOOD_VIEW = 0.24;
+/** The box grown to the enclosing cells of a grid (degrees), so nearby views share one answer. */
+const snapBbox = ([west, south, east, north]: Bbox, cell: number): Bbox =>
+  [Math.floor(west / cell) * cell, Math.floor(south / cell) * cell, Math.ceil(east / cell) * cell, Math.ceil(north / cell) * cell];
+const clampBbox = ([west, south, east, north]: Bbox, size: number): Bbox => {
+  const midX = (west + east) / 2, midY = (south + north) / 2;
+  const halfX = Math.min(east - west, size) / 2, halfY = Math.min(north - south, size) / 2;
+  return [midX - halfX, midY - halfY, midX + halfX, midY + halfY];
+};
 
 interface RankItem { id: number; name: string; value: number | null; sample: number; format: (value: number) => string; label: string; pooled?: number; populationSample?: boolean; unit?: Forms }
 
@@ -116,6 +126,15 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
   const agreementDots = useMemo(() => agreementPoints(agreements, newBuildings, { ramp: buildingScale.ramp, rent }), [agreements, buildingScale, newBuildings, rent]);
 
   const zoom = view?.zoom ?? 7;
+  // The flood hazard overlay (DRSV) is drawn on request from town zoom; the API serves views up to about one municipality.
+  const [floodsOn, setFloodsOn] = useState(false);
+  // The view is padded and snapped to a 0.01° grid, so a small pan reuses the answer; the previous answer stays while
+  // the next loads, so the overlay never blinks.
+  const floodBox = useMemo<Bbox | null>(() => view && view.zoom >= FLOOD_ZOOM ? snapBbox(clampBbox(view.bbox, FLOOD_VIEW), 0.01) : null, [view]);
+  const floodClamped = !!view && view.zoom >= FLOOD_ZOOM && (view.bbox[2] - view.bbox[0] > FLOOD_VIEW || view.bbox[3] - view.bbox[1] > FLOOD_VIEW);
+  const floodDetail = zoom >= 15.5 ? "high" : zoom >= 14 ? "medium" : "low";
+  const floods = useLoad(floodsOn && floodBox ? `floods|${floodBox.join(",")}|${floodDetail}` : null,
+    (signal) => loadFloodZones(floodBox!, floodDetail, signal), { keepPrevious: true });
   const mapLevel: MapLevel = zoom < REGION_ZOOM && definition.regional ? "statistical_region" : zoom < FINE_ZOOM || !FINE_LAYERS.includes(layer) ? "municipality" : "fine";
   const streetLevel = zoom >= BUILDING_ZOOM;
 
@@ -251,7 +270,7 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
             subAreas={comparablesShown ? [] : mapLevel === "fine" && fine.shapes.length ? fine.shapes : sub?.shapes ?? []} subPaint={mapLevel === "fine" && fine.shapes.length ? fineAreaPaint : subPaint}
             buildings={comparablesShown ? [] : buildingDots} agreements={comparablesShown ? [] : agreementDots} selected={municipalityId ?? null}
             selectedSub={scope.level === "city_district" ? scope.id ?? null : (unit?.level === "settlement" ? unit.id : null)} focus={focus} marker={marker}
-            comparables={comparableDots} highlight={highlight} radius={radius}
+            comparables={comparableDots} highlight={highlight} radius={radius} floods={floodsOn && floodBox ? floods.data?.features ?? null : null}
             onComparable={(id) => { const item = comparables?.comparables.find((entry) => entry.transactionId === id); if (item) openComparable(item); }}
             onArea={openArea} onSubArea={openArea}
             onBuilding={(key) => { const [ko, ...rest] = key.split("-"); navigate({ building: { ko: Number(ko), st: rest.join("-") }, selected: undefined }); }}
@@ -270,6 +289,7 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
           scales={{ municipal: municipalScale, region: regionScale, fine: fineScale, buildings: buildingScale }}
           pooled={{ municipal: shown.some((item) => item.pooled), fine: fine.values.some((item) => item.pooled) }} fineShown={fine.shapes.length > 0}
           sub={sub && municipalityId ? { level: sub.level, municipality: names.get(municipalityId) ?? "", scale: subScale } : undefined}
+          floods={{ on: floodsOn, available: floodBox != null, loading: floods.loading, failed: !!floods.error && !floods.data, truncated: !!floods.data?.truncated || floodClamped, onToggle: () => setFloodsOn(!floodsOn) }}
           onLayer={(next) => navigate({ layer: next }, true)}/>}
       </div>
     </div>
