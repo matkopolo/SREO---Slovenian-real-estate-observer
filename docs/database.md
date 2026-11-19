@@ -64,8 +64,8 @@ null; analytical code never invents missing prices, rents, areas, or locations.
   house, garage, and parcel package from being counted as three transactions.
 - `land_transaction_facts` and the strict/broad/all views encode explicit land
   populations.
-- outlier evaluations, anomaly signals, near-duplicate candidates, and
-  missingness profiles retain explainable quality evidence.
+- outlier evaluations, anomaly signals and near-duplicate candidates retain
+  explainable quality evidence.
 - `sale_package_signature` and `rental_package_signature` derive deterministic
   multisets of ETN component-type codes for exact comparable-package matching;
   they do not replace or modify the raw component rows.
@@ -86,10 +86,23 @@ null; analytical code never invents missing prices, rents, areas, or locations.
 `analytical_releases` records source cutoffs, published analytical cutoffs,
 model versions, processing stages, and outcomes. `analytical_publication` is a
 singleton pointer to the active release and any pending replacement. Raw GURS
-imports commit first; facts, outlier classifications, shared analytics,
-indices, model predictions, and the release pointer then change inside one
-PostgreSQL transaction. API readers therefore retain the previous committed
-generation until all required work succeeds.
+imports and the boundary sync commit first, archive by archive; facts, outlier
+classifications, shared analytics, indices, model predictions, and the release
+pointer then change inside one PostgreSQL transaction. API readers therefore
+retain the previous committed generation until all required work succeeds.
+
+That guarantee rests on an invariant, not on the catalog: **the fact tables have
+no foreign keys to the source tables or to `geographic_units`** (migration 050
+dropped them, and `database/checks/catalog.sql` fails CI if one comes back).
+With the earlier `ON DELETE CASCADE` / `SET NULL` keys, a re-imported year or a
+replaced boundary removed or blanked published facts the moment its import
+committed, up to an hour before the new release was published. Instead,
+`refresh_sale_facts` and `refresh_rental_facts` start with `DELETE FROM` the
+whole fact table and re-insert one row per source transaction inside the release
+transaction, so no stale or orphaned fact can survive a release; the tables
+that hang off the facts (outlier evaluations, land facts, repeat-sale pairs)
+keep their cascading keys inside the analytics schema and are rebuilt by the
+same chain.
 
 Predictions are immutable per model run. `model_publications` selects the
 active sale and rental generations and `current_valuation_predictions` is the
@@ -122,7 +135,7 @@ GURS ZIP/CSV
   -> source_files + public source tables
   -> current RPE geographic_units
   -> transaction-grain facts and quality evaluations
-  -> anomaly/missingness/duplicate tables and matched-pair indices
+  -> anomaly/duplicate tables and matched-pair indices
   -> offline models, predictions, Isolation Forest scores, hedonic indices
   -> read-only API queries
 ```
@@ -144,15 +157,16 @@ deleting the database volume also deletes persisted model output, which can be
 recovered only from a database backup or by explicit model retraining.
 
 The local PostgreSQL container is tuned within its 4GB limit for full-table
-analytical rebuilds. Independent sale and rental chains run concurrently on two
-connections; shared anomaly, duplicate, missingness, and repeat-index stages run
-only after both chains succeed. Each chain is transactional, but the complete
-cross-chain refresh is not one transaction, so readers can briefly observe mixed
-generations during a scheduled rebuild. Fact-table refresh functions delete and
-repopulate their tables in a transaction (migration 040 replaced TRUNCATE), so API
-reads keep seeing the previous committed rows instead of waiting on locks. The worker prints a periodic heartbeat for long SQL stages, followed
-by the exact row count and duration. Individual `analytics.refresh_runs` stages
-also use wall-clock start timestamps.
+analytical rebuilds. The eight analytics stages (`analytics_plan.py`) run
+sequentially on one connection inside one transaction, in dependency order: sale
+facts, land facts, sale outliers, rental facts, rental outliers, anomaly
+signals, near-duplicate candidates, repeat-sale indices; model training and the
+release pointer follow in the same transaction. Fact-table refresh functions
+delete and repopulate their tables (migration 040 replaced TRUNCATE; 052 is the
+definition of record for those bodies), so API reads keep seeing the previous
+committed rows instead of waiting on locks. The worker prints a periodic
+heartbeat for long SQL stages, followed by the exact row count and duration.
+Individual `analytics.refresh_runs` stages also use wall-clock start timestamps.
 
 ## Access and integrity
 
@@ -181,7 +195,16 @@ Three roles (details in the [data dictionary](../database/documentation/data-dic
   `CREATE OR REPLACE FUNCTION` resets SECURITY DEFINER. New tables get the
   pipeline grants through default privileges.
 - `real_estate_api` only reads published data. It cannot import, migrate or
-  refresh anything.
+  refresh anything. Migration 053 adds server-side fallbacks for the limits the
+  API sets on every connection (`statement_timeout` 15 s,
+  `idle_in_transaction_session_timeout` 30 s) and revokes `CONNECT` and
+  `TEMPORARY` on the database from `PUBLIC`, so only the three roles can connect.
+
+Passwords: `PIPELINE_DATABASE_PASSWORD`, `API_DATABASE_PASSWORD` and
+`POSTGRES_PASSWORD` have development defaults in `docker-compose.yml` and are
+overridden in `.env`. The migration runner reconciles a role's password only when
+its variable is set; outside Compose an unset variable leaves the password
+unchanged. `database/checks/privileges.sql` asserts the privilege model in CI.
 
 Postgres is published on `127.0.0.1:5432` only.
 
@@ -240,11 +263,13 @@ worker, 512 MB for the Go API, and 128 MB for the nginx-served frontend. These a
 maximums, not reserved memory.
 
 Within the 4 GB database ceiling, Compose configures PostgreSQL with 1 GB
-`shared_buffers`, 64 MB per-node `work_mem`, 512 MB
-`maintenance_work_mem`, a 3 GB effective cache estimate, and up to four
-parallel workers per gather. The container has 1 GB of shared memory for parallel
-PostgreSQL operations; this is included in, not added to, its memory ceiling. These settings target the periodic offline
-analytics rebuild; PostgreSQL/PostGIS still owns all durable data.
+`shared_buffers`, 16 MB per-node `work_mem` for the API's ten connections (the
+`analytics.refresh_*` functions carry their own 64 MB `work_mem` in their
+definitions, migration 052), 512 MB `maintenance_work_mem`, a 3 GB effective
+cache estimate, up to four parallel workers per gather, and a 4 GB `max_wal_size`
+so that the 1–2 GB register rebuilds do not force checkpoints. The container has
+1 GB of shared memory for parallel PostgreSQL operations; this is included in,
+not added to, its memory ceiling. PostgreSQL/PostGIS still owns all durable data.
 
 Allocate 8–12 GB to Docker Desktop for a full model refresh alongside
 PostgreSQL and image builds. The API uses bounded SQL queries, pagination, map
@@ -265,7 +290,11 @@ later migrations silently undid.
   after the highest existing file.
 - **One session, one lock.** The runner sends one psql script that takes
   `pg_advisory_lock(724202607)`, so two runs (for example `make db-migrate` while
-  the stack starts) never interleave.
+  the stack starts) never interleave. The pipeline worker holds the same lock for
+  a whole system refresh (downloads, imports, analytics, training), so the runner
+  first polls `pg_try_advisory_lock` with a message naming the holder and gives
+  up after `MIGRATIONS_LOCK_WAIT_SECONDS` (default 3600); a deploy that starts
+  during a refresh waits for the publication instead of hanging silently.
 - **Atomic.** Each migration runs in its own transaction together with its
   `schema_migrations` row: a failing migration leaves nothing applied and nothing
   recorded. Do not write `BEGIN`/`COMMIT` in migration files.
@@ -274,21 +303,38 @@ later migrations silently undid.
   `CREATE/DROP INDEX CONCURRENTLY` on large tables (so API reads are never
   blocked), and make every statement idempotent (`IF [NOT] EXISTS`), because a
   failure can leave it partly applied. See 046.
-- **Checksums.** The ledger stores each file's SHA-256. The runner warns when an
+- **Checksums.** The ledger stores each file's SHA-256. The runner stops when an
   applied file has changed; write a new migration instead of editing one.
-- **Roles.** After the migrations, `database/roles.sql` reconciles the pipeline
-  login password (`PIPELINE_DATABASE_PASSWORD`) and refresh-function security.
-  It must stay idempotent.
+  `MIGRATIONS_ALLOW_CHANGED=1` accepts the new checksum with a warning.
+- **Invalid indexes.** After the migrations the runner fails when any index is
+  `NOT indisvalid` (a failed CONCURRENTLY build); the no-transaction migrations
+  drop such an index before rebuilding it (046, 051).
+- **Roles.** After the migrations, `database/roles.sql` reconciles the two
+  application logins (`PIPELINE_DATABASE_PASSWORD`, `API_DATABASE_PASSWORD`, each
+  only when set) and refresh-function security. It must stay idempotent.
+- **Lint and checks.** `make db-lint` (`database/lint-migrations.sh`) enforces the
+  file rules above; `make db-check` also runs `database/checks/catalog.sql`
+  (no invalid index, every cascading foreign key indexed, no `TRUNCATE` in an
+  analytics function, no foreign key on the fact tables) and
+  `database/checks/privileges.sql` against the Compose database.
 
 Run it with `make db-migrate` (`docker compose run --rm database-migrations`).
-CI applies every file with plain `psql -f` to a fresh database, and the Compose
-smoke test runs the real runner twice on a fresh volume.
+CI applies the baseline with plain `psql -f` to a fresh PostGIS database, runs the
+runner twice (the second pass must be a no-op), runs the lint and both check
+scripts, verifies that a changed migration is refused, and the Compose smoke test
+runs the real runner twice on a fresh volume.
 
 ### Dropped objects and index review
 
 Migration 046 dropped `analytics.publication_policy` (never read) and
 `sale_facts_dataset_year_idx` (no query filters `sale_facts` by `dataset_year`),
-and added `cadastre_buildings_source_date_idx` for `max(source_date)`. The
+and added `cadastre_buildings_source_date_idx` for `max(source_date)`.
+Migration 050 dropped the fact tables' foreign keys to the source tables and to
+boundaries (see [Atomic analytical publication](#atomic-analytical-publication));
+051 added `repeat_sale_pairs(previous_transaction_id)`, whose cascading key had
+cost one sequential scan of the pairs table per deleted sale fact (17.7 billion
+tuples read over two refreshes), and the three missing `(geography, contract_date)`
+indexes on `rental_facts`. The
 indexes below had zero scans after a refresh and QA cycle but are kept, because
 a query path or an import uses them, or the evidence is too short:
 `valuation_predictions_lookup_idx` (prediction lookups by transaction),
@@ -298,3 +344,21 @@ cadastral code and number), `anomaly_signals_flags_gin_idx` (`flags @>` filter i
 the anomaly list), and the `(source_file_id, source_row_number)` unique keys
 (import integrity). Re-check `pg_stat_user_indexes` after a few more refreshes
 before dropping any of them.
+
+### Follow-ups
+
+- **Non-superuser owner.** The `analytics.refresh_*` functions are SECURITY
+  DEFINER because PostgreSQL 16 `ANALYZE` needs table ownership, and every object
+  is owned by `real_estate`, the Compose superuser, so the heaviest code paths run
+  as a superuser on data the worker downloaded. Move ownership to a dedicated
+  non-superuser role (for example `real_estate_owner`) that the migration runner
+  connects as, and keep the superuser for Compose bootstrap only; `roles.sql` and
+  `045` already assume ownership is one role, so this is a role rename plus
+  `REASSIGN OWNED`.
+- **Materialised resale pairs.** `analytics.property_resale_pairs` (038/039) is a
+  view that groups and windows every `building_parts` and `land_parcels` row; the
+  resale summary filters it on non-partition columns, so each request recomputes
+  the whole view (bounded only by the 15 s statement timeout, with parallelism
+  switched off to protect `/dev/shm`). Turn it into a table filled by a
+  `refresh_property_resale_pairs()` stage of the release transaction; the view's
+  definition is the function body.

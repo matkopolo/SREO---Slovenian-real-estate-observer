@@ -1,0 +1,23 @@
+# Keeps the SHA-pinned GitHub actions and the digest-pinned base images current.
+# Python constraints and npm packages are handled by their own tooling.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directories:
+      - /apps/real-estate-api
+      - /apps/data-pipeline
+      - /apps/observer
+      - /infrastructure/docker/database
+      - /infrastructure/docker/migrations
+    schedule:
+      interval: weekly
+    groups:
+      base-images:
+        patterns: ["*"]

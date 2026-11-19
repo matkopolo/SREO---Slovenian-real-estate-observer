@@ -2,7 +2,8 @@
 # To upgrade: bump both versions together, rebuild, and run the migrations; the
 # PGDG repository drops old package versions over time, so a stale pin fails the
 # build loudly instead of silently installing something newer.
-ARG POSTGRES_IMAGE=postgres:16.15-bookworm
+# postgres:16.15-bookworm, pinned to its manifest-list digest (Dependabot keeps it current).
+ARG POSTGRES_IMAGE=postgres:16.15-bookworm@sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9
 FROM ${POSTGRES_IMAGE}
 
 ARG POSTGIS_VERSION=3.7.0+dfsg-1.pgdg12+1
