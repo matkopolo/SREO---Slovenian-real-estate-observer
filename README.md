@@ -61,6 +61,7 @@ docker compose up -d --build --wait
 |---|---|
 | `db` | PostgreSQL 16 + PostGIS on `127.0.0.1:5432`; installs the 001–025 schema baseline on a new volume |
 | `database-migrations` | One-shot: applies and records migrations 026+ on every start, then reconciles database roles |
+| `sreo-mcp` | The MCP server for agents: the API's read-only tools over the Model Context Protocol, `127.0.0.1:8090` (`MCP_PORT`) and `/mcp` through the observer; see [docs/mcp.md](docs/mcp.md) |
 | `pipeline-worker` | Downloads/imports GURS, SURS, Banka Slovenije and ECB data, refreshes analytics, trains models; runs immediately, then every 14 days (wall-clock). Connects as the least-privilege `real_estate_pipeline` role |
 | `real-estate-api` | Go API at `127.0.0.1:8080`, read-only for the public frontend, with its own read-only database role |
 | `observer` | Web frontend at `:3000` (also `:3100`): market by area, sales lists, value check, trends; Slovenian/English; nginx proxies same-origin `/api/*` to the API |
@@ -101,10 +102,53 @@ docker compose run --rm pipeline-worker refresh-models --workers 6              
 docker compose run --rm pipeline-worker sync-demography                         # refresh SURS demographics only
 docker compose run --rm pipeline-worker sync-registers --output-dir /data/raw   # energy certificates, GURS generalised values, DRSV flood classes
 docker compose up -d --build --force-recreate --no-deps observer                # rebuild only the frontend
+MCP_PORT=8091 docker compose up -d sreo-mcp                                     # MCP server on another host port
 ```
 
 The [pipeline README](apps/data-pipeline/README.md) covers scheduling, resets,
 the import CLI and model reports.
+
+## Connect an AI agent (MCP)
+
+The stack includes an MCP server, so Claude, Codex or any other MCP client can ask about the
+market with typed tools (areas, buildings, sales, statistics, trends, affordability, flood
+classes) instead of reading pages. Every answer carries the source notice. With the stack
+running (`make start`), the endpoint is `http://localhost:3000/mcp`.
+
+Claude Code:
+
+```bash
+claude mcp add --transport http sreo http://localhost:3000/mcp
+```
+
+Codex CLI (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.sreo]
+url = "http://localhost:3000/mcp"
+```
+
+Claude Desktop and other clients that start the server themselves (stdio), in their MCP
+server settings; the `docs/` mount serves the methodology and licensing documents as
+resources (replace `/path/to/real_estate` with this checkout):
+
+```json
+{
+  "mcpServers": {
+    "sreo": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "--network", "real_estate_default",
+               "-e", "SREO_API_URL=http://real-estate-api:8080",
+               "-e", "MCP_DOCS_DIR=/docs", "-v", "/path/to/real_estate/docs:/docs:ro",
+               "--entrypoint", "/usr/local/bin/sreo-mcp", "real-estate-api:development"]
+    }
+  }
+}
+```
+
+Then ask, for example, "what did flats in Ruše sell for in the last year?" or "is this
+building in a flood zone?". The tools, resources and configuration are described in
+[docs/mcp.md](docs/mcp.md).
 
 ## Checks
 
