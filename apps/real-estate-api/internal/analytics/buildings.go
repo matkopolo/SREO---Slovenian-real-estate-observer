@@ -9,8 +9,10 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// ErrBuildingNotFound means no building part is registered under the cadastral identity.
 var ErrBuildingNotFound = errors.New("building not found")
 
+// BuildingMarketSummary aggregates one market (sales or rentals) of a building.
 type BuildingMarketSummary struct {
 	TransactionCount    int64    `json:"transactionCount"`
 	RepresentativeCount int64    `json:"representativeCount"`
@@ -20,6 +22,7 @@ type BuildingMarketSummary struct {
 	LastContractDate    *string  `json:"lastContractDate"`
 }
 
+// BuildingYearPoint is one contract year of a building's market.
 type BuildingYearPoint struct {
 	Year                int      `json:"year"`
 	TransactionCount    int64    `json:"transactionCount"`
@@ -28,6 +31,7 @@ type BuildingYearPoint struct {
 	MedianAmount        *float64 `json:"medianAmount"`
 }
 
+// BuildingTransaction is one recorded agreement of a building.
 type BuildingTransaction struct {
 	TransactionID int64    `json:"transactionId"`
 	ContractDate  *string  `json:"contractDate"`
@@ -39,6 +43,7 @@ type BuildingTransaction struct {
 	Representative bool `json:"representative"`
 }
 
+// BuildingSearchResult is one building found by the address search, with its agreement counts by property group.
 type BuildingSearchResult struct {
 	CadastralMunicipalityCode int32            `json:"cadastralMunicipalityCode"`
 	BuildingNumber            string           `json:"buildingNumber"`
@@ -54,6 +59,7 @@ type BuildingSearchResult struct {
 	RentalCounts              map[string]int64 `json:"rentalCounts"`
 }
 
+// BuildingStatistics describe one building: its identity, address and both markets.
 type BuildingStatistics struct {
 	CadastralMunicipalityCode int32                 `json:"cadastralMunicipalityCode"`
 	BuildingNumber            string                `json:"buildingNumber"`
@@ -73,17 +79,20 @@ type BuildingStatistics struct {
 	RentalTransactions        []BuildingTransaction `json:"rentalTransactions"`
 }
 
+// BuildingFilter narrows the agreements of a building by property group and contract date.
 type BuildingFilter struct {
 	PropertyGroup string
 	FromDate      *time.Time
 	ToDate        *time.Time
 }
 
+// BuildingStore answers building statistics and the address search.
 type BuildingStore interface {
 	BuildingStatistics(context.Context, int32, string, BuildingFilter) (BuildingStatistics, error)
 	SearchBuildings(context.Context, string, int, BuildingFilter) (BuildingSearch, error)
 }
 
+// BuildingStatistics loads the identity, markets, histories and agreements of a building.
 func (r *BuildingRepository) BuildingStatistics(
 	ctx context.Context, cadastralCode int32, buildingNumber string,
 	filter BuildingFilter,
@@ -93,8 +102,6 @@ func (r *BuildingRepository) BuildingStatistics(
 		BuildingNumber:            buildingNumber,
 		SaleHistory:               []BuildingYearPoint{},
 		RentalHistory:             []BuildingYearPoint{},
-		SaleTransactions:          []BuildingTransaction{},
-		RentalTransactions:        []BuildingTransaction{},
 	}
 	err := r.db.QueryRow(ctx, `
 		WITH parts AS (
@@ -141,59 +148,48 @@ func (r *BuildingRepository) BuildingStatistics(
 	if err != nil {
 		return BuildingStatistics{}, err
 	}
-	rows, err := r.db.Query(ctx, `
-		SELECT transaction_id,contract_date::text,property_group,area::float8,
-		  price::float8,price_per_sqm::float8,representative_eligible
-		FROM analytics.sale_facts_strict_land
-		WHERE cadastral_municipality_code=$1 AND building_number=$2
-		  AND ($3='' OR property_group=$3)
-		  AND ($4::date IS NULL OR contract_date>=$4)
-		  AND ($5::date IS NULL OR contract_date<=$5)
-		ORDER BY contract_date DESC NULLS LAST,transaction_id`,
-		cadastralCode, buildingNumber, filter.PropertyGroup,
-		filter.FromDate, filter.ToDate)
+	result.SaleTransactions, err = r.loadBuildingTransactions(ctx, "analytics.sale_facts_strict_land",
+		"price", "price_per_sqm", cadastralCode, buildingNumber, filter)
 	if err != nil {
-		return BuildingStatistics{}, fmt.Errorf("load building sale transactions: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var item BuildingTransaction
-		if err := rows.Scan(&item.TransactionID, &item.ContractDate,
-			&item.PropertyGroup, &item.Area, &item.Amount,
-			&item.AmountPerSQM, &item.Representative); err != nil {
-			return BuildingStatistics{}, fmt.Errorf("scan building sale transaction: %w", err)
-		}
-		result.SaleTransactions = append(result.SaleTransactions, item)
-	}
-	if err := rows.Err(); err != nil {
 		return BuildingStatistics{}, err
 	}
-	rows.Close()
-	rentalRows, err := r.db.Query(ctx, `
+	result.RentalTransactions, err = r.loadBuildingTransactions(ctx, "analytics.rental_facts",
+		"monthly_rent_ex_vat", "monthly_rent_per_sqm", cadastralCode, buildingNumber, filter)
+	if err != nil {
+		return BuildingStatistics{}, err
+	}
+	return result, nil
+}
+
+// loadBuildingTransactions lists the agreements of a building in one fact table, newest first.
+func (r *BuildingRepository) loadBuildingTransactions(
+	ctx context.Context, table, amount, perSQM string, code int32, number string,
+	filter BuildingFilter,
+) ([]BuildingTransaction, error) {
+	query := fmt.Sprintf(`
 		SELECT transaction_id,contract_date::text,property_group,area::float8,
-		  monthly_rent_ex_vat::float8,monthly_rent_per_sqm::float8,representative_eligible
-		FROM analytics.rental_facts
+		  %s::float8,%s::float8,representative_eligible
+		FROM %s
 		WHERE cadastral_municipality_code=$1 AND building_number=$2
 		  AND ($3='' OR property_group=$3)
 		  AND ($4::date IS NULL OR contract_date>=$4)
 		  AND ($5::date IS NULL OR contract_date<=$5)
-		ORDER BY contract_date DESC NULLS LAST,transaction_id`,
-		cadastralCode, buildingNumber, filter.PropertyGroup,
-		filter.FromDate, filter.ToDate)
+		ORDER BY contract_date DESC NULLS LAST,transaction_id`, amount, perSQM, table)
+	rows, err := r.db.Query(ctx, query, code, number, filter.PropertyGroup, filter.FromDate, filter.ToDate)
 	if err != nil {
-		return BuildingStatistics{}, fmt.Errorf("load building rental transactions: %w", err)
+		return nil, fmt.Errorf("load building transactions: %w", err)
 	}
-	defer rentalRows.Close()
-	for rentalRows.Next() {
+	defer rows.Close()
+	items := make([]BuildingTransaction, 0)
+	for rows.Next() {
 		var item BuildingTransaction
-		if err := rentalRows.Scan(&item.TransactionID, &item.ContractDate,
-			&item.PropertyGroup, &item.Area, &item.Amount,
-			&item.AmountPerSQM, &item.Representative); err != nil {
-			return BuildingStatistics{}, fmt.Errorf("scan building rental transaction: %w", err)
+		if err := rows.Scan(&item.TransactionID, &item.ContractDate, &item.PropertyGroup, &item.Area,
+			&item.Amount, &item.AmountPerSQM, &item.Representative); err != nil {
+			return nil, fmt.Errorf("scan building transaction: %w", err)
 		}
-		result.RentalTransactions = append(result.RentalTransactions, item)
+		items = append(items, item)
 	}
-	return result, rentalRows.Err()
+	return items, rowsErr(rows, "load building transactions")
 }
 
 func (r *BuildingRepository) loadBuildingSummary(
@@ -256,5 +252,5 @@ func (r *BuildingRepository) loadBuildingHistory(
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return items, rowsErr(rows, "load building history")
 }

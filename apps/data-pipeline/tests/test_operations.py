@@ -2,7 +2,6 @@ from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
-from time import sleep
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,17 +29,36 @@ from real_estate_etl.source_sync import SourceSyncReport
 RESULT = SystemRefreshResult(RefreshSummary(0, 34, 0), {}, {}, {})
 
 
-def test_long_analytics_refresh_emits_periodic_heartbeat(caplog):
+def test_long_analytics_refresh_emits_periodic_heartbeat(caplog, monkeypatch):
+    """The progress thread logs on every interval the statement is still running.
+
+    The interval wait is replaced by a counter so the test does not depend on timing:
+    the statement "runs" until the progress thread has logged two intervals.
+    """
     caplog.set_level("INFO")
     connection = MagicMock()
     cursor = connection.cursor.return_value.__enter__.return_value
     cursor.fetchone.return_value = (456_585,)
-    cursor.execute.side_effect = lambda _statement: sleep(0.035)
+    waited = Event()
+
+    class CountingEvent(Event):
+        def __init__(self) -> None:
+            super().__init__()
+            self.waits = 0
+
+        def wait(self, timeout: float | None = None) -> bool:
+            self.waits += 1
+            if self.waits >= 3:  # two intervals were logged before the statement completes
+                waited.set()
+            return super().wait(0.001)
+
+    monkeypatch.setattr("real_estate_etl.operations.Event", CountingEvent)
+    cursor.execute.side_effect = lambda _statement: waited.wait(5)
 
     counts = _refresh_functions(
         connection,
         ("analytics.refresh_rental_facts",),
-        progress_interval_seconds=0.01,
+        progress_interval_seconds=1.0,
     )
 
     assert counts == {"analytics.refresh_rental_facts": 456_585}
@@ -138,8 +156,16 @@ def test_reset_market_data_preserves_identity_tables():
     assert "CASCADE" not in statement
 
 
-def test_refresh_system_holds_and_releases_advisory_lock(tmp_path: Path):
+def live_connection() -> MagicMock:
+    """A mocked connection that reports itself open (the lock release checks that first)."""
     connection = MagicMock()
+    connection.closed = False
+    connection.broken = False
+    return connection
+
+
+def test_refresh_system_holds_and_releases_advisory_lock(tmp_path: Path):
+    connection = live_connection()
     connection.execute.return_value.fetchone.return_value = (True,)
     expected = SystemRefreshResult(RefreshSummary(1, 2, 0), {"country": 1}, {"sale": 10}, {})
 
@@ -385,7 +411,7 @@ def test_scheduler_waits_for_the_database_instead_of_failing():
             raise psycopg.OperationalError("the database system is not yet accepting connections")
         return MagicMock()
 
-    assert _wait_for_database("postgresql://x", Event(), poll_seconds=0.01, connect=connect) is True
+    assert _wait_for_database("postgresql://x", Event(), poll_seconds=0.01, connect_to=connect) is True
     assert len(attempts) == 3
 
 
@@ -400,7 +426,7 @@ def test_scheduler_stops_waiting_for_the_database_when_asked():
         stop.set()
         raise psycopg.OperationalError("down")
 
-    assert _wait_for_database("postgresql://x", stop, poll_seconds=0.01, connect=connect) is False
+    assert _wait_for_database("postgresql://x", stop, poll_seconds=0.01, connect_to=connect) is False
 
 
 def system_refresh_patches(stack: ExitStack, **overrides) -> dict[str, MagicMock]:
@@ -506,3 +532,108 @@ def test_record_source_status_distinguishes_seeded_from_failed_sources(caplog):
     assert "loaded from the published seed: rpe_boundaries" in caplog.text
     assert "failed and kept stored values: surs_deaths" in caplog.text
     assert "rpe_boundaries, surs_deaths" not in caplog.text
+
+
+def test_scheduler_restores_signal_handlers_and_cancels_the_running_statement():
+    """SIGTERM sets the stop event, cancels the statement on the watched connection, and the
+    handlers that were active before the loop are back once it returns."""
+    import signal
+
+    previous_term = signal.getsignal(signal.SIGTERM)
+    previous_int = signal.getsignal(signal.SIGINT)
+    stop = Event()
+    cancelled = Event()
+    connection = MagicMock()
+    connection.cancel_safe.side_effect = cancelled.set
+
+    def refresh(conn, **_kwargs):
+        signal.raise_signal(signal.SIGTERM)  # delivered to this (main) thread while the "stage" runs
+        assert cancelled.wait(5)
+        raise RuntimeError("canceling statement due to user request")
+
+    with patch("real_estate_etl.operations.psycopg.connect") as connect:
+        connect.return_value.__enter__.return_value = connection
+        scheduled_refresh_loop(
+            "postgresql://example", output_dir=Path("."), workers=1, verbose=False,
+            stop_event=stop, refresh=refresh, active_release=lambda: None, poll_seconds=0.01,
+        )
+
+    assert stop.is_set()
+    connection.cancel_safe.assert_called_once()
+    assert signal.getsignal(signal.SIGTERM) is previous_term
+    assert signal.getsignal(signal.SIGINT) is previous_int
+
+
+def test_stop_handler_is_restored_even_when_the_loop_fails():
+    import signal
+
+    previous = signal.getsignal(signal.SIGTERM)
+    with pytest.raises(ValueError, match="interval_days"):
+        scheduled_refresh_loop("postgresql://example", output_dir=Path("."), workers=1, verbose=False, interval_days=0)
+    assert signal.getsignal(signal.SIGTERM) is previous
+
+
+def test_abandoned_releases_are_superseded_once_at_startup(tmp_path: Path):
+    stop = Event()
+
+    def refresh(*_args, **_kwargs):
+        stop.set()
+        return RESULT
+
+    with (
+        patch("real_estate_etl.operations.psycopg.connect", return_value=MagicMock()),
+        patch("real_estate_etl.operations.supersede_stale_releases") as supersede,
+    ):
+        scheduled_refresh_loop(
+            "postgresql://example", output_dir=tmp_path, workers=1, verbose=False,
+            stop_event=stop, refresh=refresh, active_release=lambda: None, poll_seconds=0.01,
+        )
+    supersede.assert_called_once_with("postgresql://example")
+
+
+def test_lost_database_during_a_stage_keeps_the_original_error(tmp_path: Path, monkeypatch):
+    """rollback() and fail_release() on a dead database must not replace the stage's exception."""
+    import psycopg
+
+    monkeypatch.setenv("MODEL_REFRESH_POLICY", "manual")
+    error = psycopg.OperationalError("server closed the connection unexpectedly")
+    with ExitStack() as stack:
+        mocks = system_refresh_patches(
+            stack,
+            refresh_analytics=MagicMock(side_effect=error),
+            fail_release=MagicMock(side_effect=psycopg.OperationalError("connection refused")),
+        )
+        connection = MagicMock()
+        connection.closed = False
+        connection.broken = True
+        connection.execute.return_value.fetchone.return_value = (False,)
+        with pytest.raises(psycopg.OperationalError) as raised:
+            _refresh_system_unlocked(
+                connection, output_dir=tmp_path, end_year=2026, force=False, workers=1, verbose=False,
+                database_url="postgresql://test",
+            )
+    assert raised.value is error
+    connection.rollback.assert_not_called()  # a broken connection is left alone
+    mocks["fail_release"].assert_called_once()
+
+
+def test_history_is_pruned_after_a_successful_publication(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MODEL_REFRESH_POLICY", "manual")
+    with ExitStack() as stack:
+        system_refresh_patches(stack)
+        prune = stack.enter_context(patch("real_estate_etl.operations.prune_model_history", return_value={}))
+        run_unlocked(tmp_path)
+    prune.assert_called_once()
+
+
+def test_retention_failure_does_not_fail_the_published_release(tmp_path: Path, monkeypatch, caplog):
+    monkeypatch.setenv("MODEL_REFRESH_POLICY", "manual")
+    with ExitStack() as stack:
+        mocks = system_refresh_patches(stack)
+        stack.enter_context(
+            patch("real_estate_etl.operations.prune_model_history", side_effect=RuntimeError("lock timeout"))
+        )
+        result = run_unlocked(tmp_path)
+    assert result.sources["rpe_boundaries"] == "ok"
+    mocks["fail_release"].assert_not_called()
+    assert "Retention of model and index history failed" in caplog.text

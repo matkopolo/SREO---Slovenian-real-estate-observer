@@ -9,8 +9,10 @@ import (
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
 )
 
+// ErrTransactionNotFound means no agreement has the requested id.
 var ErrTransactionNotFound = errors.New("transaction not found")
 
+// QualityDecision tells whether an agreement enters the statistics, and why not.
 type QualityDecision struct {
 	IsQualityEligible bool     `json:"isQualityEligible"`
 	IsRepresentative  bool     `json:"isRepresentative"`
@@ -18,6 +20,7 @@ type QualityDecision struct {
 	AnomalyFlags      []string `json:"anomalyFlags"`
 }
 
+// OutlierEvidence is the outlier evaluation of an agreement.
 type OutlierEvidence struct {
 	Status         string   `json:"status"`
 	Method         *string  `json:"method"`
@@ -30,12 +33,14 @@ type OutlierEvidence struct {
 	RuleVersion    string   `json:"ruleVersion"`
 }
 
+// TransactionGeography is one geographic unit an agreement lies in.
 type TransactionGeography struct {
 	ID    int64  `json:"id"`
 	Level string `json:"level"`
 	Name  string `json:"name"`
 }
 
+// SaleBuildingPart is one building part named by a sale agreement.
 type SaleBuildingPart struct {
 	ID                          int64    `json:"id"`
 	CadastralMunicipalityCode   *int32   `json:"cadastralMunicipalityCode"`
@@ -58,6 +63,7 @@ type SaleBuildingPart struct {
 	HouseNumber                 *string  `json:"houseNumber"`
 }
 
+// SaleLandParcel is one parcel named by a sale agreement.
 type SaleLandParcel struct {
 	ID                        int64    `json:"id"`
 	CadastralMunicipalityCode *int32   `json:"cadastralMunicipalityCode"`
@@ -68,6 +74,7 @@ type SaleLandParcel struct {
 	ContractualPrice          *float64 `json:"contractualPrice"`
 }
 
+// SaleTransactionDetail is one sale agreement with its parts, parcels and quality evidence.
 type SaleTransactionDetail struct {
 	TransactionID   int64                  `json:"transactionId"`
 	ContractDate    *string                `json:"contractDate"`
@@ -89,6 +96,7 @@ type SaleTransactionDetail struct {
 	Building *BuildingFacts `json:"building"`
 }
 
+// RentalSpace is one rented space named by a rental agreement.
 type RentalSpace struct {
 	ID                         int64    `json:"id"`
 	CadastralMunicipalityCode  *int32   `json:"cadastralMunicipalityCode"`
@@ -106,6 +114,7 @@ type RentalSpace struct {
 	HouseNumber                *string  `json:"houseNumber"`
 }
 
+// RentalTransactionDetail is one rental agreement with its spaces and quality evidence.
 type RentalTransactionDetail struct {
 	TransactionID          int64                  `json:"transactionId"`
 	ContractDate           *string                `json:"contractDate"`
@@ -130,12 +139,14 @@ type RentalTransactionDetail struct {
 	Spaces                 []RentalSpace          `json:"spaces"`
 }
 
+// TransactionDetailStore answers single agreements and their market context.
 type TransactionDetailStore interface {
 	SaleTransaction(context.Context, int64) (SaleTransactionDetail, error)
 	RentalTransaction(context.Context, int64) (RentalTransactionDetail, error)
 	TransactionContext(context.Context, string, int64) (TransactionContext, error)
 }
 
+// SaleTransaction loads sale agreement id in one repeatable-read transaction.
 func (r *TransactionRepository) SaleTransaction(
 	ctx context.Context, id int64,
 ) (SaleTransactionDetail, error) {
@@ -152,7 +163,7 @@ func (r *TransactionRepository) SaleTransaction(
 		SELECT f.transaction_id,f.contract_date::text,f.dataset_year,f.property_group,
 		  f.area::float8,f.price::float8,f.price_per_sqm::float8,f.price_derivation,
 		  ST_X(ST_Transform(f.location,4326)),ST_Y(ST_Transform(f.location,4326)),
-		  f.is_quality_eligible,f.representative_eligible,f.quality_reasons,
+		  f.is_quality_eligible,f.representative_eligible,coalesce(f.quality_reasons,ARRAY[]::text[]),
 		  coalesce(signal.flags,ARRAY[]::text[]),
 		  e.status,e.method,e.cohort_level,e.cohort_size,e.cohort_median::float8,
 		  e.lower_bound::float8,e.upper_bound::float8,e.modified_z_score::float8,
@@ -182,9 +193,7 @@ func (r *TransactionRepository) SaleTransaction(
 		outlier.RuleVersion = *outlierRuleVersion
 		result.Outlier = &outlier
 	}
-	if err := loadGeographies(ctx, tx, []any{
-		id, "analytics.sale_facts",
-	}, &result.Geographies); err != nil {
+	if err := loadGeographies(ctx, tx, "analytics.sale_facts", id, &result.Geographies); err != nil {
 		return SaleTransactionDetail{}, err
 	}
 	result.BuildingParts, err = loadSaleBuildingParts(ctx, tx, id)
@@ -202,6 +211,7 @@ func (r *TransactionRepository) SaleTransaction(
 	return result, tx.Commit(ctx)
 }
 
+// RentalTransaction loads rental agreement id in one repeatable-read transaction.
 func (r *TransactionRepository) RentalTransaction(
 	ctx context.Context, id int64,
 ) (RentalTransactionDetail, error) {
@@ -221,7 +231,7 @@ func (r *TransactionRepository) RentalTransaction(
 		  f.monthly_rent_per_sqm::float8,f.rent_derivation,f.rental_term,
 		  f.duration_months,f.operating_costs_included,f.is_market_rent,
 		  ST_X(ST_Transform(f.location,4326)),ST_Y(ST_Transform(f.location,4326)),
-		  f.is_quality_eligible,f.representative_eligible,f.quality_reasons,
+		  f.is_quality_eligible,f.representative_eligible,coalesce(f.quality_reasons,ARRAY[]::text[]),
 		  coalesce(signal.flags,ARRAY[]::text[]),
 		  e.status,e.method,e.cohort_level,e.cohort_size,e.cohort_median::float8,
 		  e.lower_bound::float8,e.upper_bound::float8,e.modified_z_score::float8,
@@ -254,9 +264,7 @@ func (r *TransactionRepository) RentalTransaction(
 		outlier.RuleVersion = *outlierRuleVersion
 		result.Outlier = &outlier
 	}
-	if err := loadGeographies(ctx, tx, []any{
-		id, "analytics.rental_facts",
-	}, &result.Geographies); err != nil {
+	if err := loadGeographies(ctx, tx, "analytics.rental_facts", id, &result.Geographies); err != nil {
 		return RentalTransactionDetail{}, err
 	}
 	result.Spaces, err = loadRentalSpaces(ctx, tx, id)
@@ -266,11 +274,11 @@ func (r *TransactionRepository) RentalTransaction(
 	return result, tx.Commit(ctx)
 }
 
+// loadGeographies fills destination with the geographic units of transaction id in the fact
+// table (a constant chosen by the caller, never request data), widest first.
 func loadGeographies(
-	ctx context.Context, tx pgx.Tx, args []any, destination *[]TransactionGeography,
+	ctx context.Context, tx pgx.Tx, table string, id int64, destination *[]TransactionGeography,
 ) error {
-	// The table name is selected internally, never from an HTTP parameter.
-	table := args[1].(string)
 	rows, err := tx.Query(ctx, fmt.Sprintf(`
 		SELECT unit.id,unit.level,unit.name
 		FROM %s fact
@@ -281,7 +289,7 @@ func loadGeographies(
 		WHERE fact.transaction_id=$1
 		ORDER BY array_position(ARRAY[
 		  'statistical_region','municipality','city_district',
-		  'local_community','settlement'],unit.level)`, table), args[0])
+		  'local_community','settlement'],unit.level)`, table), id)
 	if err != nil {
 		return fmt.Errorf("load transaction geographies: %w", err)
 	}
@@ -294,7 +302,7 @@ func loadGeographies(
 		}
 		*destination = append(*destination, item)
 	}
-	return rows.Err()
+	return rowsErr(rows, "load transaction geographies")
 }
 
 func loadSaleBuildingParts(ctx context.Context, tx pgx.Tx, id int64) ([]SaleBuildingPart, error) {
@@ -331,7 +339,7 @@ func loadSaleBuildingParts(ctx context.Context, tx pgx.Tx, id int64) ([]SaleBuil
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return items, rowsErr(rows, "load sale building parts")
 }
 
 func loadSaleLandParcels(ctx context.Context, tx pgx.Tx, id int64) ([]SaleLandParcel, error) {
@@ -361,7 +369,7 @@ func loadSaleLandParcels(ctx context.Context, tx pgx.Tx, id int64) ([]SaleLandPa
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return items, rowsErr(rows, "load sale land parcels")
 }
 
 func loadRentalSpaces(ctx context.Context, tx pgx.Tx, id int64) ([]RentalSpace, error) {
@@ -396,5 +404,5 @@ func loadRentalSpaces(ctx context.Context, tx pgx.Tx, id int64) ([]RentalSpace, 
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return items, rowsErr(rows, "load rental spaces")
 }

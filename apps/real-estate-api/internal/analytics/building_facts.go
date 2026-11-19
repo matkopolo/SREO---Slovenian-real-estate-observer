@@ -267,11 +267,11 @@ func loadGeneralisedValue(ctx context.Context, tx pgx.Tx, cadastral int32, build
 			var partValue *float64
 			err := tx.QueryRow(ctx, `SELECT value::float8 FROM analytics.generalised_values
 				WHERE cadastral_code=$1 AND building_number=$2 AND part_number=$3`, partCadastral, partBuilding, partUnit).Scan(&partValue)
-			if errors.Is(err, pgx.ErrNoRows) || partValue == nil {
-				continue
-			}
-			if err != nil {
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return nil, fmt.Errorf("load package generalised value: %w", err)
+			}
+			if partValue == nil {
+				continue
 			}
 			if value.PackageValue == nil {
 				value.PackageValue = new(float64)

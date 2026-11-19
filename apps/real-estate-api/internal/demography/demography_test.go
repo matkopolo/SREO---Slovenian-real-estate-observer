@@ -110,3 +110,22 @@ func TestRegionSumsMunicipalitiesAndKeepsRegionalDeaths(t *testing.T) {
 		t.Fatal("rates must not be summed")
 	}
 }
+
+// TestComputeKeepsArraysWhenSeriesAreMissing: the contract declares pyramid and migration as
+// arrays, so an area without migration data must still answer [] rather than null.
+func TestComputeKeepsArraysWhenSeriesAreMissing(t *testing.T) {
+	data := series(map[string]map[string]float64{"population_total": {"2026H1": 1000}})
+	profile, err := Compute(Unit{ID: 7, Level: "municipality", Name: "Test"}, data, data, data, "Slovenija")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Migration == nil || len(profile.Migration) != 0 {
+		t.Fatalf("migration=%v, want an empty list", profile.Migration)
+	}
+	if len(profile.Pyramid) != len(pyramidGroups) {
+		t.Fatalf("pyramid bars=%d, want %d", len(profile.Pyramid), len(pyramidGroups))
+	}
+	if profile.Housing != nil || profile.Releases != nil {
+		t.Fatalf("housing=%v releases=%v, want none without census data", profile.Housing, profile.Releases)
+	}
+}

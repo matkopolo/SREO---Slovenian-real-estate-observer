@@ -53,8 +53,8 @@ export function useAreaChain(g: number | undefined, lists: { data?: GeographyLis
     for (let parent = listed.parentId ? byId.get(listed.parentId) : undefined; parent && chain.length < 4; parent = parent.parentId ? byId.get(parent.parentId) : undefined) chain.push(parent);
     return { unit: listed, chain };
   }, [byId, listed]);
-  const remote = useLoad(g && settled && !listed ? `area-${g}` : null, async (signal) => {
-    const unit = await loadGeography(g!, signal);
+  const remote = useLoad(g && settled && !listed ? g : null, (id) => `area-${id}`, async (id, signal) => {
+    const unit = await loadGeography(id, signal);
     return { unit, chain: await parentsOf(unit, byId, signal) };
   });
   if (!g) return { status: "none" };

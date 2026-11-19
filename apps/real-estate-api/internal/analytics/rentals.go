@@ -8,6 +8,7 @@ import (
 
 const rentalWeakSampleThreshold = 20
 
+// RentalOverview summarises the rental agreements matching a filter.
 type RentalOverview struct {
 	TransactionCount        int64    `json:"transactionCount"`
 	EligibleCount           int64    `json:"eligibleCount"`
@@ -26,6 +27,7 @@ type RentalOverview struct {
 	SuppressionReason       *string  `json:"suppressionReason"`
 }
 
+// RentalTimeSeriesPoint is one period of the rental series, with its year-on-year comparison.
 type RentalTimeSeriesPoint struct {
 	Period                   string   `json:"period"`
 	Incomplete               bool     `json:"incomplete"`
@@ -43,6 +45,7 @@ type RentalTimeSeriesPoint struct {
 	SuppressionReason        *string  `json:"suppressionReason"`
 }
 
+// RentalOutlierRecord is one rental agreement excluded as a statistical outlier, with the evidence.
 type RentalOutlierRecord struct {
 	TransactionID     int64    `json:"transactionId"`
 	ContractDate      *string  `json:"contractDate"`
@@ -59,6 +62,7 @@ type RentalOutlierRecord struct {
 	RuleVersion       string   `json:"ruleVersion"`
 }
 
+// RentalPropertyPoint is one located rental agreement drawn on the map.
 type RentalPropertyPoint struct {
 	TransactionID             int64    `json:"transactionId"`
 	CadastralMunicipalityCode *int32   `json:"cadastralMunicipalityCode"`
@@ -73,6 +77,7 @@ type RentalPropertyPoint struct {
 	IsRepresentative          bool     `json:"isRepresentative"`
 }
 
+// RentalStatisticsStore answers the rental overview, time series, outliers and map layers.
 type RentalStatisticsStore interface {
 	RentalOverview(context.Context, StatisticsFilter) (RentalOverview, error)
 	RentalTimeSeries(context.Context, StatisticsFilter, string) ([]RentalTimeSeriesPoint, error)
@@ -81,6 +86,8 @@ type RentalStatisticsStore interface {
 	RentalPropertyPoints(context.Context, StatisticsFilter, Bounds, int) ([]RentalPropertyPoint, error)
 }
 
+// RentalClusters groups located rental agreements inside bounds on a gridSize-degree grid,
+// largest first.
 func (r *RentalStatisticsRepository) RentalClusters(
 	ctx context.Context, filter StatisticsFilter, bounds Bounds, gridSize float64,
 ) ([]Cluster, error) {
@@ -121,9 +128,10 @@ func (r *RentalStatisticsRepository) RentalClusters(
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return items, rowsErr(rows, "rental map clusters")
 }
 
+// RentalPropertyPoints lists the newest located rental agreements inside bounds, at most limit.
 func (r *RentalStatisticsRepository) RentalPropertyPoints(
 	ctx context.Context, filter StatisticsFilter, bounds Bounds, limit int,
 ) ([]RentalPropertyPoint, error) {
@@ -160,9 +168,10 @@ func (r *RentalStatisticsRepository) RentalPropertyPoints(
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return items, rowsErr(rows, "rental map points")
 }
 
+// RentalOverview summarises the rental agreements matching filter.
 func (r *RentalStatisticsRepository) RentalOverview(
 	ctx context.Context, filter StatisticsFilter,
 ) (RentalOverview, error) {
@@ -206,6 +215,8 @@ func (r *RentalStatisticsRepository) RentalOverview(
 	return result, nil
 }
 
+// RentalTimeSeries aggregates the rental agreements matching filter per interval (month,
+// quarter or year) with the comparison a year earlier.
 func (r *RentalStatisticsRepository) RentalTimeSeries(
 	ctx context.Context, filter StatisticsFilter, interval string,
 ) ([]RentalTimeSeriesPoint, error) {
@@ -272,9 +283,11 @@ func (r *RentalStatisticsRepository) RentalTimeSeries(
 			&item.IsPublishable, &item.SuppressionReason)
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return items, rowsErr(rows, "rental time-series statistics")
 }
 
+// RentalOutliers lists one page of the rental outliers matching filter, most extreme first,
+// with the total.
 func (r *RentalStatisticsRepository) RentalOutliers(
 	ctx context.Context, filter StatisticsFilter, limit, offset int,
 ) ([]RentalOutlierRecord, int64, error) {
@@ -312,5 +325,5 @@ func (r *RentalStatisticsRepository) RentalOutliers(
 		}
 		items = append(items, item)
 	}
-	return items, total, rows.Err()
+	return items, total, rowsErr(rows, "list rental outliers")
 }

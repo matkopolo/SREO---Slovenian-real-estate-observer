@@ -37,6 +37,7 @@ STALE_SLACK = timedelta(days=2)
 
 
 def utc_now() -> datetime:
+    """The current time as an aware UTC datetime (the scheduler's injectable clock)."""
     return datetime.now(UTC)
 
 
@@ -50,6 +51,9 @@ class WorkerHealth:
     refreshing: bool = False
     published_at: datetime | None = None
     last_error: str | None = None
+    #: Serialises state changes and the file write that publishes them: the heartbeat
+    #: thread and the scheduler thread both call :meth:`write`, and two interleaved
+    #: writes through one temporary name would race each other's rename.
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def healthy(self) -> bool:
@@ -60,26 +64,30 @@ class WorkerHealth:
         return self.now() - self.published_at <= self.stale_after
 
     def update(self, **changes: object) -> None:
+        """Apply ``changes`` to the state and publish the result in one locked step."""
         with self._lock:
             for name, value in changes.items():
                 setattr(self, name, value)
-        self.write()
+            self._write_locked()
 
     def write(self) -> None:
         """Write the health file while healthy; remove it while unhealthy."""
+        with self._lock:
+            self._write_locked()
+
+    def _write_locked(self) -> None:
         if self.path is None:
             return
-        with self._lock:
-            healthy = self.healthy()
-            payload = {
-                "healthy": healthy,
-                "state": "refreshing" if self.refreshing else "waiting",
-                "updated_at": self.now().isoformat(timespec="seconds"),
-                "active_release_published_at": (
-                    self.published_at.isoformat(timespec="seconds") if self.published_at else None
-                ),
-                "last_error": self.last_error,
-            }
+        healthy = self.healthy()
+        payload = {
+            "healthy": healthy,
+            "state": "refreshing" if self.refreshing else "waiting",
+            "updated_at": self.now().isoformat(timespec="seconds"),
+            "active_release_published_at": (
+                self.published_at.isoformat(timespec="seconds") if self.published_at else None
+            ),
+            "last_error": self.last_error,
+        }
         try:
             if healthy:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -95,7 +103,7 @@ class WorkerHealth:
 class HealthHeartbeat:
     """Rewrite the health file immediately and then every ``interval`` seconds."""
 
-    def __init__(self, health: WorkerHealth, interval: float = HEARTBEAT_SECONDS):
+    def __init__(self, health: WorkerHealth, interval: float = HEARTBEAT_SECONDS) -> None:
         self._health = health
         self._interval = interval
         self._stop = threading.Event()

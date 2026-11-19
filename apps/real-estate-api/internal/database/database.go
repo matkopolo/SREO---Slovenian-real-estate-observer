@@ -38,13 +38,6 @@ func BeginReadOnly(ctx context.Context, db Querier, isolation pgx.TxIsoLevel) (p
 	}
 }
 
-// SupportsConcurrency reports whether independent queries may run in parallel on db: true for
-// a pool, false for a transaction (one connection).
-func SupportsConcurrency(db Querier) bool {
-	_, ok := db.(*pgxpool.Pool)
-	return ok
-}
-
 // Options configure the main connection pool.
 type Options struct {
 	URL            string

@@ -63,7 +63,7 @@ type Vars = Record<string, string | number | null | undefined>;
  */
 export function t(text: string, vars?: Vars): string {
   const template = lookup(text);
-  return vars ? template.replace(/\{(\w+)\}/g, (match, key: string) => (key in vars ? String(vars[key] ?? "") : match)) : template;
+  return vars ? template.replace(/\{(\w+)\}/g, (match, key: string) => (Object.hasOwn(vars, key) ? String(vars[key] ?? "") : match)) : template;
 }
 
 /** Like t(), but placeholders may be React nodes (links, <strong>, <Term>): returns a fragment. */
@@ -72,7 +72,7 @@ export function tx(text: string, vars: Record<string, ReactNode>): ReactNode {
   const parts = template.split(/(\{\w+\})/g);
   return createElement(Fragment, null, ...parts.map((part, index) => {
     const match = /^\{(\w+)\}$/.exec(part);
-    return match && match[1] in vars ? createElement(Fragment, { key: index }, vars[match[1]]) : part;
+    return match && Object.hasOwn(vars, match[1]) ? createElement(Fragment, { key: index }, vars[match[1]]) : part;
   }));
 }
 

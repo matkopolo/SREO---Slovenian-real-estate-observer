@@ -14,7 +14,7 @@ function preloadApp(): Plugin {
     name: "sreo-preload-app",
     apply: "build",
     transformIndexHtml(_html, context) {
-      const bundle = context.bundle as OutputBundle | undefined;
+      const bundle: OutputBundle | undefined = context.bundle;
       if (!bundle) return [];
       const chunks = Object.values(bundle).filter((item): item is OutputChunk => item.type === "chunk");
       const app = chunks.find((chunk) => chunk.facadeModuleId?.endsWith("/src/components/App.tsx"));

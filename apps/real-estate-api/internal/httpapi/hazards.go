@@ -8,20 +8,17 @@ import (
 // municipality (0.26° on either axis).
 const maxFloodViewDegrees = 0.26
 
+// floodTolerances are the simplification tolerances (degrees) of each detail level.
+var floodTolerances = map[string]float64{"low": 0.0004, "medium": 0.00012, "high": 0.00003, "": 0.00012}
+
 // floodZones serves the DRSV flood hazard classes and studied areas inside the map's view as
 // GeoJSON, simplified by detail (low, medium, high) for the zoom they are drawn at.
 func (s *server) floodZones(w http.ResponseWriter, r *http.Request) {
-	bounds, ok := mapBounds(w, r)
+	bounds, ok := mapBounds(w, r, maxFloodViewDegrees)
 	if !ok {
 		return
 	}
-	if bounds.East-bounds.West > maxFloodViewDegrees || bounds.North-bounds.South > maxFloodViewDegrees {
-		writeError(w, r, http.StatusBadRequest, "bbox_too_large",
-			"flood zones are served for views up to about one municipality; zoom in")
-		return
-	}
-	tolerances := map[string]float64{"low": 0.0004, "medium": 0.00012, "high": 0.00003, "": 0.00012}
-	tolerance, valid := tolerances[r.URL.Query().Get("detail")]
+	tolerance, valid := floodTolerances[r.URL.Query().Get("detail")]
 	if !valid {
 		writeError(w, r, http.StatusBadRequest, "invalid_detail", "detail must be low, medium or high")
 		return

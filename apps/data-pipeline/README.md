@@ -39,9 +39,18 @@ real-estate-etl schedule --interval-days 14
 
 It runs once immediately, then every 14 days; failures retry after one hour. A
 PostgreSQL session advisory lock prevents a scheduled run, manual refresh, and
-reset from executing concurrently. On shutdown (SIGTERM) the refresh stops at the
-next stage boundary and marks its release failed instead of being killed
-mid-transaction.
+reset from executing concurrently; the lock's connection uses TCP keepalives, so a
+worker whose host vanishes releases it within minutes instead of hours. On shutdown
+(SIGTERM) the worker sets its stop flag, which the refresh honours at the next stage
+boundary, and sends a cancel request for the SQL statement the refresh is running
+(an analytics function or a COPY can run for many minutes and cannot observe the
+flag). The cancelled statement rolls the stage back, the release is marked failed,
+and the loop exits; everything committed before that stage (imported archives,
+boundaries, context sources) stays. Compose allows 30 seconds for this
+(`stop_grace_period`); a stage that does not cancel within that time is killed, and
+the next start marks the abandoned release as superseded. At start-up the scheduler
+also marks any `processing` release older than an hour as failed, so a release
+abandoned by a killed worker does not stay "in progress".
 
 Health (`--health-file`): a background heartbeat rewrites the file every minute
 while the worker is healthy, and removes it while unhealthy. Healthy means the
@@ -49,7 +58,8 @@ process is running **and** either a refresh is in progress (including the first
 import on an empty database) or a published release exists that is younger than
 `--interval-days` plus two days. A failed refresh therefore keeps the worker
 healthy while the last good release is current. `real-estate-etl healthcheck
---health-file <path>` also fails when the heartbeat is older than five minutes.
+--health-file <path>` also fails when the heartbeat is older than five minutes;
+Compose runs that command as the container's health check.
 The API does not depend on this: it reads readiness from the publication tables.
 
 Each incremental run:
@@ -78,13 +88,22 @@ Each incremental run:
 - retrains sale and rental models when an archive checksum changed, while
   unchanged current-year downloads retain the published model;
 - keeps the previous facts, outliers, indices, and model predictions visible
-  until the complete pending release commits.
+  until the complete pending release commits;
+- after the release commits, prunes model and index history: per transaction kind
+  the published model run and the newest three others stay (with their
+  predictions), per kind and method the newest index vintage and the three
+  before it stay; everything older is deleted in a separate committed step whose
+  row counts are logged. A failure there is logged and leaves the published
+  release in place.
 
 `analytics.analytical_publication` identifies the active and pending releases.
 During processing, `/api/v1/data-status` exposes both the published analytical
 cutoff and the newer GURS source cutoff. A failed refresh rolls back derived
-changes and leaves the active release untouched. Every release log line carries
-`release=<uuid>`, matching `analytics.analytical_releases.id`.
+changes and leaves the active release untouched; the stage that was running is
+recorded as a failed `analytics.refresh_runs` row (`process=release:<stage>`),
+because the run rows a stage writes inside the release transaction roll back with
+it. Every release log line carries `release=<uuid>`, matching
+`analytics.analytical_releases.id`.
 
 Before every SQL analytics function starts, the worker prints a short statement
 of what it derives and whether the operation is non-destructive. In particular,
@@ -163,9 +182,18 @@ Reset is intentionally explicit and destructive. It removes source-file
 ledger rows, imported transactions/components, analytical facts, anomaly
 signals, model runs/predictions, and index vintages. It preserves users,
 sessions, preferences, classification tables, the completed-bootstrap marker,
-and cached ZIP archives. Consequently, reset/repopulate does not retrain the
-models; run `refresh-models` explicitly afterward if valuation outputs are
-required.
+and cached ZIP archives. Because the source-file ledger is emptied, every
+archive counts as newly imported during the repopulation, so with the default
+`MODEL_REFRESH_POLICY=auto` the models are retrained as part of it; with
+`manual` they are not, and `refresh-models` must be run explicitly afterward if
+valuation outputs are required.
+
+The reset is not atomic with the repopulation: the TRUNCATE commits before the
+refresh starts, and `analytics.analytical_publication.active_release_id` keeps
+pointing at the previous release, whose facts are now empty, until the new
+release is published (20 to 50 minutes on the development machine). Readers
+see an empty but "published" dataset during that window; the health file keeps
+reporting the refresh in progress. Run it in a maintenance window.
 
 Follow model training and validation output with:
 
@@ -253,7 +281,13 @@ cd apps/data-pipeline
 ../../.venv/bin/pytest -q
 ```
 
-`pyproject.toml` is the only dependency list.
+`pyproject.toml` is the only dependency list; `constraints.txt` pins what it
+resolves to (a `pip freeze` of the dev image), so the image build and the
+host-side checks install the same versions. The Dockerfile sets
+`PIP_CONSTRAINT`, and `make pipeline-lint`/`pipeline-test` pass
+`-c constraints.txt`; refresh the file after changing `pyproject.toml` with the
+command in its header. Type checking: `mypy --ignore-missing-imports
+real_estate_etl` (settings in `pyproject.toml`) runs clean and is part of CI.
 
 Database integration tests require `TEST_DATABASE_URL` to point to a disposable
 PostGIS database with **all** `database/migrations/*.sql` files applied in order
@@ -368,6 +402,20 @@ National BUY transaction rows do not contain `RPE_OBCINE_SIFRA`. Their locations
 Historical cadastral municipality codes found in source archives are retained even when they are no longer returned by the current cadastral-municipality API endpoint.
 
 Source-system zero-date sentinels such as `00.00.0000` are stored as SQL `NULL` rather than treated as valid calendar dates.
+
+Every download is untrusted input. Server-supplied file names are reduced to one
+path component and must match the publisher's naming pattern before they are
+written under the data directory; downloads and ZIP members read into memory
+have size caps (`MAX_DOWNLOAD_BYTES`, `MAX_ZIP_MEMBER_BYTES` in `settings.py`);
+the dBASE and Shapefile readers in `shapefile.py` check every length a header
+declares against the bytes present; an archive member whose columns differ from
+the mapping (unknown or missing, except the documented optional
+`RPE_OBCINE_SIFRA`) fails the import instead of loading NULLs; numeric text is
+parsed by the small, tested helpers in `parsing.py` (Slovenian `472.179,28`
+only in that notation, GURS dot decimals, `NaN`/infinity rejected). The DRSV
+flood layers are the one source fetched over plain HTTP: the host serves no TLS
+(checked in November 2026), so those archives rely on the ZIP and Shapefile
+validation above.
 
 ## Library choices
 

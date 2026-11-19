@@ -10,8 +10,10 @@ import (
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
 )
 
+// ErrNotFound means no geographic unit has the requested id.
 var ErrNotFound = errors.New("geography not found")
 
+// Unit is one geographic unit of the RPE hierarchy with its WGS84 extent.
 type Unit struct {
 	ID            int64     `db:"id" json:"id"`
 	Level         string    `db:"level" json:"level"`
@@ -23,11 +25,13 @@ type Unit struct {
 	Bounds        []float64 `db:"bounds" json:"bounds,omitempty"`
 }
 
+// Filter narrows the listed units; empty and nil fields match everything.
 type Filter struct {
 	Level    string
 	ParentID *int64
 }
 
+// Store answers the geographic units and their outlines.
 type Store interface {
 	List(context.Context, Filter) ([]Unit, error)
 	Get(context.Context, int64) (Unit, error)
@@ -40,29 +44,34 @@ type Store interface {
 // MaxBoundaries caps one Boundaries response.
 const MaxBoundaries = 1200
 
+// Repository implements Store on a geographic_units table.
 type Repository struct {
-	pool  database.Querier
+	db    database.Querier
 	table string
 }
 
-func NewRepository(pool database.Querier) *Repository {
-	return NewRepositoryWithSchema(pool, "analytics")
+// NewRepository returns a Repository reading analytics.geographic_units through db.
+func NewRepository(db database.Querier) *Repository {
+	return NewRepositoryWithSchema(db, "analytics")
 }
 
-func NewRepositoryWithSchema(pool database.Querier, schema string) *Repository {
+// NewRepositoryWithSchema returns a Repository reading geographic_units in schema (tests).
+func NewRepositoryWithSchema(db database.Querier, schema string) *Repository {
 	return &Repository{
-		pool:  pool,
+		db:    db,
 		table: pgx.Identifier{schema, "geographic_units"}.Sanitize(),
 	}
 }
 
+// Boundary is a unit with its (simplified) outline as GeoJSON geometry.
 type Boundary struct {
 	Unit     Unit            `json:"properties"`
 	Geometry json.RawMessage `json:"geometry"`
 }
 
+// List returns the units matching filter, by level and name.
 func (r *Repository) List(ctx context.Context, filter Filter) ([]Unit, error) {
-	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
+	rows, err := r.db.Query(ctx, fmt.Sprintf(`
 		SELECT id, level, code, composite_code, name, parent_id, gurs_eid,
 		       ARRAY[ST_XMin(extent), ST_YMin(extent), ST_XMax(extent), ST_YMax(extent)]::float8[] AS bounds
 		FROM (
@@ -85,8 +94,9 @@ func (r *Repository) List(ctx context.Context, filter Filter) ([]Unit, error) {
 	return units, nil
 }
 
+// Get returns the unit with the given id.
 func (r *Repository) Get(ctx context.Context, id int64) (Unit, error) {
-	row, err := r.pool.Query(ctx, fmt.Sprintf(`
+	row, err := r.db.Query(ctx, fmt.Sprintf(`
 		SELECT id, level, code, composite_code, name, parent_id, gurs_eid,
 		       ARRAY[ST_XMin(extent), ST_YMin(extent), ST_XMax(extent), ST_YMax(extent)]::float8[] AS bounds
 		FROM (
@@ -107,9 +117,10 @@ func (r *Repository) Get(ctx context.Context, id int64) (Unit, error) {
 	return unit, nil
 }
 
+// Children returns the units directly below parentID.
 func (r *Repository) Children(ctx context.Context, parentID int64) ([]Unit, error) {
 	var exists bool
-	if err := r.pool.QueryRow(ctx,
+	if err := r.db.QueryRow(ctx,
 		fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s WHERE id=$1)", r.table), parentID,
 	).Scan(&exists); err != nil {
 		return nil, fmt.Errorf("check geography: %w", err)
@@ -128,7 +139,7 @@ func (r *Repository) Boundaries(ctx context.Context, level string, tolerance flo
 	if bbox != nil {
 		west, south, east, north = &bbox[0], &bbox[1], &bbox[2], &bbox[3]
 	}
-	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
+	rows, err := r.db.Query(ctx, fmt.Sprintf(`
 		SELECT id, level, code, composite_code, name, parent_id, gurs_eid,
 		       ARRAY[ST_XMin(geometry_wgs84), ST_YMin(geometry_wgs84), ST_XMax(geometry_wgs84), ST_YMax(geometry_wgs84)]::float8[],
 		       ST_AsGeoJSON(CASE WHEN $2::float8 > 0 THEN ST_SimplifyPreserveTopology(geometry_wgs84, $2)
@@ -154,16 +165,20 @@ func (r *Repository) Boundaries(ctx context.Context, level string, tolerance flo
 		}
 		boundaries = append(boundaries, boundary)
 	}
-	return boundaries, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list geography boundaries: %w", err)
+	}
+	return boundaries, nil
 }
 
+// Boundary returns the unit and its outline simplified by tolerance (degrees; 0 keeps it exact).
 func (r *Repository) Boundary(ctx context.Context, id int64, tolerance float64) (Boundary, error) {
 	unit, err := r.Get(ctx, id)
 	if err != nil {
 		return Boundary{}, err
 	}
 	var geometry json.RawMessage
-	err = r.pool.QueryRow(ctx, fmt.Sprintf(`
+	err = r.db.QueryRow(ctx, fmt.Sprintf(`
 		SELECT ST_AsGeoJSON(
 			CASE WHEN $2::float8 > 0
 			     THEN ST_SimplifyPreserveTopology(geometry_wgs84,$2)
@@ -179,7 +194,7 @@ func (r *Repository) Boundary(ctx context.Context, id int64, tolerance float64) 
 
 // Lineage returns the unit and its ancestors, the unit first, in one query.
 func (r *Repository) Lineage(ctx context.Context, id int64) ([]Unit, error) {
-	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
+	rows, err := r.db.Query(ctx, fmt.Sprintf(`
 		WITH RECURSIVE lineage AS (
 			SELECT id, level, code, composite_code, name, parent_id, gurs_eid, 0 AS depth FROM %[1]s WHERE id = $1
 			UNION ALL

@@ -70,6 +70,7 @@ type AgeGroup struct {
 	Earlier    *float64 `json:"earlier"`
 }
 
+// Population is the stock of an area on 1 January, by age.
 type Population struct {
 	Total            float64  `json:"total"`
 	Change5Years     *float64 `json:"change5Years"`
@@ -84,6 +85,7 @@ type Population struct {
 	EnteringThirtiesPerYear float64 `json:"enteringThirtiesPerYear"`
 }
 
+// MigrationYear is the net migration of one year.
 type MigrationYear struct {
 	Year          string   `json:"year"`
 	Net           float64  `json:"net"`
@@ -92,6 +94,7 @@ type MigrationYear struct {
 	PerThousand   *float64 `json:"perThousand"`
 }
 
+// Housing is the census dwelling stock of an area.
 type Housing struct {
 	Year               string   `json:"year"`
 	Dwellings          float64  `json:"dwellings"`
@@ -106,6 +109,7 @@ type Housing struct {
 	PersonsPerDwelling *float64 `json:"personsPerOccupiedDwelling"`
 }
 
+// ReleaseAge is the modelled dwelling release of one 65+ age group.
 type ReleaseAge struct {
 	Group      string  `json:"group"`
 	Population float64 `json:"population"`
@@ -114,6 +118,7 @@ type ReleaseAge struct {
 	Releases   float64 `json:"releases"`
 }
 
+// Releases is the modelled estimate of dwellings released per year by older owners living alone.
 type Releases struct {
 	PerYear              float64      `json:"perYear"`
 	PerThousandDwellings *float64     `json:"perThousandDwellings"`
@@ -124,6 +129,7 @@ type Releases struct {
 	ByAge                []ReleaseAge `json:"byAge"`
 }
 
+// Profile is the demographic context of an area.
 type Profile struct {
 	Geography     Unit            `json:"geography"`
 	Period        string          `json:"period"`
@@ -214,7 +220,7 @@ func Compute(unit Unit, local, deathArea, national Series, deathRatesFrom string
 		return Profile{}, ErrUnavailable
 	}
 	period := populationPeriods[len(populationPeriods)-1]
-	profile := Profile{Geography: unit, Period: period}
+	profile := Profile{Geography: unit, Period: period, Pyramid: make([]AgeGroup, 0, len(pyramidGroups)), Migration: []MigrationYear{}}
 	total, _ := local.value("population_total", period)
 	population := Population{Total: total}
 	if earlier, ok := local.value("population_total", shift(period, 5)); ok && earlier > 0 {
@@ -379,24 +385,29 @@ var ErrUnsupportedLevel = errors.New("demographics are published for Slovenia, s
 // ErrNotFound means the geography does not exist.
 var ErrNotFound = errors.New("geography not found")
 
-// Repository reads the SURS series once and keeps them in memory for ten minutes; a failed
+// datasetTTL is how long the loaded SURS series are served before a background reload.
+const datasetTTL = 10 * time.Minute
+
+// Repository reads the SURS series once and keeps them in memory for datasetTTL; a failed
 // reload keeps serving the previous dataset.
 type Repository struct {
-	pool    database.Querier
+	db      database.Querier
 	dataset *memo.Value[*Dataset]
 }
 
-func NewRepository(pool database.Querier) *Repository {
-	r := &Repository{pool: pool}
+// NewRepository returns a Repository reading through db. ctx bounds the background reloads of
+// the dataset: cancel it when the process stops.
+func NewRepository(ctx context.Context, db database.Querier) *Repository {
+	r := &Repository{db: db}
 	r.dataset = memo.New(func(ctx context.Context, _ *Dataset, _ bool) (*Dataset, error) {
 		return r.loadDataset(ctx)
-	}, memo.Options{TTL: 10 * time.Minute, Timeout: time.Minute, RetryAfter: 30 * time.Second})
+	}, memo.Options{TTL: datasetTTL, Timeout: time.Minute, RetryAfter: 30 * time.Second, Context: ctx})
 	return r
 }
 
 func (r *Repository) loadDataset(ctx context.Context) (*Dataset, error) {
 	data := &Dataset{ByKey: map[string]Series{}, Municipality: map[int]Unit{}, Regions: map[int]Unit{}}
-	units, err := r.pool.Query(ctx, `
+	units, err := r.db.Query(ctx, `
 		SELECT g.id, g.level, g.code, g.name, coalesce(p.code, g.code)
 		FROM analytics.geographic_units g
 		LEFT JOIN analytics.geographic_units p ON p.id = g.parent_id AND p.level = 'statistical_region'
@@ -423,7 +434,7 @@ func (r *Repository) loadDataset(ctx context.Context) (*Dataset, error) {
 	if err := units.Err(); err != nil {
 		return nil, fmt.Errorf("demography units: %w", err)
 	}
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.Query(ctx, `
 		SELECT series, geography_key, period, value::float8 FROM analytics.context_series
 		WHERE source = 'surs' AND (series LIKE 'population\_%' OR series LIKE 'deaths\_%'
 		   OR series LIKE 'net\_migration\_%' OR series LIKE 'dwellings\_%' OR series LIKE 'households\_%'
@@ -498,6 +509,7 @@ func (d *Dataset) ProfileOf(unit Unit) (Profile, error) {
 	return Profile{}, ErrUnsupportedLevel
 }
 
+// Profile computes the profile of a geography (Slovenia when nil).
 func (r *Repository) Profile(ctx context.Context, geographyID *int64) (Profile, error) {
 	data, err := r.dataset.Get(ctx)
 	if err != nil {
@@ -517,7 +529,7 @@ func (r *Repository) Profile(ctx context.Context, geographyID *int64) (Profile, 
 		}
 	}
 	var level string
-	err = r.pool.QueryRow(ctx, `SELECT level FROM analytics.geographic_units WHERE id = $1`, *geographyID).Scan(&level)
+	err = r.db.QueryRow(ctx, `SELECT level FROM analytics.geographic_units WHERE id = $1`, *geographyID).Scan(&level)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Profile{}, ErrNotFound
 	}
@@ -527,6 +539,7 @@ func (r *Repository) Profile(ctx context.Context, geographyID *int64) (Profile, 
 	return Profile{}, ErrUnsupportedLevel
 }
 
+// Municipalities summarises every municipality, by name.
 func (r *Repository) Municipalities(ctx context.Context) ([]Summary, error) {
 	data, err := r.dataset.Get(ctx)
 	if err != nil {

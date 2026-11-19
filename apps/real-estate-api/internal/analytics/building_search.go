@@ -78,10 +78,14 @@ var (
 	)
 )
 
+// punctuationReplacer separates dotted abbreviations and drops the commas and semicolons of a
+// registered address, so it splits into words.
+var punctuationReplacer = strings.NewReplacer(".", ". ", ",", " ", ";", " ")
+
 // foldAddress lower-cases, removes Slovenian diacritics and splits "C.1.MAJA" into "c. 1. maja".
 func foldAddress(value string) []string {
 	value = strings.ToLower(foldReplacer.Replace(value))
-	value = strings.NewReplacer(".", ". ", ",", " ", ";", " ").Replace(value)
+	value = punctuationReplacer.Replace(value)
 	return strings.Fields(value)
 }
 
@@ -587,7 +591,7 @@ type releaseIndex struct {
 // active release once a minute and rebuilds the index (about 5 s) only when a new release is
 // published; searches keep using the previous index meanwhile. The build runs detached from
 // any request, so a cancelled typeahead request never cancels or restarts it.
-func newAddressIndexCache(r *BuildingRepository) *memo.Value[*releaseIndex] {
+func newAddressIndexCache(parent context.Context, r *BuildingRepository) *memo.Value[*releaseIndex] {
 	return memo.New(func(ctx context.Context, previous *releaseIndex, ok bool) (*releaseIndex, error) {
 		var releaseID string
 		if err := r.db.QueryRow(ctx, `
@@ -603,7 +607,7 @@ func newAddressIndexCache(r *BuildingRepository) *memo.Value[*releaseIndex] {
 			return nil, err
 		}
 		return &releaseIndex{releaseID: releaseID, index: index}, nil
-	}, memo.Options{TTL: time.Minute, Timeout: 2 * time.Minute, RetryAfter: 30 * time.Second})
+	}, memo.Options{TTL: time.Minute, Timeout: 2 * time.Minute, RetryAfter: 30 * time.Second, Context: parent})
 }
 
 func (r *BuildingRepository) addressIndex(ctx context.Context) (*addressIndex, error) {
@@ -644,7 +648,7 @@ func loadAddressIndex(ctx context.Context, db database.Querier) (*addressIndex, 
 	}
 	countRows.Close()
 	if err := countRows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load building transaction counts: %w", err)
 	}
 	rows, err := db.Query(ctx, `
 		SELECT cadastral_municipality_code,building_number,coalesce(settlement,''),coalesce(street,''),
@@ -673,7 +677,7 @@ func loadAddressIndex(ctx context.Context, db database.Querier) (*addressIndex, 
 		addresses = append(addresses, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load building addresses: %w", err)
 	}
 	index := buildAddressIndex(addresses, counts)
 	settlementRows, err := db.Query(ctx, `
@@ -693,7 +697,7 @@ func loadAddressIndex(ctx context.Context, db database.Querier) (*addressIndex, 
 		index.addSettlement(item)
 	}
 	if err := settlementRows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load settlements: %w", err)
 	}
 	index.hideJunkStreets()
 	return index, nil
@@ -860,5 +864,5 @@ func (r *BuildingRepository) buildingSearchCounts(
 		}
 		counts[key] = item
 	}
-	return counts, rows.Err()
+	return counts, rowsErr(rows, "count building search transactions")
 }

@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import {
   isDwelling, loadAreaAffordability, loadDemographics, loadHousehold, loadMunicipalDemographics, loadRentOverview, loadSaleOverview, loadYearlyPrices,
   periodWindows, widerPeriods, type Affordability, type ConstructionSummary, type DemographicsResponse, type Period, type RentalOverview,
-  type MunicipalDemographics, type RentGroup, type Segment, type StatisticsOverview, type TimePoint, type Window,
+  type MunicipalDemographics, type RentSegment, type Segment, type StatisticsOverview, type TimePoint, type DateWindow,
 } from "../api";
 import type { AreaOption } from "../components/AreaSearch";
 import { Pyramid } from "../components/charts";
@@ -23,7 +23,7 @@ export const SLOVENIA: Scope = { name: t("Slovenija"), level: "country" };
 export const areaName = (scope: Pick<Scope, "name" | "level">) => scope.level === "country" ? scope.name : <Name>{scope.name}</Name>; // i18n-ignore (code, not text)
 
 /** A sale median and, when the period is too thin, the first wider trailing period (3, then 5 years) that has one. */
-export interface PooledSale { sale: StatisticsOverview; fallback: { years: number; sale: StatisticsOverview; window: Window } | null; wide?: StatisticsOverview }
+export interface PooledSale { sale: StatisticsOverview; fallback: { years: number; sale: StatisticsOverview; window: DateWindow } | null; wide?: StatisticsOverview }
 /** Fallback ladder for small areas: three, then five years ending at the cutoff (never for a chosen year range). */
 export async function loadPooledSale(id: number | undefined, segment: Segment, cutoff: string, years: Period, signal: AbortSignal): Promise<PooledSale> {
   const sale = await loadSaleOverview(id, segment, periodWindows(cutoff, years).sales.current, signal);
@@ -50,21 +50,26 @@ export interface AreaData {
 
 /** Everything the overview shows for one area; every part loads (and fails) on its own. */
 export function useArea(scope: Scope | undefined, segment: Segment, cutoff: string | undefined, years: Period = 1): AreaData {
-  const base = scope && cutoff ? `${scope.id ?? 0}|${JSON.stringify(segment)}|${cutoff}|${years}` : null;
   const windows = cutoff ? periodWindows(cutoff, years) : undefined;
   const id = scope?.id;
   const group = segment.propertyGroup;
-  const rentSegment = group === "land" ? undefined : { propertyGroup: group as RentGroup, minArea: segment.minArea, maxArea: segment.maxArea };
-  const sale = useLoad(base && `area-sale|${base}`, (signal) => loadPooledSale(id, segment, cutoff!, years, signal));
-  const salePrevious = useLoad(base && windows?.sales.previous ? `area-sale-previous|${base}` : null, (signal) => loadSaleOverview(id, segment, windows!.sales.previous!, signal));
-  const rent = useLoad(base && `area-rent|${base}`, (signal) => rentSegment ? loadRentOverview(id, rentSegment, windows!.rents.current, signal) : Promise.resolve(null));
-  const rentPrevious = useLoad(base && `area-rent-previous|${base}`, (signal) => rentSegment && windows!.rents.previous
-    ? loadRentOverview(id, rentSegment, windows!.rents.previous, signal) : Promise.resolve(null));
-  const affordability = useLoad(base && isDwelling(group) ? `area-afford|${id ?? 0}|${group}` : null, (signal) => loadAreaAffordability(id, group as "apartment" | "house", signal));
+  const rentSegment: RentSegment | undefined = group === "land" ? undefined : { propertyGroup: group, minArea: segment.minArea, maxArea: segment.maxArea };
+  const base = scope && cutoff && windows ? { id, level: scope.level, segment, cutoff, years, windows, key: `${scope.id ?? 0}|${JSON.stringify(segment)}|${cutoff}|${years}` } : null;
+  const sale = useLoad(base, (input) => `area-sale|${input.key}`, (input, signal) => loadPooledSale(input.id, input.segment, input.cutoff, input.years, signal));
+  const previousWindow = windows?.sales.previous;
+  const salePrevious = useLoad(base && previousWindow ? { ...base, window: previousWindow } : null, (input) => `area-sale-previous|${input.key}`,
+    (input, signal) => loadSaleOverview(input.id, input.segment, input.window, signal));
+  const rent = useLoad(base, (input) => `area-rent|${input.key}`, (input, signal) => rentSegment ? loadRentOverview(input.id, rentSegment, input.windows.rents.current, signal) : Promise.resolve(null));
+  const rentPrevious = useLoad(base, (input) => `area-rent-previous|${input.key}`, (input, signal) => {
+    const previous = input.windows.rents.previous;
+    return rentSegment && previous ? loadRentOverview(input.id, rentSegment, previous, signal) : Promise.resolve(null);
+  });
+  const dwelling = isDwelling(group) ? group : undefined;
+  const affordability = useLoad(base && dwelling ? { id, group: dwelling } : null, (input) => `area-afford|${input.id ?? 0}|${input.group}`, (input, signal) => loadAreaAffordability(input.id, input.group, signal));
   // SURS demographics exist for Slovenia, regions and municipalities only (not districts or settlements).
-  const demographics = useLoad(base && ["country", "statistical_region", "municipality"].includes(scope!.level) ? `area-demographics|${id ?? 0}` : null,
-    (signal) => loadDemographics(id, signal));
-  const prices = useLoad(base && `area-prices|${id ?? 0}|${JSON.stringify(segment)}`, async (signal) => (await loadYearlyPrices(id, segment, signal)).items);
+  const demographics = useLoad(base && ["country", "statistical_region", "municipality"].includes(base.level) ? { id } : null, (input) => `area-demographics|${input.id ?? 0}`,
+    (input, signal) => loadDemographics(input.id, signal));
+  const prices = useLoad(base, (input) => `area-prices|${input.id ?? 0}|${JSON.stringify(input.segment)}`, async (input, signal) => (await loadYearlyPrices(input.id, input.segment, signal)).items);
   const loads: Array<Load<unknown>> = [sale, salePrevious, rent, rentPrevious, affordability, demographics, prices];
   return {
     sale: sale.data?.sale, fallback: sale.data?.fallback, salePrevious: salePrevious.data, rent: rent.data, rentPrevious: rentPrevious.data,
@@ -92,8 +97,8 @@ export function Calculator({ scope, group, data, noun, columns }: {
 
   // Typing waits for a pause before asking the API.
   const asked = useDebounced({ own, second: second || undefined }, 350);
-  const result = useLoad(asked.own ? `household|${scope.id ?? 0}|${group}|${asked.own}|${asked.second ?? ""}` : null,
-    (signal) => loadHousehold(scope.id, group, asked.own!, asked.second, signal));
+  const result = useLoad(asked.own ? { id: scope.id, group, own: asked.own, second: asked.second } : null,
+    (input) => `household|${input.id ?? 0}|${input.group}|${input.own}|${input.second ?? ""}`, (input, signal) => loadHousehold(input.id, input.group, input.own, input.second, signal));
   const household = own && result.data?.household ? result.data.household : undefined;
 
   const rates = data.affordability?.rates;
@@ -261,7 +266,7 @@ export function CompareTable({ columns, noun, band, removable, onRemove }: {
 }
 
 export function Cite({ scope, noun, windows, columns }: {
-  scope: Scope; noun: NounForms; windows?: { sales: { current: Window } }; columns: Array<{ scope: Scope; data: AreaData }>;
+  scope: Scope; noun: NounForms; windows?: { sales: { current: DateWindow } }; columns: Array<{ scope: Scope; data: AreaData }>;
 }) {
   const [status, setStatus] = useState<string>();
   if (!windows) return null;

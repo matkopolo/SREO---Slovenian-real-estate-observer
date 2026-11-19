@@ -16,6 +16,7 @@ export const pages: Record<string, string> = {
   "Trendi": "Trends",
   "O podatkih": "About the data",
   "Nalagam …": "Loading …",
+  "Stanja podatkov trenutno ni bilo mogoče naložiti (povezava ali strežnik).": "The data status could not be loaded right now (connection or server).",
   "Del strani": "Page section",
   "Cene skozi čas": "Prices over time",
   "Porazdelitev in skrajni posli": "Distribution and extremes",

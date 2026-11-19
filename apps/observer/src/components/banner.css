@@ -3,3 +3,7 @@
 .data-banner { margin: 0; color: var(--muted); font-size: 0.8125rem; line-height: 1.4; overflow-wrap: break-word; }
 .data-banner.note { padding: 0; font-size: 0.7812rem; }
 .data-banner.missing { padding: 10px 14px; border-radius: 8px; background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--text); font-weight: 500; }
+/* The explanation opens under the line; the marker says there is one. */
+.data-banner > summary { cursor: pointer; min-height: 32px; display: inline-flex; align-items: center; }
+.data-banner > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.data-banner > p { margin: 2px 0 6px; }

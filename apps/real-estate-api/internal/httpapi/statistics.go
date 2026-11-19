@@ -12,6 +12,9 @@ import (
 // maxPageOffset bounds offset on every paged list: deeper pages are slow and never needed.
 const maxPageOffset = 100000
 
+// maxAreaSQM bounds the minArea and maxArea filters (m²).
+const maxAreaSQM = 1000000
+
 func (s *server) statisticsOverview(w http.ResponseWriter, r *http.Request) {
 	filter, ok := statisticsFilter(w, r)
 	if !ok {
@@ -221,7 +224,7 @@ func optionalPositiveFloat(w http.ResponseWriter, r *http.Request, name string) 
 		return nil, true
 	}
 	parsed, err := strconv.ParseFloat(value, 64)
-	if err != nil || parsed <= 0 || parsed > 1000000 {
+	if err != nil || parsed <= 0 || parsed > maxAreaSQM {
 		writeError(w, r, http.StatusBadRequest, "invalid_area", name+" must be a positive number")
 		return nil, false
 	}

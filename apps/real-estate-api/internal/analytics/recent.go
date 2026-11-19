@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
 )
 
@@ -44,14 +45,13 @@ type RecentStore interface {
 // RecentTransactions returns one page of an area's agreements and the number of agreements
 // matching the filter. The total is a separate count with the same filter: a window count over
 // the page query makes PostgreSQL materialise every matching row before the LIMIT, while the
-// page alone can stop early on the contract-date indexes.
+// page alone can stop early on the contract-date indexes. Both run in one repeatable-read
+// transaction, so a release published between them cannot mix two generations of facts.
 func (r *TransactionRepository) RecentTransactions(
 	ctx context.Context, kind string, filter StatisticsFilter, page RecentPage,
 ) ([]RecentTransaction, int, error) {
-	table, amount, perSQM, parts := saleFactsTable(filter), "price", "price_per_sqm", "building_parts"
-	if kind == "rent" {
-		table, amount, perSQM, parts = "analytics.rental_facts", "monthly_rent_ex_vat", "monthly_rent_per_sqm", "rental_building_parts"
-	} else if kind != "sale" {
+	columns, ok := factColumnsFor(kind, filter)
+	if !ok {
 		return nil, 0, fmt.Errorf("unsupported transaction kind %q", kind)
 	}
 	column, ok := recentSortColumns[page.Sort]
@@ -69,21 +69,14 @@ func (r *TransactionRepository) RecentTransactions(
 	}
 	if page.Street != "" {
 		where += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM %s s WHERE s.transaction_id = f.transaction_id AND upper(s.street) = upper(%s))",
-			parts, args.add(page.Street))
+			columns.parts, args.add(page.Street))
 	}
 	// Rentals have no land parcels; the lateral join is switched off for them.
 	landParcels := "true"
 	if kind == "rent" {
 		landParcels = "false"
 	}
-	countQuery := fmt.Sprintf(`SELECT count(*) FROM %s f WHERE %s`, table, where)
-	countTotal := func() (int, error) {
-		var total int
-		if err := r.db.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
-			return 0, fmt.Errorf("count recent transactions: %w", err)
-		}
-		return total, nil
-	}
+	countQuery := fmt.Sprintf(`SELECT count(*) FROM %s f WHERE %s`, columns.table, where)
 	pageArgs := append(queryArgs{}, args...)
 	query := fmt.Sprintf(`
 		WITH latest AS (
@@ -105,36 +98,27 @@ func (r *TransactionRepository) RecentTransactions(
 		  SELECT settlement, street, house_number::text || coalesce(nullif(trim(house_number_suffix::text), ''), '') house_number FROM %[4]s p
 		  WHERE p.transaction_id = l.transaction_id ORDER BY (street IS NULL) LIMIT 1) a ON true
 		ORDER BY l.%[6]s %[7]s NULLS LAST, l.transaction_id DESC`,
-		table, amount, perSQM, parts, where, column, direction, landParcels,
+		columns.table, columns.amount, columns.perSQM, columns.parts, where, column, direction, landParcels,
 		pageArgs.add(page.Limit), pageArgs.add(page.Offset))
-	// On a pool the count and the page run in parallel; nationally each scans the facts.
-	type countResult struct {
-		total int
-		err   error
+	tx, err := database.BeginReadOnly(ctx, r.db, pgx.RepeatableRead)
+	if err != nil {
+		return nil, 0, fmt.Errorf("begin recent transactions: %w", err)
 	}
-	counted := make(chan countResult, 1)
-	if database.SupportsConcurrency(r.db) {
-		go func() {
-			total, err := countTotal()
-			counted <- countResult{total, err}
-		}()
-	} else {
-		total, err := countTotal()
-		counted <- countResult{total, err}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var total int
+	if err := tx.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count recent transactions: %w", err)
 	}
-	items, pageErr := r.recentPage(ctx, query, pageArgs, page.Limit)
-	count := <-counted
-	if count.err != nil {
-		return nil, 0, count.err
+	items, err := recentPage(ctx, tx, query, pageArgs, page.Limit)
+	if err != nil {
+		return nil, 0, err
 	}
-	if pageErr != nil {
-		return nil, 0, pageErr
-	}
-	return items, count.total, nil
+	return items, total, tx.Commit(ctx)
 }
 
-func (r *TransactionRepository) recentPage(ctx context.Context, query string, args []any, limit int) ([]RecentTransaction, error) {
-	rows, err := r.db.Query(ctx, query, args...)
+// recentPage runs the page query and scans its rows.
+func recentPage(ctx context.Context, db database.Querier, query string, args []any, limit int) ([]RecentTransaction, error) {
+	rows, err := db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("recent transactions: %w", err)
 	}

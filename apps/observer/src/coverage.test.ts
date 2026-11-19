@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { expect, it } from "vitest";
 
 const SRC = join(__dirname);
@@ -33,9 +33,9 @@ it("uses every data endpoint of the API contract, and nothing outside it", () =>
 });
 
 it("shows every API loader in a view (no endpoint only referenced by the client)", () => {
-  const client = readFileSync(join(SRC, "api.ts"), "utf8");
+  const client = sources(join(SRC, "api")).map((file) => readFileSync(file, "utf8")).join("\n");
   const loaders = [...client.matchAll(/^export (?:async function|function|const) (load\w+|search\w+)/gm)].map((match) => match[1]);
-  const consumers = sources(SRC).filter((file) => !file.endsWith("api.ts")).map((file) => readFileSync(file, "utf8")).join("\n");
+  const consumers = sources(SRC).filter((file) => !file.endsWith("api.ts") && !file.includes(`${sep}api${sep}`)).map((file) => readFileSync(file, "utf8")).join("\n");
   expect(loaders.length).toBeGreaterThan(20);
   expect(loaders.filter((name) => !new RegExp(`\\b${name}\\b`).test(consumers))).toEqual([]);
 });

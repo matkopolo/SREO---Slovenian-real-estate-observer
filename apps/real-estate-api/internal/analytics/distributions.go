@@ -5,6 +5,7 @@ import (
 	"fmt"
 )
 
+// Percentiles are the quantiles of a metric over the representative agreements.
 type Percentiles struct {
 	P05 float64 `json:"p05"`
 	P10 float64 `json:"p10"`
@@ -15,6 +16,7 @@ type Percentiles struct {
 	P95 float64 `json:"p95"`
 }
 
+// HistogramBucket counts the agreements whose metric falls between From and To.
 type HistogramBucket struct {
 	Index int     `json:"index"`
 	From  float64 `json:"from"`
@@ -22,6 +24,7 @@ type HistogramBucket struct {
 	Count int64   `json:"count"`
 }
 
+// Distribution is the histogram and percentiles of one metric.
 type Distribution struct {
 	Metric              string            `json:"metric"`
 	SampleSize          int64             `json:"sampleSize"`
@@ -35,26 +38,30 @@ type Distribution struct {
 	SuppressionReason   *string           `json:"suppressionReason"`
 }
 
+// saleMetricColumns and rentalMetricColumns map the public metric names to fact columns.
+var (
+	saleMetricColumns   = map[string]string{"price": "price", "pricePerSqm": "price_per_sqm"}
+	rentalMetricColumns = map[string]string{"monthlyRent": "monthly_rent_ex_vat", "rentPerSqm": "monthly_rent_per_sqm"}
+)
+
+// DistributionStore answers the sale and rental histograms.
 type DistributionStore interface {
 	SaleDistribution(context.Context, StatisticsFilter, string, int) (Distribution, error)
 	RentalDistribution(context.Context, StatisticsFilter, string, int) (Distribution, error)
 }
 
+// SaleDistribution computes the histogram of a sale metric ("price" or "pricePerSqm") with bins buckets.
 func (r *DistributionRepository) SaleDistribution(
 	ctx context.Context, filter StatisticsFilter, metric string, bins int,
 ) (Distribution, error) {
-	column := map[string]string{"price": "price", "pricePerSqm": "price_per_sqm"}[metric]
-	return r.distribution(ctx, filter, saleFactsTable(filter), column, metric, bins)
+	return r.distribution(ctx, filter, saleFactsTable(filter), saleMetricColumns[metric], metric, bins)
 }
 
+// RentalDistribution computes the histogram of a rental metric ("monthlyRent" or "rentPerSqm") with bins buckets.
 func (r *DistributionRepository) RentalDistribution(
 	ctx context.Context, filter StatisticsFilter, metric string, bins int,
 ) (Distribution, error) {
-	column := map[string]string{
-		"monthlyRent": "monthly_rent_ex_vat",
-		"rentPerSqm":  "monthly_rent_per_sqm",
-	}[metric]
-	return r.distribution(ctx, filter, "analytics.rental_facts", column, metric, bins)
+	return r.distribution(ctx, filter, "analytics.rental_facts", rentalMetricColumns[metric], metric, bins)
 }
 
 func (r *DistributionRepository) distribution(

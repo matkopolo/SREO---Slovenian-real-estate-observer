@@ -135,6 +135,7 @@ type HouseholdResult struct {
 	MaxLoanToValue float64   `json:"recommendedLtv"`
 }
 
+// Household sums the per-borrower limits of incomes into one illustrative capacity.
 func Household(incomes []float64, rule Rule, rates Rates) HouseholdResult {
 	result := HouseholdResult{Incomes: incomes, MaxLoanToValue: rule.RecommendedLTV}
 	for _, income := range incomes {
@@ -159,14 +160,16 @@ type Store interface {
 }
 
 // Repository implements Store on PostgreSQL.
-type Repository struct{ pool database.Querier }
+type Repository struct{ db database.Querier }
 
-func NewRepository(pool database.Querier) *Repository { return &Repository{pool: pool} }
+// NewRepository returns a Repository reading through db.
+func NewRepository(db database.Querier) *Repository { return &Repository{db: db} }
 
+// Rule returns the lending limits in force on the given date.
 func (r *Repository) Rule(ctx context.Context, on time.Time) (Rule, error) {
 	var rule Rule
 	var validFrom time.Time
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.QueryRow(ctx, `
 		SELECT valid_from, dsti_max::float8, min_remaining_income::float8,
 		       recommended_ltv_primary::float8, source_url, note
 		FROM analytics.lending_rules WHERE valid_from <= $1
@@ -184,7 +187,7 @@ func (r *Repository) Rule(ctx context.Context, on time.Time) (Rule, error) {
 
 // Wages returns the newest period of the wage distribution for one geography key.
 func (r *Repository) Wages(ctx context.Context, geographyKey string) ([]Observation, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.Query(ctx, `
 		SELECT series, period, value::float8, source_table
 		FROM analytics.context_series
 		WHERE source = 'surs' AND geography_key = $1 AND series LIKE 'net\_wage\_%'
@@ -204,7 +207,7 @@ func (r *Repository) Wages(ctx context.Context, geographyKey string) ([]Observat
 
 // AllWages returns the newest wage distribution of every geography key in one query.
 func (r *Repository) AllWages(ctx context.Context) (map[string][]Observation, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.Query(ctx, `
 		WITH latest AS (
 			SELECT geography_key, max(period) AS period FROM analytics.context_series
 			WHERE source = 'surs' AND series = 'net_wage_p50' GROUP BY geography_key
@@ -226,13 +229,16 @@ func (r *Repository) AllWages(ctx context.Context) (map[string][]Observation, er
 		}
 		wages[key] = append(wages[key], observation)
 	}
-	return wages, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("all wage distributions: %w", err)
+	}
+	return wages, nil
 }
 
 // Latest returns the newest observation of a national series.
 func (r *Repository) Latest(ctx context.Context, series string) (Observation, error) {
 	var observation Observation
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.QueryRow(ctx, `
 		SELECT series, period, value::float8, source_table FROM analytics.context_series
 		WHERE series = $1 AND geography_key = 'SI' ORDER BY period DESC LIMIT 1`, series).Scan(
 		&observation.Series, &observation.Period, &observation.Value, &observation.SourceTable)

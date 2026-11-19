@@ -12,8 +12,6 @@ from real_estate_etl.construction import (
     building_rows,
     codebook_rows,
     download_buildings,
-    iter_dbf,
-    iter_points,
     load_building_parts,
     load_buildings,
     part_rows,
@@ -21,6 +19,7 @@ from real_estate_etl.construction import (
     source_date,
     sync_construction,
 )
+from real_estate_etl.shapefile import iter_dbf, iter_points
 
 FIELDS = [("EID_STAVBA", 40), ("KO_ID", 8), ("ST_STAVBE", 8), ("STEVILO_ET", 4), ("STEVILO_ST", 4),
           ("STEVILO_PO", 4), ("TIP_STAVBE", 4), ("NOSILNA_KO", 4), ("STATUS_VPI", 3), ("LETO_IZGRA", 6),

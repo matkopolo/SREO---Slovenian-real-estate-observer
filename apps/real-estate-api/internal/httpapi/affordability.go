@@ -20,38 +20,68 @@ var wageBands = []struct{ id, series string }{
 	{"mean", "net_wage_mean"}, {"q3", "net_wage_q3"}, {"p90", "net_wage_p90"},
 }
 
-func (s *server) affordability(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
-	propertyGroup := query.Get("propertyGroup")
+// maxNetIncomeEUR bounds the net monthly incomes a client may ask about.
+const maxNetIncomeEUR = 100000
+
+// affordabilityRequest are the validated parameters of the affordability page.
+type affordabilityRequest struct {
+	propertyGroup string
+	geographyID   *int64
+	// household holds the optional net incomes of the borrower and the co-borrower.
+	household []float64
+}
+
+// affordabilityPropertyGroup reads propertyGroup (apartment, the default, or house).
+func affordabilityPropertyGroup(w http.ResponseWriter, r *http.Request) (string, bool) {
+	propertyGroup := r.URL.Query().Get("propertyGroup")
 	if propertyGroup == "" {
 		propertyGroup = "apartment"
 	}
 	if propertyGroup != "apartment" && propertyGroup != "house" {
 		writeError(w, r, http.StatusBadRequest, "invalid_property_group", "propertyGroup must be apartment or house")
-		return
+		return "", false
 	}
-	geographyID, ok := optionalGeographyID(w, r)
-	if !ok {
-		return
-	}
+	return propertyGroup, true
+}
 
-	household := []float64{}
+// parseAffordabilityRequest validates the query of the affordability page.
+func parseAffordabilityRequest(w http.ResponseWriter, r *http.Request) (affordabilityRequest, bool) {
+	var request affordabilityRequest
+	var ok bool
+	if request.propertyGroup, ok = affordabilityPropertyGroup(w, r); !ok {
+		return request, false
+	}
+	if request.geographyID, ok = optionalGeographyID(w, r); !ok {
+		return request, false
+	}
+	query := r.URL.Query()
+	request.household = []float64{}
 	for _, name := range []string{"netIncome", "coBorrowerIncome"} {
 		raw := query.Get(name)
 		if raw == "" {
 			continue
 		}
 		value, err := strconv.ParseFloat(raw, 64)
-		if err != nil || value <= 0 || value > 100000 {
-			writeError(w, r, http.StatusBadRequest, "invalid_income", name+" must be a net monthly income between 0 and 100000 EUR")
-			return
+		if err != nil || value <= 0 || value > maxNetIncomeEUR {
+			writeError(w, r, http.StatusBadRequest, "invalid_income",
+				fmt.Sprintf("%s must be a net monthly income between 0 and %d EUR", name, maxNetIncomeEUR))
+			return request, false
 		}
-		household = append(household, value)
+		request.household = append(request.household, value)
 	}
 	if query.Get("coBorrowerIncome") != "" && query.Get("netIncome") == "" {
 		writeError(w, r, http.StatusBadRequest, "invalid_income", "coBorrowerIncome requires netIncome")
+		return request, false
+	}
+	return request, true
+}
+
+func (s *server) affordabilityOverview(w http.ResponseWriter, r *http.Request) {
+	request, ok := parseAffordabilityRequest(w, r)
+	if !ok {
 		return
 	}
+	propertyGroup, geographyID, household := request.propertyGroup, request.geographyID, request.household
 
 	ctx := r.Context()
 	now := s.now()
@@ -60,16 +90,16 @@ func (s *server) affordability(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, "resolve geography", err)
 		return
 	}
-	wages, err := s.affordabilityStore.Wages(ctx, wageGeography)
+	wages, err := s.affordability.Wages(ctx, wageGeography)
 	// A region (or anything above a municipality) uses Slovenian wages: say so.
 	wageFallback := geographyID != nil && wageGeography == "SI"
 	if err == nil && len(wages) == 0 && wageGeography != "SI" {
-		wages, err = s.affordabilityStore.Wages(ctx, "SI")
+		wages, err = s.affordability.Wages(ctx, "SI")
 		wageGeography, wageName, wageFallback = "SI", "Slovenija", true
 	}
-	rule, ruleErr := s.affordabilityStore.Rule(ctx, now)
-	fixed, fixedErr := s.affordabilityStore.Latest(ctx, "housing_rate_fixed_10y")
-	variable, variableErr := s.affordabilityStore.Latest(ctx, "housing_rate_variable")
+	rule, ruleErr := s.affordability.Rule(ctx, now)
+	fixed, fixedErr := s.affordability.Latest(ctx, "housing_rate_fixed_10y")
+	variable, variableErr := s.affordability.Latest(ctx, "housing_rate_variable")
 	if err = errors.Join(err, ruleErr, fixedErr, variableErr); err != nil || len(wages) == 0 {
 		s.affordabilityUnavailable(w, r, err)
 		return
@@ -142,7 +172,7 @@ func (s *server) affordabilityUnavailable(w http.ResponseWriter, r *http.Request
 
 // optionalObservation returns the latest value of an optional national series, or nil.
 func (s *server) optionalObservation(r *http.Request, series string) *affordability.Observation {
-	observation, err := s.affordabilityStore.Latest(r.Context(), series)
+	observation, err := s.affordability.Latest(r.Context(), series)
 	if err != nil {
 		if !errors.Is(err, affordability.ErrUnavailable) {
 			requestLog(r).Warn("optional affordability series", "series", series, "error", err)
@@ -177,13 +207,8 @@ func (s *server) wageGeography(ctx context.Context, id *int64) (string, string, 
 // municipality in one response: SURS wages by municipality of residence and the municipality's
 // ETN median EUR/m2 pooled over fromYear–toYear (one summary query for all municipalities).
 func (s *server) affordabilityMunicipalities(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
-	propertyGroup := query.Get("propertyGroup")
-	if propertyGroup == "" {
-		propertyGroup = "apartment"
-	}
-	if propertyGroup != "apartment" && propertyGroup != "house" {
-		writeError(w, r, http.StatusBadRequest, "invalid_property_group", "propertyGroup must be apartment or house")
+	propertyGroup, ok := affordabilityPropertyGroup(w, r)
+	if !ok {
 		return
 	}
 	now := s.now()
@@ -197,10 +222,10 @@ func (s *server) affordabilityMunicipalities(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	ctx := r.Context()
-	rule, ruleErr := s.affordabilityStore.Rule(ctx, now)
-	fixed, fixedErr := s.affordabilityStore.Latest(ctx, "housing_rate_fixed_10y")
-	variable, variableErr := s.affordabilityStore.Latest(ctx, "housing_rate_variable")
-	wages, wagesErr := s.affordabilityStore.AllWages(ctx)
+	rule, ruleErr := s.affordability.Rule(ctx, now)
+	fixed, fixedErr := s.affordability.Latest(ctx, "housing_rate_fixed_10y")
+	variable, variableErr := s.affordability.Latest(ctx, "housing_rate_variable")
+	wages, wagesErr := s.affordability.AllWages(ctx)
 	if err := errors.Join(ruleErr, fixedErr, variableErr, wagesErr); err != nil || len(wages) == 0 {
 		s.affordabilityUnavailable(w, r, err)
 		return

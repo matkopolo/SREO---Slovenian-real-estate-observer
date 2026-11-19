@@ -23,10 +23,16 @@ const (
 	noStoreCacheControl = "no-store"
 )
 
-// releaseCached serves next with a weak ETag built from the active release, the UTC day, this
-// process (its build and start, so a deploy never reuses a previous build's answers) and the
-// canonical request URL. When the active release cannot be read the request is served without caching
-// headers rather than failed.
+// releaseCached serves next with a weak ETag built from the active release, the UTC day, the
+// build (so a deploy never reuses a previous build's answers) and the canonical request URL.
+// When the active release cannot be read the request is served without caching headers rather
+// than failed.
+//
+// Staleness after a publication is bounded by the sum of the windows: the active release id is
+// re-read every activeReleaseTTL (analytics/releases.go), so for those seconds a revalidation
+// of the previous release's answer is still a 304, and on top a cache honouring
+// publicCacheControl may reuse an answer for max-age and serve it stale for
+// stale-while-revalidate while it revalidates: about six minutes in the worst case.
 func (s *server) releaseCached(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		releaseID, err := s.activeRelease.ActiveReleaseID(r.Context())
@@ -145,10 +151,14 @@ func canonicalURL(r *http.Request) string {
 	return r.URL.Path + "?" + query
 }
 
-// digest is a short, ETag-safe hash (96 bits of SHA-256, base64url).
+// digestBytes is how much of the SHA-256 sum an ETag carries: 96 bits, enough against
+// collisions between the answers of one release and short enough for a header.
+const digestBytes = 12
+
+// digest is a short, ETag-safe hash (base64url of the first digestBytes of SHA-256).
 func digest(data []byte) string {
 	sum := sha256.Sum256(data)
-	return base64.RawURLEncoding.EncodeToString(sum[:12])
+	return base64.RawURLEncoding.EncodeToString(sum[:digestBytes])
 }
 
 // etagMatches applies the weak comparison of If-None-Match (RFC 9110 13.1.2): "*" matches any

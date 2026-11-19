@@ -1,5 +1,8 @@
 /** "What is your property worth?" (value check, sale-now and rent scenarios) and the area/address search. */
 export const value: Record<string, string> = {
+  "cen v občini trenutno ni bilo mogoče naložiti": "the municipality's prices could not be loaded right now",
+  "Cen v občini trenutno ni bilo mogoče naložiti; ocena je brez njih.": "The municipality's prices could not be loaded right now; the estimate is made without them.",
+  "Najemnin ni bilo mogoče naložiti.": "The rents could not be loaded.",
   // Property types
   "Stanovanje je v slabšem stanju od povprečnega (ni obnovljeno)": "The apartment is in worse condition than average (not renovated)",
   "Hiša je v slabšem stanju od povprečne (ni obnovljena)": "The house is in worse condition than average (not renovated)",

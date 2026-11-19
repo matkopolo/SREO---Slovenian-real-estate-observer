@@ -65,7 +65,7 @@ func (s *server) constructionMap(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	bounds, ok := mapBounds(w, r)
+	bounds, ok := mapBounds(w, r, maxMapSpanDegrees)
 	if !ok {
 		return
 	}

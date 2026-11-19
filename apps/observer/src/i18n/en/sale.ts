@@ -1,5 +1,6 @@
 /** A sale, a rental and a building: TransactionDetails.tsx and BuildingEvidence.tsx, including the register codebooks. */
 export const sale: Record<string, string> = {
+  "Dela podatkov o tem poslu (primerjava, model ali zgodovina) ni bilo mogoče naložiti; prikazano je, kar je na voljo.": "Part of this transaction's data (the comparison, the model or the history) could not be loaded; what is available is shown.",
   // property groups (lower case, in lists and selects)
   "stanovanje": "apartment",
   "hiša": "house",

@@ -36,7 +36,7 @@ func TestRepositoryIntegration(t *testing.T) {
 	if _, err := tx.Exec(ctx, "SET LOCAL ROLE real_estate_api"); err != nil {
 		t.Fatal(err)
 	}
-	repository := NewRepository(tx)
+	repository := NewRepository(context.Background(), tx)
 	profile, err := repository.Profile(ctx, nil)
 	if errors.Is(err, ErrUnavailable) {
 		t.Skip("SURS demographic tables are not synchronised in this database")

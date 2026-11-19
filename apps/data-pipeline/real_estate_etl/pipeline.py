@@ -23,6 +23,8 @@ from .settings import API_BASE, AVAILABLE_THREADS, NATIONAL_DATASETS
 logger = logging.getLogger(__name__)
 
 WorkItem = TypeVar("WorkItem")
+#: Archives queued for download ahead of the sequential import, per worker.
+QUEUE_DEPTH_PER_WORKER = 2
 
 
 def sync_reference_data(connection: psycopg.Connection, client: httpx.Client | None = None) -> bool:
@@ -48,7 +50,7 @@ def sync_reference_data(connection: psycopg.Connection, client: httpx.Client | N
             cursor.execute(
                 "SELECT (SELECT count(*) FROM municipalities), (SELECT count(*) FROM cadastral_municipalities)"
             )
-            stored_municipalities, stored_cadastral = cursor.fetchone()
+            stored_municipalities, stored_cadastral = cursor.fetchone() or (0, 0)
         connection.rollback()
         if not stored_municipalities or not stored_cadastral:
             raise
@@ -79,6 +81,7 @@ def sync_reference_data(connection: psycopg.Connection, client: httpx.Client | N
 
 
 def fetch_zip(municipality: int, year: int, output_dir: Path, client: JGPClient | None = None) -> Path:
+    """Download one municipality/year sales archive into ``output_dir`` (diagnostics)."""
     if client is not None:
         return client.fetch_municipality(municipality, year)
     with JGPClient(output_dir) as owned:
@@ -86,6 +89,7 @@ def fetch_zip(municipality: int, year: int, output_dir: Path, client: JGPClient 
 
 
 def fetch_national_zip(dataset_type: str, year: int, output_dir: Path, client: JGPClient | None = None) -> Path:
+    """Download one national ``sales`` or ``rent`` yearly archive into ``output_dir``."""
     if client is not None:
         return client.fetch_national(dataset_type, year)
     with JGPClient(output_dir) as owned:
@@ -100,6 +104,7 @@ def _newest_local_archive(output_dir: Path, pattern: str) -> Path | None:
 def prepare_archive(
     municipality: int, year: int, output_dir: Path, force: bool, client: JGPClient | None = None,
 ) -> ArchiveResult:
+    """Reuse a valid local municipality archive unless ``force``; otherwise download it."""
     started_at = time.monotonic()
     archive = _newest_local_archive(output_dir, f"ETN_{municipality:03d}_{year}_KPP_*.zip")
     if archive is not None and not force:
@@ -110,6 +115,7 @@ def prepare_archive(
 def prepare_national_archive(
     dataset_type: str, year: int, output_dir: Path, force: bool, client: JGPClient | None = None,
 ) -> ArchiveResult:
+    """Reuse a valid local national archive unless ``force``; a download removes superseded copies."""
     started_at = time.monotonic()
     pattern = f"ETN_SLO_{year}_{NATIONAL_DATASETS[dataset_type].archive_code}*.zip"
     archive = _newest_local_archive(output_dir, pattern)
@@ -129,6 +135,7 @@ def _remove_superseded_archives(output_dir: Path, pattern: str, *, keep: Path) -
 
 
 def validate_worker_count(workers: int, available_threads: int = AVAILABLE_THREADS) -> None:
+    """Raise ``ValueError`` unless ``1 <= workers <= available_threads``."""
     if workers < 1:
         raise ValueError("--workers must be at least 1")
     if workers > available_threads:
@@ -149,7 +156,25 @@ def _run_refresh(
     label: Callable[[int, int, WorkItem], str],
     summary_prefix: str,
 ) -> RefreshSummary:
-    """Download concurrently while importing sequentially on one DB connection."""
+    """Download concurrently while importing sequentially on one DB connection.
+
+    Args:
+        connection: Used only by this thread for the imports.
+        combinations: The work items, in queue order.
+        skipped: How many items were already imported (reported in the summary).
+        workers: Download threads; ``QUEUE_DEPTH_PER_WORKER`` items per worker are queued ahead.
+        verbose: Log each archive as it is imported.
+        thread_name: Prefix for the download threads.
+        prepare: Turns a work item into a local archive (runs on a download thread).
+        label: Formats the progress label for an item.
+        summary_prefix: Prefix of the final summary log line.
+
+    Returns:
+        The counts of imported, already imported and unavailable archives.
+
+    Raises:
+        Exception: The first import or download error; pending downloads are cancelled first.
+    """
     started_at = time.monotonic()
     work = iter(combinations)
     total = len(combinations)
@@ -172,7 +197,7 @@ def _run_refresh(
         pending[executor.submit(prepare, item)] = item
         return True
 
-    for _ in range(min(total, workers * 2)):
+    for _ in range(min(total, workers * QUEUE_DEPTH_PER_WORKER)):
         submit_next()
 
     position = 0
@@ -207,7 +232,7 @@ def _run_refresh(
                     unavailable += 1
                     logger.warning("%s: unavailable (%s)", item_label, exc)
                 except Exception:
-                    logger.exception("%s: stopped by unexpected error", item_label)
+                    logger.error("%s: stopped by an unexpected error; cancelling queued downloads", item_label)
                     raise
     finally:
         for future in pending:

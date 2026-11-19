@@ -17,14 +17,14 @@ const decimal = { format: upTo1 };
 const initialArea = () => parseHash().g;
 
 /** Distributions and extremes of one area (any region or municipality), flats or houses. */
-export function MarketView({ cutoff }: { cutoff?: string }) {
+export function MarketView({ cutoff }: { cutoff: string }) {
   const lists = useLoad("area-lists", (signal) => loadAreaLists(signal));
   const regions = lists.data?.regions ?? [], municipalities = lists.data?.municipalities ?? [];
   const [regionId, setRegionId] = useState<number | undefined>(initialArea);
   const [group, setGroup] = useState<"apartment" | "house">("apartment");
   const [span, setSpan] = useState<(typeof SPANS)[number]>(3);
   // The newest complete calendar year of the data (not of the clock: in January the GURS data still ends in autumn).
-  const lastYear = cutoff ? lastCompleteYear(cutoff) : new Date().getFullYear() - 1;
+  const lastYear = lastCompleteYear(cutoff);
   const fromYear = lastYear - span + 1;
   const period = span === 1 ? String(lastYear) : `${fromYear}–${lastYear}`;
   const marketLoad = useLoad(`market|${regionId ?? 0}|${group}|${fromYear}|${lastYear}`, (signal) => loadMarket(regionId, fromYear, lastYear, signal, { propertyGroup: group }));

@@ -322,7 +322,8 @@ func (store fakeGeographies) Get(context.Context, int64) (geography.Unit, error)
 func (store fakeGeographies) Boundaries(context.Context, string, float64, *[4]float64) ([]geography.Boundary, error) {
 	boundaries := make([]geography.Boundary, 0, len(store.units))
 	for _, unit := range store.units {
-		boundaries = append(boundaries, geography.Boundary{Unit: unit, Geometry: []byte(`{"type":"Point","coordinates":[15,46]}`)})
+		boundaries = append(boundaries, geography.Boundary{Unit: unit,
+			Geometry: []byte(`{"type":"Polygon","coordinates":[[[14.5,46.0],[15.5,46.0],[15.5,46.5],[14.5,46.5],[14.5,46.0]]]}`)})
 	}
 	return boundaries, store.err
 }

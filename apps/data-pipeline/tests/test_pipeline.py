@@ -132,3 +132,52 @@ def test_reference_sync_still_fails_on_an_empty_database():
     connection.cursor.return_value.__enter__.return_value.fetchone.return_value = (0, 0)
     with patch("real_estate_etl.pipeline.http_client.fetch_json", side_effect=_refused), pytest.raises(httpx.HTTPStatusError):
         sync_reference_data(connection, client=MagicMock())
+
+
+def test_import_failure_cancels_queued_downloads_and_closes_pools(tmp_path: Path):
+    """The first import error stops the refresh: pending downloads are cancelled, no later item is imported."""
+    from real_estate_etl.pipeline import _run_refresh
+
+    connection = MagicMock()
+    imported = []
+    prepared = []
+
+    def prepare(item):
+        prepared.append(item)
+        return ArchiveResult(tmp_path / f"{item}.zip", True, 0.0)
+
+    def import_zip(_connection, path, verbose):
+        imported.append(path.name)
+        if len(imported) == 2:
+            raise RuntimeError("corrupt member")
+        return MagicMock(unchanged=False, rows=1, member_import_seconds=0.0, database_seconds=0.0)
+
+    items = list(range(50))
+    with patch("real_estate_etl.pipeline.import_zip", side_effect=import_zip), pytest.raises(RuntimeError, match="corrupt"):
+        _run_refresh(
+            connection, items, skipped=0, workers=2, verbose=False, thread_name="t", prepare=prepare,
+            label=lambda position, total, item: f"{position}/{total}", summary_prefix="test",
+        )
+
+    assert len(imported) == 2
+    assert len(prepared) < len(items)  # the queue was bounded and the rest cancelled
+
+
+def test_unavailable_dataset_is_counted_not_fatal(tmp_path: Path):
+    from real_estate_etl.api import DatasetUnavailable
+    from real_estate_etl.pipeline import _run_refresh
+
+    def prepare(item):
+        if item == 1:
+            raise DatasetUnavailable("not prepared yet")
+        return ArchiveResult(tmp_path / f"{item}.zip", True, 0.0)
+
+    with patch(
+        "real_estate_etl.pipeline.import_zip",
+        return_value=MagicMock(unchanged=False, rows=3, member_import_seconds=0.0, database_seconds=0.0),
+    ):
+        summary = _run_refresh(
+            MagicMock(), [0, 1, 2], skipped=4, workers=1, verbose=False, thread_name="t", prepare=prepare,
+            label=lambda position, total, item: f"{position}/{total}", summary_prefix="test",
+        )
+    assert (summary.imported, summary.already_imported, summary.unavailable) == (2, 4, 1)

@@ -5,7 +5,7 @@ import pytest
 
 from real_estate_etl import cli
 from real_estate_etl.cli import Database, build_parser, main, run, validate_arguments
-from real_estate_etl.settings import RAW_DATA_DIR
+from real_estate_etl.settings import DEFAULT_RAW_DATA_DIR
 
 
 def parse(*argv: str):
@@ -15,10 +15,18 @@ def parse(*argv: str):
     return args
 
 
-def test_output_dir_defaults_to_the_container_data_directory():
+def test_output_dir_defaults_to_the_container_data_directory(monkeypatch):
+    monkeypatch.delenv("RAW_DATA_DIR", raising=False)
     for command in (["fetch", "--municipality", "1", "--year", "2020"], ["refresh-all-data"], ["schedule"],
                     ["sync-construction"], ["reset-and-repopulate", "--confirm-reset"]):
-        assert parse(*command).output_dir == RAW_DATA_DIR
+        assert parse(*command).output_dir == DEFAULT_RAW_DATA_DIR
+    assert parse("export-boundaries").output == str(DEFAULT_RAW_DATA_DIR / "rpe-boundaries.zip")
+
+
+def test_output_dir_follows_the_environment_at_parse_time(monkeypatch):
+    monkeypatch.setenv("RAW_DATA_DIR", "/tmp/elsewhere")
+    assert parse("refresh-all-data").output_dir == Path("/tmp/elsewhere")
+    assert parse("export-boundaries").output == "/tmp/elsewhere/rpe-boundaries.zip"
 
 
 @pytest.mark.parametrize(

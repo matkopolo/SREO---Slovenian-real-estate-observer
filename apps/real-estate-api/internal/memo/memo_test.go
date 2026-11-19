@@ -195,3 +195,94 @@ func TestStatsCountHitsMissesAndLoads(t *testing.T) {
 		t.Fatalf("stats=%+v", stats)
 	}
 }
+
+// TestConcurrentGetsAcrossExpiryShareLoadsAndNeverReturnZero hammers Get while the clock
+// crosses the TTL and the loader alternates between success and failure (run under -race): at
+// most one load runs at a time, every caller gets a loaded value, and a failure keeps the last
+// good one.
+func TestConcurrentGetsAcrossExpiryShareLoadsAndNeverReturnZero(t *testing.T) {
+	now := &clock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	var calls, inflight, maxInflight atomic.Int32
+	value := New(func(context.Context, int, bool) (int, error) {
+		running := inflight.Add(1)
+		defer inflight.Add(-1)
+		for {
+			seen := maxInflight.Load()
+			if running <= seen || maxInflight.CompareAndSwap(seen, running) {
+				break
+			}
+		}
+		time.Sleep(time.Millisecond)
+		call := calls.Add(1)
+		if call%2 == 0 {
+			return 0, errors.New("source down")
+		}
+		return int(call), nil
+	}, Options{TTL: time.Minute, RetryAfter: time.Second, Now: now.Now})
+	if _, err := value.Get(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	var zeros atomic.Int32
+	for worker := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range 200 {
+				if worker == 0 && i%20 == 0 {
+					now.advance(2 * time.Minute)
+				}
+				got, err := value.Get(context.Background())
+				if err != nil || got == 0 {
+					zeros.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if zeros.Load() != 0 {
+		t.Fatalf("%d calls returned no value although one was loaded", zeros.Load())
+	}
+	if maxInflight.Load() != 1 {
+		t.Fatalf("loads ran %d at a time, want 1", maxInflight.Load())
+	}
+	// Background refreshes finish on their own schedule: drive the clock past the TTL and wait for
+	// each load, so the counters below do not depend on how the goroutines above interleaved.
+	for attempt := 0; attempt < 20 && (value.Stats().Failures == 0 || value.Stats().Loads < 2); attempt++ {
+		now.advance(2 * time.Minute)
+		if _, err := value.Get(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		_ = value.Warm(context.Background())
+	}
+	if value.Stats().Failures == 0 || value.Stats().Loads < 2 {
+		t.Fatalf("stats=%+v, want refreshes and failures", value.Stats())
+	}
+}
+
+// TestParentContextCancelsLoads: cancelling Options.Context (process shutdown) ends a load in
+// progress, so the connection it holds returns instead of outliving the server.
+func TestParentContextCancelsLoads(t *testing.T) {
+	parent, stop := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	value := New(func(ctx context.Context, _ int, _ bool) (int, error) {
+		close(started)
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}, Options{TTL: time.Hour, Timeout: time.Minute, Context: parent})
+	done := make(chan error, 1)
+	go func() {
+		_, err := value.Get(context.Background())
+		done <- err
+	}()
+	<-started
+	stop()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Get()=%v, want the cancelled load's error", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the load did not end when the parent context was cancelled")
+	}
+}

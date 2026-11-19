@@ -1,25 +1,28 @@
 PIPELINE_DIR := apps/data-pipeline
 PIPELINE_RUN := docker compose run --rm pipeline-worker
 # Destructive admin commands (TRUNCATE ... RESTART IDENTITY needs table ownership) run
-# as the development superuser instead of the worker's least-privilege role.
-ADMIN_DATABASE_URL := postgresql://real_estate:real_estate@db:5432/real_estate
+# as the development superuser instead of the worker's least-privilege role. Pass
+# POSTGRES_PASSWORD=... when .env overrides the development default.
+POSTGRES_PASSWORD ?= real_estate
+ADMIN_DATABASE_URL := postgresql://real_estate:$(POSTGRES_PASSWORD)@db:5432/real_estate
 PIPELINE_ADMIN_RUN := docker compose run --rm -e DATABASE_URL=$(ADMIN_DATABASE_URL) pipeline-worker
 WORKERS ?= 6
-PYTHON_IMAGE ?= python:3.11-slim
+# Tool images for the host-side checks, pinned to the same digests as the Dockerfiles.
+PYTHON_IMAGE ?= python:3.11-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
 PY_RUN := docker run --rm -v "$(CURDIR)/$(PIPELINE_DIR):/src" -v real_estate_pip_cache:/root/.cache/pip -w /src $(PYTHON_IMAGE)
-PY_DEV_INSTALL := pip install --quiet --root-user-action=ignore -e '.[dev,ml]'
-GO_IMAGE ?= golang:1.26.11-bookworm
+PY_DEV_INSTALL := pip install --quiet --root-user-action=ignore -c constraints.txt -e '.[dev,ml]'
+GO_IMAGE ?= golang:1.26.11-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0
 API_DIR := apps/real-estate-api
-API_TEST_DATABASE_URL ?= postgresql://real_estate:real_estate@host.docker.internal:5432/real_estate
+API_TEST_DATABASE_URL ?= postgresql://real_estate:real_estate@host.docker.internal:5432/real_estate_test
 GO_RUN := docker run --rm --add-host=host.docker.internal:host-gateway -v "$(CURDIR)/$(API_DIR):/src" -v real_estate_go_mod_cache:/go/pkg/mod -v real_estate_go_build_cache:/root/.cache/go-build -w /src $(GO_IMAGE)
 STATICCHECK_VERSION ?= v0.8.2
 GOVULNCHECK_VERSION ?= v1.9.0
 WEB_DIR := apps/observer
-NODE_IMAGE ?= node:22-bookworm-slim
+NODE_IMAGE ?= node:22-bookworm-slim@sha256:18052396bf1d0c6e0a8c58181b5c1457da19409efbd5032a3f4d86974e74d13c
 WEB_NODE_MODULES := real_estate_observer_node_modules
 NODE_RUN := docker run --rm -v "$(CURDIR):/repo" -v $(WEB_NODE_MODULES):/repo/$(WEB_DIR)/node_modules -w /repo/$(WEB_DIR) $(NODE_IMAGE)
 NPM_CI := npm ci --prefer-offline --no-audit --no-fund >/dev/null
-.PHONY: start refresh-system reset-and-repopulate db-up db-migrate db-down db-status analytics-refresh models-refresh api-up api-down api-logs api-fmt api-vet api-staticcheck api-vulncheck api-test api-build web-setup web-up web-down web-logs web-generate-api-types web-contract-drift web-lint web-typecheck web-test web-build lint pipeline-lint test pipeline-test test-unit import-data import-data-verbose boundaries-seed
+.PHONY: start refresh-system reset-and-repopulate db-up db-migrate db-check db-lint db-down db-status analytics-refresh models-refresh api-up api-down api-logs api-fmt api-vet api-staticcheck api-vulncheck api-test api-build web-setup web-up web-down web-logs web-generate-api-types web-contract-drift web-lint web-typecheck web-test web-build lint pipeline-lint test pipeline-test test-unit import-data import-data-verbose boundaries-seed
 
 start:
 	docker compose up -d --build --wait
@@ -50,6 +53,15 @@ boundaries-seed: db-up
 	gh release view rpe-boundaries >/dev/null 2>&1 || gh release create rpe-boundaries --title "RPE boundaries seed" --notes "GURS RPE administrative boundaries (statistical regions, municipalities, city districts, local communities, settlements) as last synchronised by the pipeline, in the OGC API GeoJSON shape. Source: Geodetska uprava Republike Slovenije, Register prostorskih enot, CC BY 4.0. Used only on a first install while the GURS boundary service is unavailable; the next refresh takes the live data."
 	gh release upload rpe-boundaries ./rpe-boundaries.zip --clobber
 	rm -f ./rpe-boundaries.zip
+
+# Static rules for migration files and the catalog/privilege assertions CI runs
+# (database/checks/*.sql) against the Compose database.
+db-lint:
+	bash database/lint-migrations.sh
+
+db-check: db-lint
+	docker compose exec -T db psql -U real_estate -d real_estate -v ON_ERROR_STOP=1 -f /dev/stdin < database/checks/catalog.sql
+	docker compose exec -T db psql -U real_estate -d real_estate -v ON_ERROR_STOP=1 -f /dev/stdin < database/checks/privileges.sql
 
 db-status:
 	docker compose ps

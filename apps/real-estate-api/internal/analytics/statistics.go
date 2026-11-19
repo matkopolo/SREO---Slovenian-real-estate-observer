@@ -7,10 +7,13 @@ import (
 	"time"
 )
 
+// ErrGeographyNotFound means the filter names a geography that does not exist.
 var ErrGeographyNotFound = errors.New("geography not found")
 
 const descriptivePublicationThreshold int64 = 30
 
+// StatisticsFilter narrows agreements by contract date, property group, geography, land scope
+// and area; nil and empty fields match everything.
 type StatisticsFilter struct {
 	FromDate      *time.Time
 	ToDate        *time.Time
@@ -21,6 +24,7 @@ type StatisticsFilter struct {
 	MaxArea       *float64
 }
 
+// Overview summarises the sale agreements matching a filter.
 type Overview struct {
 	TransactionCount      int64    `json:"transactionCount"`
 	EligibleCount         int64    `json:"eligibleCount"`
@@ -39,6 +43,7 @@ type Overview struct {
 	SuppressionReason     *string  `json:"suppressionReason"`
 }
 
+// TimeSeriesPoint is one period of the sale series.
 type TimeSeriesPoint struct {
 	Period                string   `json:"period"`
 	Incomplete            bool     `json:"incomplete"`
@@ -59,6 +64,8 @@ type TimeSeriesPoint struct {
 	SuppressionReason     *string  `json:"suppressionReason"`
 }
 
+// StatisticsStore answers the sale overview, time series, outliers, extremes and municipality
+// medians.
 type StatisticsStore interface {
 	Overview(context.Context, StatisticsFilter) (Overview, error)
 	TimeSeries(context.Context, StatisticsFilter, string) ([]TimeSeriesPoint, error)
@@ -74,6 +81,7 @@ type GeographyMedian struct {
 	MedianPricePerSQM   *float64
 }
 
+// OutlierRecord is one sale agreement excluded as a statistical outlier, with the evidence.
 type OutlierRecord struct {
 	TransactionID             int64    `json:"transactionId"`
 	ContractDate              *string  `json:"contractDate"`
@@ -93,6 +101,7 @@ type OutlierRecord struct {
 	RuleVersion               string   `json:"ruleVersion"`
 }
 
+// Overview summarises the sale agreements matching filter.
 func (r *SaleStatisticsRepository) Overview(ctx context.Context, filter StatisticsFilter) (Overview, error) {
 	var args queryArgs
 	where, err := r.factFilter(ctx, "fact", filter, &args)
@@ -136,6 +145,7 @@ func (r *SaleStatisticsRepository) Overview(ctx context.Context, filter Statisti
 	return result, nil
 }
 
+// TimeSeries aggregates the sale agreements matching filter per interval (month, quarter or year).
 func (r *SaleStatisticsRepository) TimeSeries(
 	ctx context.Context,
 	filter StatisticsFilter,
@@ -211,6 +221,7 @@ func applyPublicationPolicy(sampleSize int64, publishable *bool, reason **string
 	*reason = &value
 }
 
+// Outliers lists one page of the sale outliers matching filter, most extreme first, with the total.
 func (r *SaleStatisticsRepository) Outliers(
 	ctx context.Context,
 	filter StatisticsFilter,
@@ -299,5 +310,5 @@ func (r *SaleStatisticsRepository) MunicipalityMedians(ctx context.Context, filt
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return items, rowsErr(rows, "municipality medians")
 }

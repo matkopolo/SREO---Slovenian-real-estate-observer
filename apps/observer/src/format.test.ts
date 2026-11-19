@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { change, date, dateCompact, instalment, landArea, median, percent, perSqm, titleCase } from "./format";
+import { change, date, dateCompact, day, instalment, landArea, median, month, percent, percentPoints, percentSigned, perSqm, titleCase, todayIso } from "./format";
 
 it("formats percent with one sign rule: gains signed on request, losses always, zero never", () => {
   expect(percent(0.098, { signed: true })).toBe("+9,8 %");
@@ -33,4 +33,29 @@ it("title-cases register names, keeping street words lower case", () => {
   expect(titleCase("GORENJA VAS")).toBe("Gorenja vas");
   expect(titleCase("NAŠA ULICA")).toBe("Naša ulica");
   expect(titleCase("SPODNJE GAMELJNE-TACEN")).toBe("Spodnje Gameljne-Tacen");
+});
+
+it("never reads a division by zero as a percent, and shares one signed helper", () => {
+  expect(percentSigned(0.1)).toBe("+10,0\u00a0%");
+  expect(percentPoints(45.56)).toBe("+45,6\u00a0%");
+  expect(percent(Number.NaN)).toBe("—");
+  expect(percent(Number.POSITIVE_INFINITY, { signed: true })).toBe("—");
+});
+
+it("shows a missing or malformed date as a dash instead of throwing", () => {
+  expect(day("2026-06-30")?.getDate()).toBe(30);
+  expect(day("")).toBeNull();
+  expect(day("n/a")).toBeNull();
+  expect(day("2026-13-01")).toBeNull();
+  expect(date(null)).toBe("—");
+  expect(date("ni podatka")).toBe("—");
+  expect(dateCompact(undefined)).toBe("—");
+  expect(month("2026-13-40")).toBe("—");
+  expect(month("2026-08-01")).toBe("avgust 2026");
+});
+
+it("names today in the reader's own calendar, not in UTC", () => {
+  // 00:30 on 2 July in Slovenia (UTC+2) is still 1 July in UTC.
+  expect(todayIso(new Date(2026, 6, 2, 0, 30))).toBe("2026-07-02");
+  expect(todayIso(new Date(2026, 0, 5))).toBe("2026-01-05");
 });

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 import urllib.parse
@@ -14,11 +15,14 @@ from typing import Any
 import httpx
 
 from . import http_client
+from .parsing import safe_file_name
 from .settings import API_BASE, MAX_DOWNLOAD_ATTEMPTS, NATIONAL_DATASETS
 
 logger = logging.getLogger(__name__)
 
 MUNICIPALITY_PRODUCT = f"{API_BASE}/display-views/groups/131/composite-products/323"
+#: The archive names GURS publishes (``ETN_SLO_2026_KPP_20261101.zip``, ``ETN_061_2012_KPP_….zip``).
+ARCHIVE_NAME = re.compile(r"ETN_[A-Za-z0-9]+_\d{4}_(?:KPP|NP)[A-Za-z0-9_-]*\.zip")
 
 
 class DatasetUnavailable(Exception):
@@ -37,7 +41,7 @@ class JGPClient:
         output_dir: Path,
         max_attempts: int = MAX_DOWNLOAD_ATTEMPTS,
         sleep: Callable[[float], None] = time.sleep,
-    ):
+    ) -> None:
         self.output_dir = output_dir
         self.max_attempts = max_attempts
         self._sleep = sleep
@@ -80,6 +84,7 @@ class JGPClient:
         return http_client.with_retries(operation, label, max_attempts=self.max_attempts, sleep=self._sleep)
 
     def fetch_municipality(self, municipality: int, year: int) -> Path:
+        """Download one municipality/year sales archive; retried on transient errors."""
         return self._with_retries(
             lambda: self._fetch_municipality_once(municipality, year),
             f"municipality={municipality} year={year} download",
@@ -92,6 +97,7 @@ class JGPClient:
         )
 
     def fetch_national(self, dataset_type: str, year: int) -> Path:
+        """Download one national yearly archive; retried on transient errors."""
         return self._with_retries(
             lambda: self._fetch_national_once(dataset_type, year),
             f"national {dataset_type} year={year} download",
@@ -108,7 +114,7 @@ class JGPClient:
         if result.get("statusText") != "OK" or not result.get("file"):
             raise DatasetUnavailable(f"{label} dataset is not ready: {result}")
         download = self._get_json(f"{base}/file?{query}")
-        target = self.output_dir / result["file"]["name"]
+        target = self.output_dir / safe_file_name(str(result["file"]["name"]), ARCHIVE_NAME)
         started = time.monotonic()
         path = http_client.download_file(self._http(), download["url"], target)
         logger.info("Downloaded %s: %s in %.0fs", label, path, time.monotonic() - started)

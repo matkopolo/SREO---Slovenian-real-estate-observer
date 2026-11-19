@@ -4,7 +4,7 @@ import { api, clearApiCache } from "./api";
 let resolveFetch: (() => void) | undefined;
 const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
   init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
-  resolveFetch = () => resolve({ ok: true, status: 200, json: async () => ({ total: 1 }) } as Response);
+  resolveFetch = () => resolve({ ok: true, status: 200, json: () => Promise.resolve({ total: 1 }) } as Response);
 }));
 afterEach(() => { vi.unstubAllGlobals(); fetchMock.mockClear(); clearApiCache(); });
 
@@ -51,7 +51,7 @@ it("keeps a request that is asked again in the same turn (a remount) instead of 
 });
 
 it("never keeps a failure", async () => {
-  const failing = vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) }) as Response);
+  const failing = vi.fn(() => Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({}) } as Response));
   vi.stubGlobal("fetch", failing);
   await expect(api("/api/v1/data-status")).rejects.toMatchObject({ status: 503 });
   await expect(api("/api/v1/data-status")).rejects.toMatchObject({ status: 503 });

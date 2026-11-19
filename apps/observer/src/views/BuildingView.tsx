@@ -23,7 +23,7 @@ export function BuildingView({ state, navigate, cutoff, scope, parents, building
   const missing = load.error instanceof ApiError && load.error.status === 404;
   // A bare building link has no area yet: the building's own district or municipality, from one of its sales.
   const first = building?.saleTransactions[0]?.transactionId;
-  const areas = useLoad(first ? `sale-areas-${first}` : null, (signal) => loadSaleAreas(first!, signal));
+  const areas = useLoad(first ?? null, (id) => `sale-areas-${id}`, (id, signal) => loadSaleAreas(id, signal));
   const followArea = useEffectEvent((found: NonNullable<typeof areas.data>) => {
     // Keep the area the user came from when the building lies in it (Šiška stays Šiška).
     if (found.some((item) => item.id === state.g)) return;
@@ -33,8 +33,9 @@ export function BuildingView({ state, navigate, cutoff, scope, parents, building
   useEffect(() => { if (areas.data) followArea(areas.data); }, [areas.data]);
 
   // The building against its area: the area's P25–P75 for the same type over five years.
-  const spread = useLoad(cutoff && building ? `spread|${scope.id ?? 0}|${state.group}|${state.landScope}|${cutoff}` : null,
-    (signal) => loadSpread(scope.id, periodWindows(cutoff!, 5).sales.current, { propertyGroup: state.group, landScope: state.landScope }, "sale", signal));
+  const spread = useLoad(cutoff && building ? { cutoff, id: scope.id, group: state.group, landScope: state.landScope } : null,
+    (input) => `spread|${input.id ?? 0}|${input.group}|${input.landScope}|${input.cutoff}`,
+    (input, signal) => loadSpread(input.id, periodWindows(input.cutoff, 5).sales.current, { propertyGroup: input.group, landScope: input.landScope }, "sale", signal));
   const percentiles = spread.data?.isPublishable ? spread.data.percentiles : undefined;
   const band = sizeBand(state.group, state.size);
   const scopeName = scope.id == null ? scope.name : <Name>{scope.name}</Name>;

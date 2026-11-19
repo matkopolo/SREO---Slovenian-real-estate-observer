@@ -99,3 +99,59 @@ def test_transient_classification():
         httpx.HTTPStatusError("x", request=request, response=httpx.Response(404, request=request))
     )
     assert not http_client.is_transient(ValueError("bad json"))
+
+
+def test_concurrent_downloads_of_the_same_target_use_distinct_partial_files(tmp_path: Path):
+    """Two processes downloading one archive must never share a .part file (the second would truncate the first)."""
+    import threading
+
+    payload = tmp_path / "payload.zip"
+    with zipfile.ZipFile(payload, "w") as output:
+        output.writestr("a.csv", "x\n")
+    content = payload.read_bytes()
+    target = tmp_path / "out" / "archive.zip"
+    partials_seen = set()
+    started = threading.Barrier(2, timeout=5)
+
+    class Slow(httpx.SyncByteStream):
+        def __iter__(self):
+            started.wait()
+            yield content[:10]
+            partials_seen.update(p.name for p in target.parent.glob("*.part"))
+            yield content[10:]
+
+    def download() -> None:
+        with client_for(lambda _request: httpx.Response(200, stream=Slow())) as client:
+            http_client.download_file(client, "https://x.test/a.zip", target)
+
+    threads = [threading.Thread(target=download) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(partials_seen) == 2
+    assert zipfile.is_zipfile(target)
+    assert list(target.parent.iterdir()) == [target]
+
+
+def test_downloads_beyond_the_size_cap_are_rejected_and_cleaned_up(tmp_path: Path):
+    target = tmp_path / "archive.zip"
+    with (
+        client_for(lambda _request: httpx.Response(200, content=b"x" * 2048)) as client,
+        pytest.raises(http_client.DownloadTooLarge, match="exceeds 1024 bytes"),
+    ):
+        http_client.download_file(client, "https://x.test/a.zip", target, validate=None, max_bytes=1024)
+    with (
+        client_for(lambda _request: httpx.Response(200, headers={"content-length": "4096"}, content=b"")) as client,
+        pytest.raises(http_client.DownloadTooLarge, match="Content-Length 4096"),
+    ):
+        http_client.download_file(client, "https://x.test/a.zip", target, validate=None, max_bytes=1024)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_request_errors_are_not_retried_as_transient():
+    request = httpx.Request("GET", "file:///etc/passwd")
+    assert not http_client.is_transient(httpx.UnsupportedProtocol("unsupported", request=request))
+    assert not http_client.is_transient(httpx.ProxyError("proxy", request=request))
+    assert http_client.is_transient(httpx.RemoteProtocolError("closed", request=request))

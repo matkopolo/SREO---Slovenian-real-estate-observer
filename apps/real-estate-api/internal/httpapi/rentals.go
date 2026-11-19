@@ -59,7 +59,7 @@ func (s *server) rentalMapClusters(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	bounds, ok := mapBounds(w, r)
+	bounds, ok := mapBounds(w, r, maxMapSpanDegrees)
 	if !ok {
 		return
 	}
@@ -99,7 +99,7 @@ func (s *server) rentalMapProperties(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	bounds, ok := mapBounds(w, r)
+	bounds, ok := mapBounds(w, r, maxMapSpanDegrees)
 	if !ok {
 		return
 	}

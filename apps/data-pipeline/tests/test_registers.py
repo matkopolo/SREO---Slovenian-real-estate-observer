@@ -9,17 +9,15 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+from real_estate_etl.parsing import dbf_day as _dbf_day
 from real_estate_etl.registers import (
     VALUATION_MEMBERS,
-    _dbf_day,
     _member,
     certificate_rows,
-    dbf_date,
     discover_energy_register,
     download_energy_register,
     download_valuation,
     flood_rows,
-    iter_polygons,
     load_energy_certificates,
     load_floods,
     load_valuation,
@@ -29,6 +27,7 @@ from real_estate_etl.registers import (
     valuation_rows,
     valuation_source_date,
 )
+from real_estate_etl.shapefile import dbf_date, iter_polygons
 
 # --------------------------------------------------------------------------- energy certificates
 

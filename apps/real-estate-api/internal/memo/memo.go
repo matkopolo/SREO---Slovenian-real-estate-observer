@@ -1,7 +1,8 @@
 // Package memo keeps the result of a slow load (an outbound call, a large query) in memory.
 //
 // One load runs at a time and its result is shared by every waiting caller. The load runs on
-// its own context with its own timeout, so a cancelled request never cancels it. A fresh value
+// its own context (a child of Options.Context) with its own timeout, so a cancelled request
+// never cancels it, while shutting the process down does. A fresh value
 // is served without waiting; an expired one is still served while a single background load
 // replaces it; and when a load fails, the last good value stays in use (stale on error) and
 // the next attempt waits for RetryAfter, so a failing source is not called on every request.
@@ -23,6 +24,9 @@ type Options struct {
 	Timeout time.Duration
 	// RetryAfter is the pause after a failed load before the next attempt.
 	RetryAfter time.Duration
+	// Context is the parent of every load's context: cancelling it aborts the loads in progress
+	// (process shutdown) so they release their connections. nil means context.Background().
+	Context context.Context
 	// Now replaces time.Now in tests.
 	Now func() time.Time
 }
@@ -77,6 +81,9 @@ func New[T any](load LoadFunc[T], options Options) *Value[T] {
 	}
 	if options.RetryAfter <= 0 {
 		options.RetryAfter = 30 * time.Second
+	}
+	if options.Context == nil {
+		options.Context = context.Background()
 	}
 	value := &Value[T]{load: load, options: options}
 	value.state.Store(&state[T]{})
@@ -151,7 +158,7 @@ func (v *Value[T]) start() <-chan struct{} {
 }
 
 func (v *Value[T]) run() {
-	ctx, cancel := context.WithTimeout(context.Background(), v.options.Timeout)
+	ctx, cancel := context.WithTimeout(v.options.Context, v.options.Timeout)
 	defer cancel()
 	previous := v.state.Load()
 	value, err := v.safeLoad(ctx, previous)

@@ -28,6 +28,7 @@ type Filter struct {
 	MaxMapFeatures int
 }
 
+// YearCount counts the registered buildings completed in one year.
 type YearCount struct {
 	Year           int     `json:"year"`
 	Buildings      int64   `json:"buildings"`
@@ -35,6 +36,7 @@ type YearCount struct {
 	GrossFloorArea float64 `json:"grossFloorArea"`
 }
 
+// PermitYear sums the building permits issued in one year.
 type PermitYear struct {
 	Year      string   `json:"year"`
 	Buildings *float64 `json:"buildings"`
@@ -42,6 +44,7 @@ type PermitYear struct {
 	FloorArea *float64 `json:"floorArea"`
 }
 
+// Summary is the construction activity of an area: registered buildings by year and permits.
 type Summary struct {
 	SourceDate      *string      `json:"sourceDate"`
 	BuildingsByYear []YearCount  `json:"buildingsByYear"`
@@ -49,6 +52,7 @@ type Summary struct {
 	PermitsScope    string       `json:"permitsScope"`
 }
 
+// MapFeature is one point of the construction map: a municipality aggregate or a building.
 type MapFeature struct {
 	Kind        string  `json:"kind"` // "area" or "building"
 	ID          string  `json:"id"`
@@ -61,6 +65,7 @@ type MapFeature struct {
 	GeographyID *int64  `json:"geographyId,omitempty"`
 }
 
+// Building is one registered building with its cadastral facts and agreement counts.
 type Building struct {
 	EID                  string   `json:"eid"`
 	CadastralCode        int      `json:"cadastralCode"`
@@ -83,15 +88,18 @@ type Building struct {
 	SourceDate           string   `json:"sourceDate"`
 }
 
+// Store answers the construction summary, map and building pages.
 type Store interface {
 	Summary(context.Context, Filter) (Summary, error)
 	MapFeatures(context.Context, Filter, bool) ([]MapFeature, bool, error)
 	Building(context.Context, string) (Building, error)
 }
 
-type Repository struct{ pool database.Querier }
+// Repository implements Store on PostgreSQL.
+type Repository struct{ db database.Querier }
 
-func NewRepository(pool database.Querier) *Repository { return &Repository{pool: pool} }
+// NewRepository returns a Repository reading through db.
+func NewRepository(db database.Querier) *Repository { return &Repository{db: db} }
 
 // area is a CTE selecting the boundary of the requested geography (Slovenia when NULL).
 const area = `area AS (
@@ -112,18 +120,21 @@ const municipalities = `municipalities AS (
 	WHERE g.id = coalesce($1::bigint, (SELECT id FROM analytics.geographic_units WHERE level = 'country' LIMIT 1))
 )`
 
+// Summary aggregates the registered buildings and permits of the filter's area and years.
 func (r *Repository) Summary(ctx context.Context, filter Filter) (Summary, error) {
 	var level string
-	if err := r.pool.QueryRow(ctx, `WITH `+area+` SELECT level FROM area`, filter.GeographyID).Scan(&level); errors.Is(err, pgx.ErrNoRows) {
+	err := r.db.QueryRow(ctx, `WITH `+area+` SELECT level FROM area`, filter.GeographyID).Scan(&level)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return Summary{}, ErrGeographyNotFound
-	} else if err != nil {
+	}
+	if err != nil {
 		return Summary{}, fmt.Errorf("geography level: %w", err)
 	}
 	var summary Summary
-	if err := r.pool.QueryRow(ctx, `SELECT max(source_date)::text FROM analytics.cadastre_buildings`).Scan(&summary.SourceDate); err != nil {
+	if err := r.db.QueryRow(ctx, `SELECT max(source_date)::text FROM analytics.cadastre_buildings`).Scan(&summary.SourceDate); err != nil {
 		return Summary{}, fmt.Errorf("building snapshot: %w", err)
 	}
-	rows, err := r.pool.Query(ctx, `WITH `+area+`
+	rows, err := r.db.Query(ctx, `WITH `+area+`
 		SELECT b.year_built, count(*), coalesce(sum(b.dwellings), 0), coalesce(sum(b.gross_floor_area), 0)::float8
 		FROM analytics.cadastre_buildings b, area
 		WHERE b.year_built BETWEEN $2 AND $3 AND ST_Covers(area.geometry, b.location)
@@ -141,7 +152,7 @@ func (r *Repository) Summary(ctx context.Context, filter Filter) (Summary, error
 	if level == "country" {
 		permitKeys, summary.PermitsScope = `SELECT 'SI'`, "slovenia"
 	}
-	rows, err = r.pool.Query(ctx, `WITH `+municipalities+`
+	rows, err = r.db.Query(ctx, `WITH `+municipalities+`
 		SELECT period,
 		       sum(value) FILTER (WHERE series = 'permit_buildings')::float8,
 		       sum(value) FILTER (WHERE series = 'permit_dwellings')::float8,
@@ -162,8 +173,11 @@ func (r *Repository) Summary(ctx context.Context, filter Filter) (Summary, error
 // MapFeatures returns municipality aggregates, or building points when buildings is true.
 func (r *Repository) MapFeatures(ctx context.Context, filter Filter, buildings bool) ([]MapFeature, bool, error) {
 	box := filter.BoundingBox
+	if box == nil {
+		return nil, false, errors.New("construction map features: a bounding box is required")
+	}
 	if buildings {
-		rows, err := r.pool.Query(ctx, `
+		rows, err := r.db.Query(ctx, `
 			SELECT 'building', b.eid, coalesce(t.label, 'stavba') || ' · ' || b.cadastral_code || '/' || b.building_number,
 			       ST_X(ST_Transform(b.location, 4326)), ST_Y(ST_Transform(b.location, 4326)),
 			       1::bigint, coalesce(b.dwellings, 0)::bigint, b.year_built, NULL::bigint
@@ -186,7 +200,7 @@ func (r *Repository) MapFeatures(ctx context.Context, filter Filter, buildings b
 		}
 		return features, truncated, nil
 	}
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.Query(ctx, `
 		SELECT 'area', m.id::text, m.name,
 		       ST_X(ST_Transform(ST_PointOnSurface(m.geometry_d96tm), 4326)),
 		       ST_Y(ST_Transform(ST_PointOnSurface(m.geometry_d96tm), 4326)),
@@ -215,9 +229,10 @@ func scanFeature(row pgx.CollectableRow) (MapFeature, error) {
 	return feature, err
 }
 
+// Building loads the registered building with the given GURS EID.
 func (r *Repository) Building(ctx context.Context, eid string) (Building, error) {
 	var building Building
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.QueryRow(ctx, `
 		SELECT b.eid, b.cadastral_code, b.building_number, b.year_built, b.floors, b.dwellings, b.business_units,
 		       t.label, s.label, st.label, b.gross_floor_area::float8, b.record_changed_on::text,
 		       m.name, m.id, ST_X(ST_Transform(b.location, 4326)), ST_Y(ST_Transform(b.location, 4326)),

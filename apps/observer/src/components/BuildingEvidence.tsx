@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useState, type ReactNode } from "react";
 import { loadBuilding, loadRentalEvidence, loadSaleEvidence, type BuildingStatistics, type PropertyGroup } from "../api";
-import { date, euro, integer, median as medianOf, percent, titleCase, upTo1 } from "../format";
+import { date, euro, integer, median as medianOf, percentPoints, titleCase, upTo1 } from "../format";
+import { failed, settled } from "../promise";
 import { useLoad } from "../hooks/useLoad";
 import { LANG, Name, t, tx } from "../i18n";
 import { TYPE_NAME } from "../nouns";
@@ -11,6 +12,7 @@ import {
   TransactionQuality, transactionSubtitle, transactionTitle,
 } from "./TransactionDetails";
 import { BuildingFacts } from "./BuildingFacts";
+import { LoadFailed } from "./LoadState";
 import { RangeBar } from "./charts";
 import "./building-evidence.css"; // i18n-ignore (code)
 
@@ -57,7 +59,7 @@ function buildingSelection<T extends Agreement>(items: T[], { group, band, every
   const dated = list.map((item) => Number(item.contractDate?.slice(0, 4))).filter((year) => year > 0);
   return {
     list, priced, ofType, older: sized.filter((item) => !recent(item)).length, bandCount: ofType.filter(inBand).length,
-    median: medianOf(priced.map((item) => item.amountPerSqm!)) ?? undefined,
+    median: medianOf(priced.flatMap((item) => item.amountPerSqm == null ? [] : [item.amountPerSqm])) ?? undefined,
     first: everything && dated.length ? Math.min(...dated) : first, last,
   };
 }
@@ -117,7 +119,8 @@ export function BuildingStack({ building, onChoose, band: givenBand, group: pref
   const label = (year: number) => span.length <= 8 || year % 5 === 0; // i18n-ignore (code)
   const place = [building.street && titleCase(building.street), building.houseNumber && `${building.houseNumber}${building.houseNumberSuffix ?? ""}`].filter(Boolean).join(" ");
   const facts = buildingFacts(building);
-  const compare = area && !isRent && !everything ? priced.length >= 3 && median != null : false;
+  // The building's median against the area's middle half: only with three or more sales in the statistics.
+  const compare = area && !isRent && !everything && priced.length >= 3 && median != null ? median : null;
   return <section className="be-stack" aria-labelledby="be-title">
     <h2 className="section-title" id="be-title">{t("V tej stavbi")}</h2>
     <p className="muted be-meta">{facts || (LANG === "sl" ? place : <Name>{place}</Name>)}</p>{/* i18n-ignore (class names, code) */}
@@ -132,9 +135,9 @@ export function BuildingStack({ building, onChoose, band: givenBand, group: pref
         </select></label>}
     </div>
     <p className="stage-sub be-count">{what} {period}{sizeNote}{value}.</p>
-    {area && !isRent && !everything && (compare ? <div className="be-area">
-      <RangeBar p25={area.p25} p50={area.p50} p75={area.p75} min={Math.min(area.p05 ?? area.p25 * 0.7, median! * 0.95)} max={Math.max(area.p95 ?? 0, area.p75 * 1.2, median! * 1.05)}
-        unit="€/m²" label={t("Cena v stavbi glede na razpon območja")} markers={[{ value: median!, name: t("Ta stavba") }]}/>
+    {area && !isRent && !everything && (compare != null ? <div className="be-area">
+      <RangeBar p25={area.p25} p50={area.p50} p75={area.p75} min={Math.min(area.p05 ?? area.p25 * 0.7, compare * 0.95)} max={Math.max(area.p95 ?? 0, area.p75 * 1.2, compare * 1.05)}
+        unit="€/m²" label={t("Cena v stavbi glede na razpon območja")} markers={[{ value: compare, name: t("Ta stavba") }]}/>
       <p className="muted">{tx("Mediana stavbe je iz istih {count} kot zgoraj, srednja polovica iz prodaj v območju {area}.",
         { count: count(priced.length, SALES_OF), area: area.name })}</p>
     </div> : <p className="muted">{tx("Za primerjavo z območjem {area} je v tem izboru premalo prodaj v statistiki ({count}).", { area: area.name, count: integer(priced.length) })}</p>)}
@@ -182,7 +185,6 @@ function OtherSales({ building, transactionId, group, perSqm, band, kind, onChoo
   const others = selection.list.filter((item) => item.transactionId !== transactionId);
   const nouns = isRent ? NOUN_FORMS.najem : NOUN_FORMS.prodaja;
   const scope = `${yearsText(selection.first, selection.last)}${band ? ` ${t("(velikost {size})", { size: band.label })}` : ""}`;
-  const signed = (value: number) => percent(value / 100, { signed: true, digits: "upTo1" });
   return <section aria-labelledby="td-comparables"><h3 id="td-comparables">{isRent ? t("Drugi najemi v isti stavbi") : t("Druge prodaje v isti stavbi")}</h3>
     {others.length === 0 ? <p className="muted">{isRent ? t("V stavbi ni drugih najemov {scope}.", { scope }) : t("V stavbi ni drugih prodaj {scope}.", { scope })}</p> : <>
       <p className="muted">{salesOf(group, others.length, nouns)} {scope}. {isRent ? t("Razlika v ceni na m² glede na ta najem, brez prilagoditve za čas.")
@@ -192,8 +194,8 @@ function OtherSales({ building, transactionId, group, perSqm, band, kind, onChoo
         return <li key={item.transactionId}>
           <div className="td-comparable-head">
             <button type="button" className="link" onClick={() => onChoose({ kind, id: item.transactionId })}>{item.contractDate ? date(item.contractDate) : "—"}</button>
-            {difference != null && <strong className="td-diff" aria-label={isRent ? t("{difference} na m² glede na ta najem", { difference: signed(difference) })
-              : t("{difference} na m² glede na to prodajo", { difference: signed(difference) })}>{signed(difference)}</strong>}
+            {difference != null && <strong className="td-diff" aria-label={isRent ? t("{difference} na m² glede na ta najem", { difference: percentPoints(difference) })
+              : t("{difference} na m² glede na to prodajo", { difference: percentPoints(difference) })}>{percentPoints(difference)}</strong>}
           </div>
           <span>{[item.amount == null ? undefined : isRent ? t("{amount} na mesec", { amount: euro(item.amount) }) : euro(item.amount),
             item.amountPerSqm == null ? undefined : `${perSqmText(item.amountPerSqm)} ${isRent ? t("€/m² na mesec") : "€/m²"}`,
@@ -204,9 +206,6 @@ function OtherSales({ building, transactionId, group, perSqm, band, kind, onChoo
   </section>;
 }
 
-type SaleEvidence = Awaited<ReturnType<typeof loadSaleEvidence>>; // i18n-ignore (code)
-type RentalEvidence = Awaited<ReturnType<typeof loadRentalEvidence>>;
-const settled = <T,>(result: PromiseSettledResult<T> | undefined) => result?.status === "fulfilled" ? result.value : undefined; // i18n-ignore (code)
 const VALUE_GROUPS = new Set(["apartment", "house", "commercial", "garage"]);
 
 export function TransactionEvidence({ selected, onChoose, onBuilding, building, group, band, primary = false }: {
@@ -218,9 +217,13 @@ export function TransactionEvidence({ selected, onChoose, onBuilding, building, 
   /** The type chosen on the map and its size band: the band filters the other sales only for that type. */
   group?: PropertyGroup; band?: SizeBand;
 }) {
-  const sale = useLoad<SaleEvidence>(selected.kind === "sale" ? `sale-evidence-${selected.id}` : null, (signal) => loadSaleEvidence(selected.id, signal)).data;
-  const rent = useLoad<RentalEvidence>(selected.kind === "rent" ? `rent-evidence-${selected.id}` : null, (signal) => loadRentalEvidence(selected.id, signal)).data;
+  const saleLoad = useLoad(selected.kind === "sale" ? selected.id : null, (id) => `sale-evidence-${id}`, (id, signal) => loadSaleEvidence(id, signal));
+  const rentLoad = useLoad(selected.kind === "rent" ? selected.id : null, (id) => `rent-evidence-${id}`, (id, signal) => loadRentalEvidence(id, signal));
+  const load = selected.kind === "sale" ? saleLoad : rentLoad;
+  const sale = saleLoad.data, rent = rentLoad.data;
   const evidence = selected.kind === "sale" ? sale : rent;
+  // A part that could not be loaded (the comparison, the model, the history) is said once; the rest of the page still shows.
+  const partFailed = !!evidence && (failed(evidence.context) || failed(evidence.valuation) || (sale != null && failed(sale.history)));
   const context = settled(evidence?.context);
   const valuation = settled(evidence?.valuation);
   const history = selected.kind === "sale" ? settled(sale?.history) : undefined;
@@ -235,7 +238,7 @@ export function TransactionEvidence({ selected, onChoose, onBuilding, building, 
   const reportBuilding = useEffectEvent((code: number, number: string) => onBuilding?.(code, number));
   useEffect(() => { if (ko && st) reportBuilding(ko, st); }, [ko, st]);
   const given = building && building.cadastralMunicipalityCode === ko && building.buildingNumber === st ? building : undefined;
-  const buildingLoad = useLoad(!given && ko && st ? `building-${ko}-${st}` : null, (signal) => loadBuilding(ko!, st!, signal));
+  const buildingLoad = useLoad(!given && ko && st ? { ko, st } : null, (ref) => `building-${ref.ko}-${ref.st}`, (ref, signal) => loadBuilding(ref.ko, ref.st, signal));
   // undefined: loading, null: could not be loaded (the API's matched subset is shown instead).
   const loaded = buildingLoad.error ? null : buildingLoad.data;
   const own = given ?? (loaded && loaded.cadastralMunicipalityCode === ko && loaded.buildingNumber === st ? loaded : undefined);
@@ -253,8 +256,10 @@ export function TransactionEvidence({ selected, onChoose, onBuilding, building, 
     <header><div><p className="eyebrow">{isRent ? t("Najem") : t("Prodaja")}</p>
       {primary ? <h1 className="td-title">{title}</h1> : <h2>{title}</h2>}
       {subtitle && <p className="td-address">{subtitle}</p>}</div></header>
-    {!evidence && <p className="muted" role="status">{isRent ? t("Nalagam najem …") : t("Nalagam prodajo …")}</p>}
-    {evidence && evidence.detail.status === "rejected" && <p className="error" role="alert">{isRent ? t("Najema ni bilo mogoče naložiti.") : t("Prodaje ni bilo mogoče naložiti.")}</p>}
+    {load.error != null ? <LoadFailed retry={load.retry}>{isRent ? t("Najema ni bilo mogoče naložiti.") : t("Prodaje ni bilo mogoče naložiti.")}</LoadFailed>
+      : !evidence && <p className="muted" role="status">{isRent ? t("Nalagam najem …") : t("Nalagam prodajo …")}</p>}
+    {evidence && failed(evidence.detail) && <LoadFailed retry={load.retry}>{isRent ? t("Najema ni bilo mogoče naložiti.") : t("Prodaje ni bilo mogoče naložiti.")}</LoadFailed>}
+    {partFailed && <LoadFailed retry={load.retry}>{t("Dela podatkov o tem poslu (primerjava, model ali zgodovina) ni bilo mogoče naložiti; prikazano je, kar je na voljo.")}</LoadFailed>}
     {detail && <dl className="facts td-key-facts">
       <div><dt>{isRent ? t("Najemnina na m²") : t("Cena na m²")}</dt><dd>{perSqm == null ? "—" : `${perSqmText(perSqm)} ${unitLabel}`}</dd></div>
       <div><dt>{t("Datum pogodbe")}</dt><dd>{detail.contractDate ? date(detail.contractDate) : "—"}</dd></div>

@@ -17,6 +17,7 @@ import (
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/memo"
 )
 
+// DefaultSURSURL is the SURS PxWeb endpoint of the H281S consumer-price index table.
 const DefaultSURSURL = "https://pxweb.stat.si/SiStatData/api/v1/en/Data/H281S.px"
 
 // ErrSourceUnavailable wraps every failure to obtain the CPI table from SURS.
@@ -31,11 +32,13 @@ const (
 	cacheFor         = 6 * time.Hour
 )
 
+// Point is the average year-on-year inflation rate of one period.
 type Point struct {
 	Period            string  `json:"period"`
 	AnnualRatePercent float64 `json:"annualRatePercent"`
 }
 
+// InflationFactor is the chained CPI ratio from one month to another.
 type InflationFactor struct {
 	From   string  `json:"from"`
 	To     string  `json:"to"`
@@ -44,6 +47,7 @@ type InflationFactor struct {
 	Source string  `json:"source"`
 }
 
+// Store answers inflation rates and factors.
 type Store interface {
 	Inflation(ctx context.Context, from, to time.Time, interval string) ([]Point, error)
 	InflationFactor(ctx context.Context, from, to time.Time) (InflationFactor, error)
@@ -61,7 +65,9 @@ type Client struct {
 	monthOnMonth *memo.Value[monthlyIndex]
 }
 
-func NewClient(httpClient *http.Client, url string) *Client {
+// NewClient returns a Client reading H281S from url (DefaultSURSURL when empty) with httpClient
+// (a 12 s client when nil). ctx bounds the background refreshes: cancel it when the process stops.
+func NewClient(ctx context.Context, httpClient *http.Client, url string) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 12 * time.Second}
 	}
@@ -69,7 +75,7 @@ func NewClient(httpClient *http.Client, url string) *Client {
 		url = DefaultSURSURL
 	}
 	client := &Client{url: url, httpClient: httpClient}
-	options := memo.Options{TTL: cacheFor, Timeout: 15 * time.Second, RetryAfter: time.Minute}
+	options := memo.Options{TTL: cacheFor, Timeout: 15 * time.Second, RetryAfter: time.Minute, Context: ctx}
 	client.yearOnYear = memo.New(client.loader(yearOnYearIndex), options)
 	client.monthOnMonth = memo.New(client.loader(monthOnMonthIndex), options)
 	return client

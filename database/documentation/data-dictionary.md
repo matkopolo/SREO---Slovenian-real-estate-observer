@@ -85,7 +85,6 @@ One purchase transaction. Join property records with `transaction_id`.
 | `vat_rate` | `STOPNJA_DDV` | `numeric(8,4)` | yes | VAT rate supplied by GURS. |
 | `lease_expiry_date` | `DATUM_IZTEKA_LIZINGA` | `date` | yes | Leasing expiry date when the purchase is related to leasing. |
 | `lease_termination_date` | `DATUM_PRENEHANJA_LIZINGA` | `date` | yes | Leasing termination date. |
-| `notes` | `OPOMBE_O_PRAVNEM_POSLU` | `text` | yes | Source notes about the legal transaction. |
 | `agency_brokered` | `POSREDOVANJE_NEPREMICNINSKE_AGENCIJE` | `boolean` | yes | Whether a real-estate agency brokered the transaction. |
 | `last_changed_date` | `DATUM_ZADNJE_SPREMEMBE_POSLA` | `date` | yes | Last source modification date. |
 | `last_effective_date` | `DATUM_ZADNJE_UVELJAVITVE_POSLA` | `date` | yes | Last effective-version date. |
@@ -129,7 +128,6 @@ Every source row is preserved. A transaction may contain several rows with the s
 | `outdoor_parking_spaces` | `STEVILO_ZUNANJIH_PARKIRNIH_MEST` | `integer` | yes | Number of outdoor parking spaces. |
 | `atrium` | `ATRIJ` | `boolean` | yes | Whether an atrium is included. |
 | `atrium_area` | `POVRSINA_ATRIJA` | `numeric(14,2)` | yes | Atrium area, m². |
-| `property_notes` | `OPOMBE_O_NEPREMICNINI` | `text` | yes | Source property notes. |
 | `actual_use` | `DEJANSKA_RABA_DELA_STAVBE` | `text` | yes | Actual-use code and description as supplied. |
 | `position_in_building` | `LEGA_DELA_STAVBE_V_STAVBI` | `text` | yes | Position/floor location within the building. |
 | `room_count` | `STEVILO_SOB` | `numeric(8,2)` | yes | Number of rooms. |
@@ -160,7 +158,6 @@ Every source row is preserved. A transaction may contain several rows with the s
 | `permanent_crop_type` | `VRSTA_TRAJNEGA_NASADA` | `integer` | yes | Permanent crop/plantation type code. |
 | `permanent_crop_age` | `STAROST_TRAJNEGA_NASADA` | `integer` | yes | Permanent crop age, normally years. |
 | `sold_share` | `PRODANI_DELEZ_PARCELE` | `text` | yes | Sold fractional parcel share as source text. |
-| `property_notes` | `OPOMBE_O_NEPREMICNINI` | `text` | yes | Source property notes. |
 | `parcel_area` | `POVRSINA_PARCELE` | `numeric(14,2)` | yes | Parcel area, m². |
 | `contractual_price` | `POGODBENA_CENA_PARCELE` | `numeric(16,2)` | yes | Price attributed to this parcel, normally EUR. |
 | `vat_rate` | `STOPNJA_DDV_PARCELE` | `numeric(8,4)` | yes | VAT rate for this parcel. |
@@ -189,7 +186,6 @@ Every source row is preserved. A transaction may contain several rows with the s
 | `rental_time` | `CAS_NAJEMA` | `text` | yes | Source rental-time classification. |
 | `rental_duration` | `TRAJANJE_NAJEMA` | `text` | yes | Source rental duration value/description. |
 | `closure_or_early_termination_date` | `DATUM_ZAKLJUCKA_NAJEMA_DATUM_PREDCASNE_PREKINITVE_NAJEMA` | `date` | yes | Completion or early termination date. |
-| `notes` | `OPOMBE_O_PRAVNEM_POSLU` | `text` | yes | Source legal-transaction notes. |
 | `agency_brokered` | `POSREDOVANJE_NEPREMICNINSKE_AGENCIJE` | `boolean` | yes | Whether an agency brokered the rental. |
 | `last_changed_date` | `DATUM_ZADNJE_SPREMEMBE_POSLA` | `date` | yes | Last source modification date. |
 | `last_effective_date` | `DATUM_ZADNJE_UVELJAVITVE_POSLA` | `date` | yes | Last effective-version date. |
@@ -223,7 +219,6 @@ Every source row is preserved. A transaction may contain several rows with the s
 | `rented_spaces_area` | `POVRSINA_ODDANIH_PROSTOROV` | `numeric(14,2)` | yes | Rented area, m². |
 | `rented_area_equals_building_part` | `POVRSINA_ODDANIH_PROSTOROV_ENAKA_DELU_STAVBE` | `boolean` | yes | Whether rented area equals the entire building part. |
 | `contractual_rent` | `POGODBENA_NAJEMNINA_POSAMEZNIH_ODDANIH_PROSTOROV` | `numeric(16,2)` | yes | Rent attributed to this rented space, normally EUR. |
-| `rented_spaces_notes` | `OPOMBE_O_ODDANIH_PROSTORIH` | `text` | yes | Source notes about rented spaces. |
 | `construction_year` | `LETO_IZGRADNJE_STAVBE` | `integer` | yes | Building construction year. |
 | `actual_use` | `DEJANSKA_RABA_DELA_STAVBE` | `text` | yes | Actual-use code and description. |
 | `position_in_building` | `LEGA_DELA_STAVBE_V_STAVBI` | `text` | yes | Position/floor within the building. |
@@ -295,7 +290,10 @@ or empty packages are `unknown`.
 One persisted analytical row per sale transaction, rebuilt with
 `SELECT analytics.refresh_sale_facts()`. PostgreSQL/PostGIS performs the
 aggregation and spatial assignment; the API does not load the source dataset
-into memory.
+into memory. The table has no foreign key to `transactions` or to
+`analytics.geographic_units` (migration 050): the refresh deletes and rebuilds it
+as a whole inside the release transaction, and a committed source import must not
+change published facts. The same holds for `analytics.rental_facts`.
 
 The table records package component counts, stable property group, comparable
 area, analytical price, price/m², quality reasons, representative point, and
@@ -462,9 +460,6 @@ regression.
   land contains exclusively ETN codes 1 and/or 2.
 - `analytics.sale_facts_broad_land`: opt-in land codes 1–3.
 - `analytics.sale_facts_all_land`: explicit unrestricted audit population.
-- `analytics.missingness_profiles`: field coverage by transaction kind,
-  property group, contract year, and national/municipality geography. Targets
-  are never imputed.
 - `analytics.near_duplicate_candidates`: explainable cross-transaction
   same-building-part candidates within date, area, and amount tolerances.
 
@@ -493,11 +488,13 @@ Kataster nepremičnin (stavbe) national snapshot, replaced as a whole by
 | `municipality_eid` | text, null | | RPE municipality; equals `geographic_units.gurs_eid` |
 | `record_changed_on` | date, null | `DATUM_SYS` | Last change of the register record |
 | `location` | geometry(Point, 3794), null | | Building centroid (D96/TM) |
+| `facade_renovated`, `roof_renovated` | integer, null | `LETO_OBNOVE_FASADE`, `LETO_OBNOVE_STREHE` | Year the facade / roof was renovated (migration 049) |
 | `source_date` | date | file name | Date of the GURS snapshot; indexed for `max(source_date)` |
 
 `analytics.cadastre_codebooks`: labels for the coded cadastre columns, as
 published with the archive. Primary key `(codebook, code)`; `codebook` is one of
-`building_type`, `load_bearing_structure`, `registration_status`.
+`building_type`, `load_bearing_structure`, `registration_status` and, for the
+parts of buildings (049), `actual_use`.
 
 ### Building registers (migration 049)
 
@@ -608,5 +605,8 @@ only reads.
 | Role | Login | Privileges |
 |---|---|---|
 | `real_estate` | yes (development superuser) | Owns every object; used by the migration runner and destructive admin commands |
-| `real_estate_api` | yes | SELECT on the published source, reference and analytics data; EXECUTE on read-only helper functions |
-| `real_estate_pipeline` | yes (`PIPELINE_DATABASE_PASSWORD`) | SELECT/INSERT/UPDATE/DELETE/TRUNCATE on `public` and `analytics` tables (not `schema_migrations`), sequence USAGE, TEMPORARY; EXECUTE on the `analytics.refresh_*` functions, which run as SECURITY DEFINER. No DDL |
+| `real_estate_api` | yes (`API_DATABASE_PASSWORD`) | SELECT on the published source, reference and analytics data; EXECUTE on read-only helper functions; `default_transaction_read_only`, `statement_timeout` 15 s and `idle_in_transaction_session_timeout` 30 s set on the role (044, 053) |
+| `real_estate_pipeline` | yes (`PIPELINE_DATABASE_PASSWORD`) | SELECT/INSERT/UPDATE/DELETE/TRUNCATE on `public` and `analytics` tables (not `schema_migrations`), sequence USAGE, TEMPORARY; EXECUTE on the `analytics.refresh_*` functions, which run as SECURITY DEFINER with a 64 MB `work_mem` (052). No DDL |
+
+`PUBLIC` holds neither `CONNECT` nor `TEMPORARY` on the database (053).
+`database/checks/privileges.sql` asserts this table in CI.

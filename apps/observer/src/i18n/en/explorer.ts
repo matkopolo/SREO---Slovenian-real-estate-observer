@@ -1,5 +1,6 @@
 /** Explorer view: top bar, map, legend, map tooltips, building view and the map measures (metrics.ts). */
 export const explorer: Record<string, string> = {
+  "Ozadja zemljevida (ulic) ni bilo mogoče naložiti; območja in posli so prikazani brez njega.": "The street basemap could not be loaded; areas and transactions are shown without it.",
   // Top bar and period
   "Poiščite občino, četrtno skupnost, regijo ali naslov": "Search for a municipality, city district, region or address",
   "npr. Domžale, Savinjska, Kozje 144": "e.g. Kranj, Savinjska, Kozje 144",
