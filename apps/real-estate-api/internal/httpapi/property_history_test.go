@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/analytics"
+	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/economics"
 )
 
 type fakeHistory struct{ err error }
@@ -38,7 +39,7 @@ func TestHistoryHTTP(t *testing.T) {
 		t.Run(test.path, func(t *testing.T) {
 			handler := handlerWith(func(d *Dependencies) {
 				d.Histories = fakeHistory{test.err}
-				d.Economics = fakeEconomics{factorErr: errors.New("incomplete CPI series")}
+				d.Economics = fakeEconomics{factorErr: economics.ErrIncompleteSeries}
 			})
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequest("GET", test.path, nil))

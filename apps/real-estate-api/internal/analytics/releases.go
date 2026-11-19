@@ -24,6 +24,8 @@ type ReleaseSummary struct {
 	PublishedAt          *time.Time `json:"publishedAt,omitempty"`
 }
 
+// DataStatus reports the analytical releases: the active one, a pending one and the last
+// failure since.
 type DataStatus struct {
 	Status     string          `json:"status"`
 	Active     *ReleaseSummary `json:"activeRelease,omitempty"`
@@ -31,6 +33,7 @@ type DataStatus struct {
 	LastFailed *ReleaseSummary `json:"lastFailedRelease,omitempty"`
 }
 
+// ReleaseStore answers the data status.
 type ReleaseStore interface {
 	DataStatus(context.Context) (DataStatus, error)
 }
@@ -38,15 +41,18 @@ type ReleaseStore interface {
 // ActiveReleaseStore names the published release that the analytics endpoints answer from.
 // The HTTP layer derives ETags from it.
 type ActiveReleaseStore interface {
-	// ActiveReleaseID returns the active release id, or "" before the first publication. It may
-	// lag a new publication by a few seconds.
+	// ActiveReleaseID returns the active release id, or "" before the first publication. It is
+	// read from memory and may lag a new publication by up to activeReleaseTTL plus one load,
+	// during which a client revalidating an answer of the previous release still gets 304; a
+	// browser or proxy honouring the public Cache-Control adds its own max-age and
+	// stale-while-revalidate windows on top (see httpapi/caching.go).
 	ActiveReleaseID(context.Context) (string, error)
 }
 
 // activeReleaseTTL bounds how long a new publication can go unnoticed by ActiveReleaseID.
 const activeReleaseTTL = 10 * time.Second
 
-func newActiveReleaseCache(r *ReleaseRepository) *memo.Value[string] {
+func newActiveReleaseCache(parent context.Context, r *ReleaseRepository) *memo.Value[string] {
 	return memo.New(func(ctx context.Context, _ string, _ bool) (string, error) {
 		var id string
 		if err := r.db.QueryRow(ctx, `
@@ -55,9 +61,10 @@ func newActiveReleaseCache(r *ReleaseRepository) *memo.Value[string] {
 			return "", fmt.Errorf("load active release: %w", err)
 		}
 		return id, nil
-	}, memo.Options{TTL: activeReleaseTTL, Timeout: 5 * time.Second, RetryAfter: 5 * time.Second})
+	}, memo.Options{TTL: activeReleaseTTL, Timeout: 5 * time.Second, RetryAfter: 5 * time.Second, Context: parent})
 }
 
+// ActiveReleaseID returns the remembered active release id (ActiveReleaseStore).
 func (r *ReleaseRepository) ActiveReleaseID(ctx context.Context) (string, error) {
 	return r.active.Get(ctx)
 }
@@ -65,6 +72,7 @@ func (r *ReleaseRepository) ActiveReleaseID(ctx context.Context) (string, error)
 // ActiveReleaseCacheStats reports the use of the in-memory active release id.
 func (r *ReleaseRepository) ActiveReleaseCacheStats() memo.Stats { return r.active.Stats() }
 
+// DataStatus loads the active, pending and last failed releases.
 func (r *ReleaseRepository) DataStatus(ctx context.Context) (DataStatus, error) {
 	const query = `
 		SELECT release.id::text,release.status,release.stage,

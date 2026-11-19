@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// Config is the environment-based configuration of the API process.
 type Config struct {
 	ApplicationName        string
 	ApplicationBuild       string
@@ -29,6 +30,7 @@ type Config struct {
 	ShutdownTimeout   time.Duration
 }
 
+// Load reads the configuration from the environment and validates it.
 func Load() (Config, error) {
 	maxConnections, err := int32Env("DATABASE_MAX_CONNECTIONS", 10)
 	if err != nil {

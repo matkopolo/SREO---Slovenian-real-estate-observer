@@ -61,30 +61,31 @@ type Dependencies struct {
 }
 
 type server struct {
-	database           databasePinger
-	geographies        geography.Store
-	statistics         analytics.StatisticsStore
-	rentals            analytics.RentalStatisticsStore
-	transactions       analytics.TransactionDetailStore
-	histories          analytics.HistoryStore
-	distributions      analytics.DistributionStore
-	buildings          analytics.BuildingStore
-	anomaliesStore     analytics.AnomalyStore
-	models             analytics.ModelStore
-	releases           analytics.ReleaseStore
-	activeRelease      analytics.ActiveReleaseStore
-	maps               analytics.MapStore
-	economics          economics.Store
-	affordabilityStore affordability.Store
-	construction       construction.Store
-	demography         demography.Store
-	recent             analytics.RecentStore
-	hazards            analytics.HazardStore
-	environment        string
-	applicationName    string
-	applicationBuild   string
-	now                func() time.Time
-	// instance identifies this build and process in release ETags.
+	database         databasePinger
+	geographies      geography.Store
+	statistics       analytics.StatisticsStore
+	rentals          analytics.RentalStatisticsStore
+	transactions     analytics.TransactionDetailStore
+	histories        analytics.HistoryStore
+	distributions    analytics.DistributionStore
+	buildings        analytics.BuildingStore
+	anomalies        analytics.AnomalyStore
+	models           analytics.ModelStore
+	releases         analytics.ReleaseStore
+	activeRelease    analytics.ActiveReleaseStore
+	maps             analytics.MapStore
+	economics        economics.Store
+	affordability    affordability.Store
+	construction     construction.Store
+	demography       demography.Store
+	recent           analytics.RecentStore
+	hazards          analytics.HazardStore
+	environment      string
+	applicationName  string
+	applicationBuild string
+	now              func() time.Time
+	// instance identifies this build in release ETags: the same on every replica and restart
+	// of a build, so a load-balanced client revalidates against the same tag everywhere.
 	instance string
 }
 
@@ -99,38 +100,43 @@ func New(dependencies Dependencies) (http.Handler, error) {
 		now = time.Now
 	}
 	s := &server{
-		database:           dependencies.Database,
-		geographies:        dependencies.Geographies,
-		statistics:         dependencies.Statistics,
-		rentals:            dependencies.Rentals,
-		transactions:       dependencies.Transactions,
-		histories:          dependencies.Histories,
-		distributions:      dependencies.Distributions,
-		buildings:          dependencies.Buildings,
-		anomaliesStore:     dependencies.Anomalies,
-		models:             dependencies.Models,
-		releases:           dependencies.Releases,
-		activeRelease:      dependencies.ActiveRelease,
-		maps:               dependencies.Maps,
-		economics:          dependencies.Economics,
-		affordabilityStore: dependencies.Affordability,
-		construction:       dependencies.Construction,
-		demography:         dependencies.Demography,
-		recent:             dependencies.Recent,
-		hazards:            dependencies.Hazards,
-		environment:        dependencies.Environment,
-		applicationName:    dependencies.ApplicationName,
-		applicationBuild:   dependencies.ApplicationBuild,
-		now:                now,
-		instance:           digest([]byte(dependencies.ApplicationBuild + "|" + time.Now().UTC().Format(time.RFC3339Nano)))[:8],
+		database:         dependencies.Database,
+		geographies:      dependencies.Geographies,
+		statistics:       dependencies.Statistics,
+		rentals:          dependencies.Rentals,
+		transactions:     dependencies.Transactions,
+		histories:        dependencies.Histories,
+		distributions:    dependencies.Distributions,
+		buildings:        dependencies.Buildings,
+		anomalies:        dependencies.Anomalies,
+		models:           dependencies.Models,
+		releases:         dependencies.Releases,
+		activeRelease:    dependencies.ActiveRelease,
+		maps:             dependencies.Maps,
+		economics:        dependencies.Economics,
+		affordability:    dependencies.Affordability,
+		construction:     dependencies.Construction,
+		demography:       dependencies.Demography,
+		recent:           dependencies.Recent,
+		hazards:          dependencies.Hazards,
+		environment:      dependencies.Environment,
+		applicationName:  dependencies.ApplicationName,
+		applicationBuild: dependencies.ApplicationBuild,
+		now:              now,
+		instance:         digest([]byte(dependencies.ApplicationBuild))[:instanceDigestLength],
 	}
 	api := instrument(newHTTPMetrics(dependencies.Metrics),
 		middleware(dependencies.Logger, dependencies.AllowedOrigins, dependencies.RequestTimeout, recordRoute(s.routes())))
 	root := http.NewServeMux()
-	root.Handle("GET /metrics", dependencies.Metrics)
+	// The scrape endpoint skips the access log and CORS, but a panicking collector must not
+	// take the connection down and a scrape must end with the request deadline.
+	root.Handle("GET /metrics", recoverer(securityHeaders(deadline(dependencies.RequestTimeout, dependencies.Metrics))))
 	root.Handle("/", api)
 	return root, nil
 }
+
+// instanceDigestLength is how many characters of the build digest the release ETags carry.
+const instanceDigestLength = 8
 
 // validate reports every nil interface or pointer field of the dependencies.
 func (dependencies Dependencies) validate() error {

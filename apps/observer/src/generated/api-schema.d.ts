@@ -1652,6 +1652,156 @@ export interface components {
             limit: number;
             offset: number;
         };
+        PointGeometry: {
+            /** @constant */
+            type: "Point";
+            coordinates: number[];
+        };
+        PolygonGeometry: {
+            /** @enum {string} */
+            type: "Polygon" | "MultiPolygon";
+            coordinates: unknown;
+        };
+        /** @description One DRSV polygon, a hazard class (kind zone) or an area with a hydraulic study (kind study). */
+        FloodZoneFeature: {
+            /** @constant */
+            type: "Feature";
+            /** Format: int64 */
+            id: number;
+            geometry: components["schemas"]["PolygonGeometry"];
+            properties: {
+                /** @enum {string} */
+                kind: "zone" | "study";
+                /** @enum {string|null} */
+                hazardClass: "Pv" | "Ps" | "Pm" | "Pp" | null;
+            };
+        };
+        /** @description Sale or rental summaries per named geography; one Point feature (the unit's label position) each. Sale endpoints carry medianPricePerSqm and medianPrice, rental endpoints medianMonthlyRentPerSqm and medianMonthlyRent. */
+        GeographySummaryFeatureCollection: {
+            /** @constant */
+            type: "FeatureCollection";
+            features: {
+                /** @constant */
+                type: "Feature";
+                /** Format: int64 */
+                id: number;
+                geometry: components["schemas"]["PointGeometry"];
+                properties: {
+                    /** Format: int64 */
+                    geographyId: number;
+                    level: string;
+                    name: string;
+                    bounds?: number[] | null;
+                    /** Format: int64 */
+                    transactionCount: number;
+                    /** Format: int64 */
+                    representativeCount: number;
+                    medianPricePerSqm?: number | null;
+                    medianPrice?: number | null;
+                    medianMonthlyRentPerSqm?: number | null;
+                    medianMonthlyRent?: number | null;
+                };
+            }[];
+            count: number;
+            level?: string;
+        };
+        /** @description Grid clusters of sales; each feature is a Point with the cluster's counts and median. */
+        SaleClusterFeatureCollection: {
+            /** @constant */
+            type: "FeatureCollection";
+            features: {
+                /** @constant */
+                type: "Feature";
+                geometry: components["schemas"]["PointGeometry"];
+                properties: {
+                    /** Format: int64 */
+                    transactionCount: number;
+                    /** Format: int64 */
+                    representativeCount: number;
+                    medianPricePerSqm?: number | null;
+                };
+            }[];
+            count: number;
+            zoom?: number;
+        };
+        /** @description Grid clusters of rentals; each feature is a Point with the cluster's counts and medians. */
+        RentalClusterFeatureCollection: {
+            /** @constant */
+            type: "FeatureCollection";
+            features: {
+                /** @constant */
+                type: "Feature";
+                geometry: components["schemas"]["PointGeometry"];
+                properties: {
+                    /** Format: int64 */
+                    transactionCount: number;
+                    /** Format: int64 */
+                    representativeCount: number;
+                    medianMonthlyRentPerSqm?: number | null;
+                    medianMonthlyRent?: number | null;
+                };
+            }[];
+            count: number;
+            zoom?: number;
+        };
+        /** @description Single sales in the bounding box; each feature is a Point whose id is the transaction. */
+        SalePointFeatureCollection: {
+            /** @constant */
+            type: "FeatureCollection";
+            features: {
+                /** @constant */
+                type: "Feature";
+                /** Format: int64 */
+                id: number;
+                geometry: components["schemas"]["PointGeometry"];
+                properties: {
+                    /** Format: int64 */
+                    transactionId: number;
+                    cadastralMunicipalityCode: number | null;
+                    buildingNumber: string | null;
+                    longitude: number;
+                    latitude: number;
+                    /** Format: date */
+                    contractDate: string | null;
+                    propertyGroup: string;
+                    area: number | null;
+                    price: number | null;
+                    pricePerSqm: number | null;
+                    isRepresentative: boolean;
+                };
+            }[];
+            count: number;
+            limit?: number;
+        };
+        /** @description Single rentals in the bounding box; each feature is a Point whose id is the transaction. */
+        RentalPointFeatureCollection: {
+            /** @constant */
+            type: "FeatureCollection";
+            features: {
+                /** @constant */
+                type: "Feature";
+                /** Format: int64 */
+                id: number;
+                geometry: components["schemas"]["PointGeometry"];
+                properties: {
+                    /** Format: int64 */
+                    transactionId: number;
+                    cadastralMunicipalityCode: number | null;
+                    buildingNumber: string | null;
+                    longitude: number;
+                    latitude: number;
+                    /** Format: date */
+                    contractDate: string | null;
+                    propertyGroup: string;
+                    area: number | null;
+                    monthlyRent: number | null;
+                    monthlyRentPerSqm: number | null;
+                    isRepresentative: boolean;
+                };
+            }[];
+            count: number;
+            limit?: number;
+        };
         GeoJSONFeatureCollection: {
             /** @constant */
             type: "FeatureCollection";
@@ -2013,7 +2163,7 @@ export interface components {
         LandScope: "strict" | "broad" | "all" | "agricultural" | "forest" | "unverified" | "mixed" | "other";
         /** @description Official geographic unit at any supported hierarchy level. */
         StatisticsGeographyId: number;
-        /** @description WGS84 west,south,east,north coordinates. */
+        /** @description WGS84 west,south,east,north coordinates, spanning at most 8° on either axis. */
         BoundingBox: string;
     };
     requestBodies: never;
@@ -2184,7 +2334,7 @@ export interface operations {
         parameters: {
             query: {
                 level: "statistical_region" | "municipality" | "city_district" | "local_community" | "settlement";
-                /** @description Required for city_district, local_community and settlement. */
+                /** @description Required for city_district, local_community and settlement; west,south,east,north spanning at most 8° on either axis. */
                 bbox?: string;
                 detail?: "low" | "medium";
             };
@@ -2203,7 +2353,7 @@ export interface operations {
                     "application/geo+json": {
                         /** @enum {string} */
                         type: "FeatureCollection";
-                        features: Record<string, never>[];
+                        features: components["schemas"]["GeoJSONFeature"][];
                         count: number;
                     };
                 };
@@ -2564,7 +2714,7 @@ export interface operations {
     getRentalMapClusters: {
         parameters: {
             query: {
-                /** @description WGS84 west,south,east,north coordinates. */
+                /** @description WGS84 west,south,east,north coordinates, spanning at most 8° on either axis. */
                 bbox: components["parameters"]["BoundingBox"];
                 /** @description Inclusive contract-date lower bound. */
                 from?: components["parameters"]["FromDate"];
@@ -2591,7 +2741,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/geo+json": components["schemas"]["GeoJSONFeatureCollection"];
+                    "application/geo+json": components["schemas"]["RentalClusterFeatureCollection"];
                 };
             };
             400: components["responses"]["Error"];
@@ -2601,7 +2751,7 @@ export interface operations {
     getRentalMapProperties: {
         parameters: {
             query: {
-                /** @description WGS84 west,south,east,north coordinates. */
+                /** @description WGS84 west,south,east,north coordinates, spanning at most 8° on either axis. */
                 bbox: components["parameters"]["BoundingBox"];
                 /** @description Inclusive contract-date lower bound. */
                 from?: components["parameters"]["FromDate"];
@@ -2628,7 +2778,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/geo+json": components["schemas"]["GeoJSONFeatureCollection"];
+                    "application/geo+json": components["schemas"]["RentalPointFeatureCollection"];
                 };
             };
             400: components["responses"]["Error"];
@@ -2638,7 +2788,7 @@ export interface operations {
     getRentalMapGeographies: {
         parameters: {
             query: {
-                /** @description WGS84 west,south,east,north coordinates. */
+                /** @description WGS84 west,south,east,north coordinates, spanning at most 8° on either axis. */
                 bbox: components["parameters"]["BoundingBox"];
                 /** @description Inclusive contract-date lower bound. */
                 from?: components["parameters"]["FromDate"];
@@ -2665,7 +2815,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/geo+json": components["schemas"]["GeoJSONFeatureCollection"];
+                    "application/geo+json": components["schemas"]["GeographySummaryFeatureCollection"];
                 };
             };
             400: components["responses"]["Error"];
@@ -2699,6 +2849,7 @@ export interface operations {
     listFloodZones: {
         parameters: {
             query: {
+                /** @description WGS84 west,south,east,north coordinates, spanning at most 0.26° on either axis. */
                 bbox: string;
                 detail?: "low" | "medium" | "high";
             };
@@ -2717,7 +2868,7 @@ export interface operations {
                     "application/geo+json": {
                         /** @enum {string} */
                         type: "FeatureCollection";
-                        features: Record<string, never>[];
+                        features: components["schemas"]["FloodZoneFeature"][];
                         count: number;
                         truncated: boolean;
                         sources: {
@@ -2899,7 +3050,7 @@ export interface operations {
     getMapBuildings: {
         parameters: {
             query: {
-                /** @description WGS84 west,south,east,north coordinates. */
+                /** @description WGS84 west,south,east,north coordinates, spanning at most 8° on either axis. */
                 bbox: components["parameters"]["BoundingBox"];
                 /** @description Inclusive contract-date lower bound. */
                 from?: components["parameters"]["FromDate"];
@@ -2964,6 +3115,7 @@ export interface operations {
                 fromYear?: number;
                 toYear?: number;
                 withDwellings?: boolean;
+                /** @description WGS84 west,south,east,north coordinates, spanning at most 8° on either axis. */
                 bbox: string;
                 zoom: number;
             };
@@ -3290,7 +3442,7 @@ export interface operations {
     getSaleMapClusters: {
         parameters: {
             query: {
-                /** @description WGS84 west,south,east,north coordinates. */
+                /** @description WGS84 west,south,east,north coordinates, spanning at most 8° on either axis. */
                 bbox: components["parameters"]["BoundingBox"];
                 /** @description Inclusive contract-date lower bound. */
                 from?: components["parameters"]["FromDate"];
@@ -3320,7 +3472,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/geo+json": components["schemas"]["GeoJSONFeatureCollection"];
+                    "application/geo+json": components["schemas"]["SaleClusterFeatureCollection"];
                 };
             };
             400: components["responses"]["Error"];
@@ -3330,7 +3482,7 @@ export interface operations {
     getSaleMapProperties: {
         parameters: {
             query: {
-                /** @description WGS84 west,south,east,north coordinates. */
+                /** @description WGS84 west,south,east,north coordinates, spanning at most 8° on either axis. */
                 bbox: components["parameters"]["BoundingBox"];
                 /** @description Inclusive contract-date lower bound. */
                 from?: components["parameters"]["FromDate"];
@@ -3360,7 +3512,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/geo+json": components["schemas"]["GeoJSONFeatureCollection"];
+                    "application/geo+json": components["schemas"]["SalePointFeatureCollection"];
                 };
             };
             400: components["responses"]["Error"];
@@ -3370,7 +3522,7 @@ export interface operations {
     getSaleMapGeographies: {
         parameters: {
             query: {
-                /** @description WGS84 west,south,east,north coordinates. */
+                /** @description WGS84 west,south,east,north coordinates, spanning at most 8° on either axis. */
                 bbox: components["parameters"]["BoundingBox"];
                 /** @description Inclusive contract-date lower bound. */
                 from?: components["parameters"]["FromDate"];
@@ -3400,7 +3552,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/geo+json": components["schemas"]["GeoJSONFeatureCollection"];
+                    "application/geo+json": components["schemas"]["GeographySummaryFeatureCollection"];
                 };
             };
             400: components["responses"]["Error"];

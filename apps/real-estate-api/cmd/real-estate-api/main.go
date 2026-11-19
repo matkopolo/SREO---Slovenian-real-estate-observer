@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/affordability"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/analytics"
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/config"
@@ -39,37 +41,43 @@ func run() error {
 	logger := newLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	// signalCtx ends at the first SIGINT/SIGTERM and starts the graceful shutdown. processCtx is
+	// the parent of everything that may outlive a request (cache loads, the requests themselves
+	// through BaseContext); it is cancelled once the drain is over, so a slow query cannot keep
+	// a connection, and with it the process, alive.
+	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	processCtx, stopProcess := context.WithCancel(context.Background())
+	defer stopProcess()
 
-	pool, err := database.Open(ctx, database.Options{
+	pool, err := database.Open(signalCtx, database.Options{
 		URL: cfg.DatabaseURL, MaxConnections: cfg.DatabaseMaxConnections,
 		StatementTimeout: cfg.DatabaseStatementTimeout, ApplicationName: cfg.ApplicationName,
 	})
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
 	// Readiness pings through its own connection, so a saturated main pool does not make the
 	// container look dead and get restarted.
-	probe, err := database.OpenProbe(ctx, cfg.DatabaseURL, cfg.ApplicationName)
+	probe, err := database.OpenProbe(signalCtx, cfg.DatabaseURL, cfg.ApplicationName)
 	if err != nil {
+		pool.Close()
 		return err
 	}
-	defer probe.Close()
+	defer closeDatabase(logger, cfg.ShutdownTimeout, pool, probe)
 
 	geographyRepository := geography.NewRepository(pool)
-	repositories := analytics.NewRepositories(pool)
+	repositories := analytics.NewRepositories(processCtx, pool)
 	// Build the address search index now, so the first search after a restart is not slow.
-	// The build is detached from this context; this only bounds how long the warm-up waits.
+	// The build is detached from this wait; this only bounds how long the warm-up waits.
 	go func() {
-		warmCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		warmCtx, cancel := context.WithTimeout(processCtx, 3*time.Minute)
 		defer cancel()
 		if err := repositories.Buildings.WarmSearchIndex(warmCtx); err != nil {
 			logger.Warn("search index warm-up failed; the first search will retry", "error", err)
 		}
 	}()
-	economicsClient := economics.NewClient(nil, "")
+	economicsClient := economics.NewClient(processCtx, nil, "")
 	registry := metrics.NewRegistry()
 	metrics.RegisterRuntime(registry)
 	registerPoolMetrics(registry, pool)
@@ -95,7 +103,7 @@ func run() error {
 		Economics:        economicsClient,
 		Affordability:    affordability.NewRepository(pool),
 		Construction:     construction.NewRepository(pool),
-		Demography:       demography.NewRepository(pool),
+		Demography:       demography.NewRepository(processCtx, pool),
 		Recent:           repositories.Transactions,
 		Hazards:          repositories.Hazards,
 		Metrics:          registry,
@@ -116,7 +124,8 @@ func run() error {
 		ReadTimeout:       cfg.ReadTimeout,
 		WriteTimeout:      cfg.WriteTimeout,
 		IdleTimeout:       cfg.IdleTimeout,
-		MaxHeaderBytes:    1 << 20,
+		MaxHeaderBytes:    maxHeaderBytes,
+		BaseContext:       func(net.Listener) context.Context { return processCtx },
 	}
 
 	serverErrors := make(chan error, 1)
@@ -128,17 +137,44 @@ func run() error {
 	}()
 
 	select {
-	case <-ctx.Done():
+	case <-signalCtx.Done():
 		logger.Info("shutdown requested")
 	case err := <-serverErrors:
 		if !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
 	}
+	// Restore the default signal handling now, so a second signal ends the process at once
+	// instead of being swallowed while the drain runs.
+	stop()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
-	return server.Shutdown(shutdownCtx)
+	err = server.Shutdown(shutdownCtx)
+	// Requests still running after the drain, and cache loads, are cancelled here; their
+	// connections return to the pools, which closeDatabase then closes.
+	stopProcess()
+	return err
+}
+
+// maxHeaderBytes bounds the request line and headers of one request.
+const maxHeaderBytes = 1 << 20
+
+// closeDatabase closes the pools, waiting at most timeout for connections that cancelled
+// handlers or cache loads are still returning: a hung one must not keep the process alive.
+func closeDatabase(logger *slog.Logger, timeout time.Duration, pools ...*pgxpool.Pool) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, pool := range pools {
+			pool.Close()
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		logger.Warn("database pools did not close in time; exiting anyway", "timeout", timeout.String())
+	}
 }
 
 func newLogger(level string) *slog.Logger {

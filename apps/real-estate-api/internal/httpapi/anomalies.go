@@ -9,7 +9,7 @@ import (
 
 // The anomaly queue is read-only: reviews are not recorded through the API.
 
-func (s *server) anomalies(w http.ResponseWriter, r *http.Request) {
+func (s *server) listAnomalies(w http.ResponseWriter, r *http.Request) {
 	filter, ok := anomalyFilter(w, r)
 	if !ok {
 		return
@@ -18,7 +18,7 @@ func (s *server) anomalies(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, total, err := s.anomaliesStore.Anomalies(r.Context(), filter, limit, offset)
+	items, total, err := s.anomalies.Anomalies(r.Context(), filter, limit, offset)
 	if err != nil {
 		s.fail(w, r, "load the anomaly queue", err)
 		return
@@ -34,7 +34,7 @@ func (s *server) anomalySummary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_transaction_kind", "transactionKind must be sale or rent")
 		return
 	}
-	result, err := s.anomaliesStore.AnomalySummary(r.Context(), kind)
+	result, err := s.anomalies.AnomalySummary(r.Context(), kind)
 	if err != nil {
 		s.fail(w, r, "summarise anomalies", err)
 		return

@@ -5,6 +5,7 @@ import (
 	"fmt"
 )
 
+// AnomalyFilter narrows the anomaly queue; empty fields match everything.
 type AnomalyFilter struct {
 	TransactionKind string
 	Flag            string
@@ -12,6 +13,7 @@ type AnomalyFilter struct {
 	MinimumScore    float64
 }
 
+// AnomalySignal is one evaluated agreement with its flags and scores.
 type AnomalySignal struct {
 	TransactionKind      string   `json:"transactionKind"`
 	TransactionID        int64    `json:"transactionId"`
@@ -30,6 +32,7 @@ type AnomalySignal struct {
 	EvaluatedAt          string   `json:"evaluatedAt"`
 }
 
+// AnomalySummary counts the queue by review state.
 type AnomalySummary struct {
 	Total        int64 `json:"total"`
 	Flagged      int64 `json:"flagged"`
@@ -43,6 +46,7 @@ type AnomalyStore interface {
 	AnomalySummary(context.Context, string) (AnomalySummary, error)
 }
 
+// Anomalies lists one page of the queue, highest review score first, with the total count.
 func (r *ValuationRepository) Anomalies(
 	ctx context.Context, filter AnomalyFilter, limit, offset int,
 ) ([]AnomalySignal, int64, error) {
@@ -80,9 +84,10 @@ func (r *ValuationRepository) Anomalies(
 		}
 		items = append(items, item)
 	}
-	return items, total, rows.Err()
+	return items, total, rowsErr(rows, "list anomaly signals")
 }
 
+// AnomalySummary counts the signals of a transaction kind ("" for both).
 func (r *ValuationRepository) AnomalySummary(
 	ctx context.Context, transactionKind string,
 ) (AnomalySummary, error) {

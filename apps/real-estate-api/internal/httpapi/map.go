@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,7 +14,7 @@ func (s *server) mapClusters(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	bounds, ok := mapBounds(w, r)
+	bounds, ok := mapBounds(w, r, maxMapSpanDegrees)
 	if !ok {
 		return
 	}
@@ -51,7 +52,7 @@ func (s *server) mapProperties(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	bounds, ok := mapBounds(w, r)
+	bounds, ok := mapBounds(w, r, maxMapSpanDegrees)
 	if !ok {
 		return
 	}
@@ -94,7 +95,7 @@ func (s *server) geographyMap(w http.ResponseWriter, r *http.Request, kind strin
 	if !ok {
 		return
 	}
-	bounds, ok := mapBounds(w, r)
+	bounds, ok := mapBounds(w, r, maxMapSpanDegrees)
 	if !ok {
 		return
 	}
@@ -136,7 +137,15 @@ func (s *server) geographyMap(w http.ResponseWriter, r *http.Request, kind strin
 	})
 }
 
-func mapBounds(w http.ResponseWriter, r *http.Request) (analytics.Bounds, bool) {
+// maxMapSpanDegrees caps the bbox of the map, boundary and construction endpoints on either
+// axis. Slovenia spans about 3.2° by 1.5°, so a view of the whole country fits with margin,
+// while a world-sized box cannot make PostGIS scan every fact.
+const maxMapSpanDegrees = 8.0
+
+// mapBounds reads the bbox query parameter (west,south,east,north in WGS84), rejecting
+// malformed, misordered or out-of-range coordinates and a span over maxSpan degrees on either
+// axis.
+func mapBounds(w http.ResponseWriter, r *http.Request, maxSpan float64) (analytics.Bounds, bool) {
 	parts := strings.Split(r.URL.Query().Get("bbox"), ",")
 	if len(parts) != 4 {
 		writeError(w, r, http.StatusBadRequest, "invalid_bbox",
@@ -163,6 +172,11 @@ func mapBounds(w http.ResponseWriter, r *http.Request) (analytics.Bounds, bool) 
 			"bbox coordinates or ordering are invalid")
 		return analytics.Bounds{}, false
 	}
+	if bounds.East-bounds.West > maxSpan || bounds.North-bounds.South > maxSpan {
+		writeError(w, r, http.StatusBadRequest, "bbox_too_large",
+			fmt.Sprintf("bbox must span at most %g degrees on either axis; zoom in", maxSpan))
+		return analytics.Bounds{}, false
+	}
 	return bounds, true
 }
 
@@ -186,7 +200,7 @@ func (s *server) mapBuildings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	bounds, ok := mapBounds(w, r)
+	bounds, ok := mapBounds(w, r, maxMapSpanDegrees)
 	if !ok {
 		return
 	}

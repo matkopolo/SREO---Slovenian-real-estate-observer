@@ -23,8 +23,7 @@ func (s *server) inflation(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := s.economics.Inflation(r.Context(), from, to, interval)
 	if err != nil {
-		requestLog(r).Warn("load inflation", "error", err)
-		writeError(w, r, http.StatusBadGateway, "source_unavailable", "SURS inflation data is unavailable")
+		s.fail(w, r, "load inflation", err)
 		return
 	}
 	writeJSON(w, r, http.StatusOK, map[string]any{
@@ -47,8 +46,7 @@ func (s *server) inflationFactor(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := s.economics.InflationFactor(r.Context(), *from, *to)
 	if err != nil {
-		requestLog(r).Warn("inflation factor", "error", err)
-		writeError(w, r, http.StatusServiceUnavailable, "inflation_unavailable", "complete monthly inflation series unavailable")
+		s.fail(w, r, "calculate the inflation factor", err)
 		return
 	}
 	writeJSON(w, r, http.StatusOK, result)

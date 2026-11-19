@@ -5,6 +5,7 @@ import (
 	"fmt"
 )
 
+// TransactionExtreme is one of the cheapest or dearest representative agreements of a filter.
 type TransactionExtreme struct {
 	Direction     string   `json:"direction"`
 	TransactionID int64    `json:"transactionId"`
@@ -15,14 +16,13 @@ type TransactionExtreme struct {
 	AmountPerSQM  float64  `json:"amountPerSqm"`
 }
 
+// TransactionExtremes returns the limit lowest and limit highest amounts of kind ("sale" or
+// "rent"), highest first.
 func (r *SaleStatisticsRepository) TransactionExtremes(
 	ctx context.Context, kind string, filter StatisticsFilter, limit int,
 ) ([]TransactionExtreme, error) {
-	table, amount, perSQM := saleFactsTable(filter), "price", "price_per_sqm"
-	if kind == "rent" {
-		table, amount, perSQM = "analytics.rental_facts",
-			"monthly_rent_ex_vat", "monthly_rent_per_sqm"
-	} else if kind != "sale" {
+	columns, ok := factColumnsFor(kind, filter)
+	if !ok {
 		return nil, fmt.Errorf("unsupported transaction kind %q", kind)
 	}
 	var args queryArgs
@@ -55,7 +55,7 @@ func (r *SaleStatisticsRepository) TransactionExtremes(
 		) extremes
 		ORDER BY CASE direction WHEN 'highest' THEN 0 ELSE 1 END,
 		  CASE WHEN direction='highest' THEN -amount ELSE amount END,transaction_id`,
-		amount, perSQM, table, where, rank)
+		columns.amount, columns.perSQM, columns.table, where, rank)
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load transaction extremes: %w", err)
@@ -71,5 +71,5 @@ func (r *SaleStatisticsRepository) TransactionExtremes(
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return items, rowsErr(rows, "load transaction extremes")
 }

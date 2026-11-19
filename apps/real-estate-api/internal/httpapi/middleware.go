@@ -70,9 +70,13 @@ func requestID(logger *slog.Logger, next http.Handler) http.Handler {
 	})
 }
 
-// validRequestID accepts 1–64 characters of [A-Za-z0-9._-], so a client id can be logged safely.
+// maxRequestIDLength bounds a client-supplied X-Request-ID.
+const maxRequestIDLength = 64
+
+// validRequestID accepts 1–maxRequestIDLength characters of [A-Za-z0-9._-], so a client id can
+// be logged safely.
 func validRequestID(id string) bool {
-	if id == "" || len(id) > 64 {
+	if id == "" || len(id) > maxRequestIDLength {
 		return false
 	}
 	for _, character := range []byte(id) {

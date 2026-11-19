@@ -5,10 +5,12 @@ import (
 	"fmt"
 )
 
+// Bounds is a WGS84 bounding box.
 type Bounds struct {
 	West, South, East, North float64
 }
 
+// Cluster aggregates the agreements snapped to one grid point.
 type Cluster struct {
 	Longitude           float64  `json:"longitude"`
 	Latitude            float64  `json:"latitude"`
@@ -18,6 +20,7 @@ type Cluster struct {
 	MedianAmount        *float64 `json:"medianAmount,omitempty"`
 }
 
+// PropertyPoint is one located agreement drawn on the map.
 type PropertyPoint struct {
 	TransactionID             int64    `json:"transactionId"`
 	CadastralMunicipalityCode *int32   `json:"cadastralMunicipalityCode"`
@@ -32,6 +35,7 @@ type PropertyPoint struct {
 	IsRepresentative          bool     `json:"isRepresentative"`
 }
 
+// GeographySummary aggregates the agreements of one geographic unit, with its label position.
 type GeographySummary struct {
 	GeographyID         int64     `json:"geographyId"`
 	Level               string    `json:"level"`
@@ -49,6 +53,7 @@ type GeographySummary struct {
 // expensive label placement runs only for the units returned.
 const maxGeographySummaries = 1200
 
+// MapStore answers the sale map layers.
 type MapStore interface {
 	Clusters(context.Context, StatisticsFilter, Bounds, float64) ([]Cluster, error)
 	PropertyPoints(context.Context, StatisticsFilter, Bounds, int) ([]PropertyPoint, error)
@@ -108,6 +113,8 @@ const geographyLabelPointExpression = `ST_Transform(
 	4326
 )`
 
+// GeographySummaries aggregates kind ("sale" or "rent") agreements by unit of level inside
+// bounds, busiest first.
 func (r *MapRepository) GeographySummaries(
 	ctx context.Context,
 	filter StatisticsFilter,
@@ -115,9 +122,9 @@ func (r *MapRepository) GeographySummaries(
 	level string,
 	kind string,
 ) ([]GeographySummary, error) {
-	table, metric, amountMetric := saleFactsTable(filter), "price_per_sqm", "price"
-	if kind == "rent" {
-		table, metric, amountMetric = "analytics.rental_facts", "monthly_rent_per_sqm", "monthly_rent_ex_vat"
+	columns, ok := factColumnsFor(kind, filter)
+	if !ok {
+		return nil, fmt.Errorf("unsupported transaction kind %q", kind)
 	}
 	join := "TRUE"
 	if level != "country" {
@@ -160,7 +167,7 @@ func (r *MapRepository) GeographySummaries(
 		SELECT id,level,name,ST_X(label),ST_Y(label),bounds,
 		  transaction_count,representative_count,median_per_sqm,median_amount
 		FROM labels ORDER BY transaction_count DESC,id`,
-		metric, amountMetric, table, join, args.add(level),
+		columns.perSQM, columns.amount, columns.table, join, args.add(level),
 		args.add(bounds.West), args.add(bounds.South), args.add(bounds.East), args.add(bounds.North),
 		where, maxGeographySummaries, geographyBuildingAnchorJoin, geographyLabelPointExpression)
 	rows, err := r.db.Query(ctx, query, args...)
@@ -181,9 +188,10 @@ func (r *MapRepository) GeographySummaries(
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return items, rowsErr(rows, kind+" geography summaries")
 }
 
+// Clusters groups located sale agreements inside bounds on a gridSize-degree grid, largest first.
 func (r *MapRepository) Clusters(
 	ctx context.Context,
 	filter StatisticsFilter,
@@ -236,6 +244,7 @@ func (r *MapRepository) Clusters(
 	return items, nil
 }
 
+// PropertyPoints lists the newest located sale agreements inside bounds, at most limit.
 func (r *MapRepository) PropertyPoints(
 	ctx context.Context,
 	filter StatisticsFilter,
@@ -293,9 +302,9 @@ func (r *MapRepository) BuildingSummaries(
 	if err != nil {
 		return nil, err
 	}
-	table, amount := saleFactsTable(filter), "price_per_sqm"
-	if kind == "rent" {
-		table, amount = "analytics.rental_facts", "monthly_rent_per_sqm"
+	columns, ok := factColumnsFor(kind, filter)
+	if !ok {
+		return nil, fmt.Errorf("unsupported transaction kind %q", kind)
 	}
 	query := fmt.Sprintf(`
 		WITH grouped AS (
@@ -320,7 +329,7 @@ func (r *MapRepository) BuildingSummaries(
 		    AND b.street IS NOT NULL
 		  LIMIT 1) a ON true
 		ORDER BY g.n DESC, g.cadastral_municipality_code, g.building_number`,
-		table, amount, where, boundsEnvelope(bounds, &args), args.add(limit))
+		columns.table, columns.perSQM, where, boundsEnvelope(bounds, &args), args.add(limit))
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("map building summaries: %w", err)
@@ -336,7 +345,7 @@ func (r *MapRepository) BuildingSummaries(
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return items, rowsErr(rows, "map building summaries")
 }
 
 // boundsEnvelope returns the WGS84 bounds as a D96/TM envelope expression for fact.location.

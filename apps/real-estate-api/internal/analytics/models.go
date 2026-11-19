@@ -10,14 +10,17 @@ import (
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
 )
 
+// ErrPredictionNotFound means no current model prediction exists for the agreement.
 var ErrPredictionNotFound = errors.New("valuation prediction not found")
 
+// MarketIndexFilter narrows the market indices; empty fields match everything.
 type MarketIndexFilter struct {
 	TransactionKind string
 	Method          string
 	PropertyGroup   string
 }
 
+// MarketIndexPoint is one period of a market index series.
 type MarketIndexPoint struct {
 	TransactionKind     string   `json:"transactionKind"`
 	Method              string   `json:"method"`
@@ -39,6 +42,7 @@ type MarketIndexPoint struct {
 	SuppressionReason   *string  `json:"suppressionReason"`
 }
 
+// ValuationPrediction is the current model estimate of one agreement, with the model's reliability.
 type ValuationPrediction struct {
 	TransactionKind       string          `json:"transactionKind"`
 	TransactionID         int64           `json:"transactionId"`
@@ -60,11 +64,13 @@ type ValuationPrediction struct {
 	Warnings              []string        `json:"warnings"`
 }
 
+// ModelStore answers the model outputs: market indices and valuation predictions.
 type ModelStore interface {
 	MarketIndices(context.Context, MarketIndexFilter) ([]MarketIndexPoint, error)
 	ValuationPrediction(context.Context, string, int64) (ValuationPrediction, error)
 }
 
+// MarketIndices lists the national index points matching filter, by kind, method, group and period.
 func (r *ValuationRepository) MarketIndices(
 	ctx context.Context, filter MarketIndexFilter,
 ) ([]MarketIndexPoint, error) {
@@ -106,23 +112,24 @@ func (r *ValuationRepository) MarketIndices(
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return items, rowsErr(rows, "list market indices")
 }
 
+// ValuationPrediction returns the current prediction of agreement id of kind ("sale" or "rent").
 func (r *ValuationRepository) ValuationPrediction(
 	ctx context.Context, kind string, id int64,
 ) (ValuationPrediction, error) {
 	return loadValuationPrediction(ctx, r.db, kind, id)
 }
 
+// predictionFactTables are the fact tables a prediction joins, per transaction kind.
+var predictionFactTables = map[string]string{"sale": "analytics.sale_facts", "rent": "analytics.rental_facts"}
+
 // loadValuationPrediction is shared with TransactionContext, which embeds the prediction.
 func loadValuationPrediction(
 	ctx context.Context, db database.Querier, kind string, id int64,
 ) (ValuationPrediction, error) {
-	factTable := map[string]string{
-		"sale": "analytics.sale_facts",
-		"rent": "analytics.rental_facts",
-	}[kind]
+	factTable := predictionFactTables[kind]
 	if factTable == "" {
 		return ValuationPrediction{}, ErrPredictionNotFound
 	}

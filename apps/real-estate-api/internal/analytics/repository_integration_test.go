@@ -3,6 +3,7 @@ package analytics
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -42,7 +43,11 @@ func newRepositoryFixture(t *testing.T) (context.Context, *repositoryFixture) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+	t.Cleanup(func() {
+		if err := tx.Rollback(context.Background()); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			t.Errorf("roll back the test transaction: %v", err)
+		}
+	})
 	fixture := &repositoryFixture{tx: tx}
 	exec := func(sql string, args ...any) {
 		t.Helper()

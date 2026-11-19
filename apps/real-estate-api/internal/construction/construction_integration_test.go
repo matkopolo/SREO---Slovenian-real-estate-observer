@@ -27,7 +27,11 @@ func rolledBack(t *testing.T) (context.Context, pgx.Tx) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+	t.Cleanup(func() {
+		if err := tx.Rollback(context.Background()); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			t.Errorf("roll back the test transaction: %v", err)
+		}
+	})
 	return ctx, tx
 }
 

@@ -21,7 +21,8 @@ func TestRepositoryIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer pool.Close()
+	// Cleanups run last registered first: the pool closes after the fixture schema is dropped.
+	t.Cleanup(pool.Close)
 
 	schema := fmt.Sprintf("test_go_geography_%d", time.Now().UnixNano())
 	qualified := pgx.Identifier{schema, "geographic_units"}.Sanitize()
@@ -40,7 +41,9 @@ func TestRepositoryIntegration(t *testing.T) {
 		t.Fatalf("create fixture: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(ctx, "DROP SCHEMA "+pgx.Identifier{schema}.Sanitize()+" CASCADE")
+		if _, err := pool.Exec(context.Background(), "DROP SCHEMA "+pgx.Identifier{schema}.Sanitize()+" CASCADE"); err != nil {
+			t.Errorf("drop fixture schema %s: %v", schema, err)
+		}
 	})
 
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`

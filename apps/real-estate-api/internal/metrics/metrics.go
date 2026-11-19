@@ -19,6 +19,7 @@ import (
 // Kind is a Prometheus metric type.
 type Kind string
 
+// The kinds a collector registered with NewFunc can report.
 const (
 	Counter Kind = "counter"
 	Gauge   Kind = "gauge"
@@ -35,6 +36,7 @@ type family interface {
 	write(*bufio.Writer)
 }
 
+// NewRegistry returns an empty registry.
 func NewRegistry() *Registry {
 	return &Registry{names: map[string]bool{}}
 }

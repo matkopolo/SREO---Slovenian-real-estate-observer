@@ -47,6 +47,9 @@ func (s *server) searchBuildings(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// maxBuildingNumberLength bounds the building number path value.
+const maxBuildingNumberLength = 100
+
 func (s *server) buildingStatistics(w http.ResponseWriter, r *http.Request) {
 	code64, err := strconv.ParseInt(r.PathValue("cadastralCode"), 10, 32)
 	if err != nil || code64 <= 0 {
@@ -55,7 +58,7 @@ func (s *server) buildingStatistics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	number := r.PathValue("buildingNumber")
-	if number == "" || len(number) > 100 {
+	if number == "" || len(number) > maxBuildingNumberLength {
 		writeError(w, r, http.StatusBadRequest, "invalid_building_number",
 			"building number is required")
 		return

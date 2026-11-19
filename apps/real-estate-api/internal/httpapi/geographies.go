@@ -91,7 +91,7 @@ func (s *server) geographyBoundaries(w http.ResponseWriter, r *http.Request) {
 	}
 	var bbox *[4]float64
 	if raw := r.URL.Query().Get("bbox"); raw != "" || fine {
-		bounds, ok := mapBounds(w, r)
+		bounds, ok := mapBounds(w, r, maxMapSpanDegrees)
 		if !ok {
 			return
 		}

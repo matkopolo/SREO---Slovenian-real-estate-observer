@@ -56,6 +56,25 @@ func geographyFactColumn(level string) (string, bool) {
 
 var recentSortColumns = map[string]string{"date": "contract_date", "price": "amount", "perSqm": "amount_per_sqm", "area": "area"}
 
+// factColumns name the fact table of one transaction kind (the sale view of the filter's land
+// scope, or the rental facts), its amount and per-m² columns and its building-part table.
+type factColumns struct {
+	table, amount, perSQM, parts string
+}
+
+// factColumnsFor resolves kind ("sale" or "rent") for filter; ok is false for any other kind.
+func factColumnsFor(kind string, filter StatisticsFilter) (columns factColumns, ok bool) {
+	switch kind {
+	case "sale":
+		return factColumns{table: saleFactsTable(filter), amount: "price", perSQM: "price_per_sqm", parts: "building_parts"}, true
+	case "rent":
+		return factColumns{table: "analytics.rental_facts", amount: "monthly_rent_ex_vat", perSQM: "monthly_rent_per_sqm",
+			parts: "rental_building_parts"}, true
+	default:
+		return factColumns{}, false
+	}
+}
+
 func intervalSQL(interval string) (string, string) {
 	switch interval {
 	case "month":
@@ -65,6 +84,14 @@ func intervalSQL(interval string) (string, string) {
 	default:
 		return "year", "1 year"
 	}
+}
+
+// rowsErr names the error that ended the iteration of rows, if any.
+func rowsErr(rows pgx.Rows, operation string) error {
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("%s: %w", operation, err)
+	}
+	return nil
 }
 
 // queryArgs collects positional query arguments. add appends a value and returns its

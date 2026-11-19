@@ -1,6 +1,7 @@
 package analytics
 
 import (
+	"context"
 	"time"
 
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
@@ -69,12 +70,13 @@ type Repositories struct {
 }
 
 // NewRepositories returns the repositories reading through db (a pool, or a test transaction).
-func NewRepositories(db database.Querier) Repositories {
+// ctx bounds the background loads of the in-memory caches: cancel it when the process stops.
+func NewRepositories(ctx context.Context, db database.Querier) Repositories {
 	shared := &queries{db: db, levels: &geographyLevels{byID: map[int64]string{}}}
 	buildings := &BuildingRepository{queries: shared}
-	buildings.search = newAddressIndexCache(buildings)
+	buildings.search = newAddressIndexCache(ctx, buildings)
 	releases := &ReleaseRepository{queries: shared}
-	releases.active = newActiveReleaseCache(releases)
+	releases.active = newActiveReleaseCache(ctx, releases)
 	return Repositories{
 		Sales:         &SaleStatisticsRepository{shared},
 		Rentals:       &RentalStatisticsRepository{shared},

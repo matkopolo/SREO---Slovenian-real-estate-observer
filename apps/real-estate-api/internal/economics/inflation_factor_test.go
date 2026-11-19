@@ -33,7 +33,7 @@ func TestMonthlyInflationFactor(t *testing.T) {
 
 func TestMonthlyCPIRequestAndCache(t *testing.T) {
 	calls := 0
-	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	client := NewClient(context.Background(), &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		calls++
 		body, _ := io.ReadAll(req.Body)
 		if !strings.Contains(string(body), `"values":["1"]`) {

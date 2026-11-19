@@ -72,3 +72,39 @@ func TestDuplicateAndWrongLabelsPanic(t *testing.T) {
 		}()
 	}
 }
+
+// TestConcurrentUpdatesDuringScrape updates counters and histograms (new and existing label
+// sets) while scrapes run, under -race, and checks that nothing is lost.
+func TestConcurrentUpdatesDuringScrape(t *testing.T) {
+	registry := NewRegistry()
+	requests := registry.NewCounterVec("app_requests_total", "Requests.", "route")
+	duration := registry.NewHistogramVec("app_duration_seconds", "Duration.", []float64{0.1, 1}, "route")
+	var wg sync.WaitGroup
+	for worker := range 8 {
+		wg.Go(func() {
+			route := "/" + string(rune('a'+worker))
+			for range 500 {
+				requests.Inc(route)
+				requests.Inc("/shared")
+				duration.Observe(0.5, route)
+			}
+		})
+	}
+	for range 4 {
+		wg.Go(func() {
+			for range 50 {
+				registry.ServeHTTP(httptest.NewRecorder(), nil)
+			}
+		})
+	}
+	wg.Wait()
+	recorder := httptest.NewRecorder()
+	registry.ServeHTTP(recorder, nil)
+	body := recorder.Body.String()
+	if !strings.Contains(body, `app_requests_total{route="/shared"} 4000`) {
+		t.Fatalf("shared counter lost updates:\n%s", body)
+	}
+	if !strings.Contains(body, `app_duration_seconds_count{route="/a"} 500`) {
+		t.Fatalf("histogram lost updates:\n%s", body)
+	}
+}

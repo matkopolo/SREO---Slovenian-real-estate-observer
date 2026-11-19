@@ -12,23 +12,25 @@ import (
 	"github.com/matkopolo/NepremicninskiAgent/apps/real-estate-api/internal/database"
 )
 
+// ContextBenchmark compares the subject's EUR/m² with a cohort: nearby agreements or a geography.
 type ContextBenchmark struct {
-	Scope              string  `json:"scope"`
-	Label              string  `json:"label"`
-	GeographyID        *int64  `json:"geographyId,omitempty"`
-	MedianAmountPerSQM float64 `json:"medianAmountPerSqm"`
-	SampleSize         int64   `json:"sampleSize"`
-	DifferencePercent  float64 `json:"differencePercent"`
-	Percentile         float64 `json:"percentile"`
-	Period             int     `json:"period"`
-	RadiusMeters       *int    `json:"radiusMeters,omitempty"`
-	Reliability        string  `json:"reliability"`
-	IsPublishable      bool    `json:"isPublishable"`
-	ComparisonProfile  string  `json:"comparisonProfile"`
-	AreaTolerancePct   *int    `json:"areaTolerancePercent,omitempty"`
-	BuildingAgeYears   *int    `json:"constructionYearTolerance,omitempty"`
+	Scope                     string  `json:"scope"`
+	Label                     string  `json:"label"`
+	GeographyID               *int64  `json:"geographyId,omitempty"`
+	MedianAmountPerSQM        float64 `json:"medianAmountPerSqm"`
+	SampleSize                int64   `json:"sampleSize"`
+	DifferencePercent         float64 `json:"differencePercent"`
+	Percentile                float64 `json:"percentile"`
+	Period                    int     `json:"period"`
+	RadiusMeters              *int    `json:"radiusMeters,omitempty"`
+	Reliability               string  `json:"reliability"`
+	IsPublishable             bool    `json:"isPublishable"`
+	ComparisonProfile         string  `json:"comparisonProfile"`
+	AreaTolerancePct          *int    `json:"areaTolerancePercent,omitempty"`
+	ConstructionYearTolerance *int    `json:"constructionYearTolerance,omitempty"`
 }
 
+// DirectComparable is an agreement in the subject's own building.
 type DirectComparable struct {
 	TransactionID                 int64   `json:"transactionId"`
 	ContractDate                  string  `json:"contractDate"`
@@ -46,6 +48,8 @@ type DirectComparable struct {
 	OutlierStatus                 *string `json:"outlierStatus,omitempty"`
 }
 
+// TransactionContext places one agreement in its market: comparables, benchmarks, the model's
+// valuation and a current-market estimate.
 type TransactionContext struct {
 	TransactionKind    string                 `json:"transactionKind"`
 	TransactionID      int64                  `json:"transactionId"`
@@ -62,6 +66,7 @@ type TransactionContext struct {
 	MethodologyVersion string                 `json:"methodologyVersion"`
 }
 
+// CurrentMarketEstimate is what the subject would fetch now, from weighted recent comparables.
 type CurrentMarketEstimate struct {
 	LowerTotal                float64  `json:"lowerTotal"`
 	CentralTotal              float64  `json:"centralTotal"`
@@ -168,17 +173,21 @@ type contextSubject struct {
 	packageSignature string
 }
 
+// TransactionContext computes the context of agreement id of kind ("sale" or "rent") in one
+// repeatable-read transaction.
 func (r *TransactionRepository) TransactionContext(
 	ctx context.Context, kind string, id int64,
 ) (TransactionContext, error) {
 	factTable, amountColumn := "analytics.sale_facts", "price_per_sqm"
 	cohortTable := "analytics.sale_facts_strict_land"
 	outlierTable := "analytics.sale_outlier_evaluations"
-	if kind == "rent" {
+	switch kind {
+	case "sale":
+	case "rent":
 		factTable, cohortTable = "analytics.rental_facts", "analytics.rental_facts"
 		amountColumn = "monthly_rent_per_sqm"
 		outlierTable = "analytics.rental_outlier_evaluations"
-	} else if kind != "sale" {
+	default:
 		return TransactionContext{}, ErrTransactionNotFound
 	}
 	now := r.now()
@@ -196,7 +205,7 @@ func (r *TransactionRepository) TransactionContext(
 	query := fmt.Sprintf(`
 		SELECT extract(year FROM fact.contract_date)::integer,fact.contract_date,fact.property_group,
 		  fact.%s::float8,fact.is_quality_eligible,
-		  fact.representative_eligible,fact.quality_reasons,
+		  fact.representative_eligible,coalesce(fact.quality_reasons,ARRAY[]::text[]),
 		  coalesce(signal.flags,ARRAY[]::text[]),evaluation.status,
 		  fact.statistical_region_id,fact.municipality_id,fact.city_district_id,
 		  fact.local_community_id,fact.settlement_id,fact.area::float8,
@@ -205,11 +214,11 @@ func (r *TransactionRepository) TransactionContext(
 		FROM %s fact
 		LEFT JOIN %s evaluation USING(transaction_id)
 		LEFT JOIN analytics.anomaly_signals signal
-		  ON signal.transaction_kind='%s' AND signal.transaction_id=fact.transaction_id
+		  ON signal.transaction_kind=$2 AND signal.transaction_id=fact.transaction_id
 		WHERE fact.transaction_id=$1 AND fact.contract_date IS NOT NULL
 		  AND fact.%s>0`, amountColumn, packageSignatureExpression,
-		factTable, outlierTable, kind, amountColumn)
-	err = tx.QueryRow(ctx, query, id).Scan(
+		factTable, outlierTable, amountColumn)
+	err = tx.QueryRow(ctx, query, id, kind).Scan(
 		&subject.year, &subject.contractDate, &subject.propertyGroup, &subject.actual,
 		&subject.quality.IsQualityEligible, &subject.quality.IsRepresentative,
 		&subject.quality.Reasons, &subject.quality.AnomalyFlags,
@@ -239,7 +248,7 @@ func (r *TransactionRepository) TransactionContext(
 		direct, loadErr := loadDirectComparables(ctx, tx, directComparableQuery{
 			table: factTable, amountColumn: amountColumn,
 			transactionKind: kind,
-			totalColumn:     map[string]string{"sale": "price", "rent": "monthly_rent_ex_vat"}[kind],
+			totalColumn:     totalAmountColumns[kind],
 			outlierTable:    outlierTable, subjectID: id, actual: subject.actual,
 			area: subject.area, propertyGroup: subject.propertyGroup, year: subject.year,
 			cadastralCode: *subject.cadastralCode, buildingNumber: *subject.buildingNumber,
@@ -329,7 +338,7 @@ func (r *TransactionRepository) TransactionContext(
 	}
 	result.CurrentMarket = currentMarket
 
-	valuation, valuationErr := loadValuationPrediction(ctx, r.db, kind, id)
+	valuation, valuationErr := loadValuationPrediction(ctx, tx, kind, id)
 	if valuationErr == nil {
 		result.Valuation = &ContextValuation{
 			PredictedAmountPerSQM: valuation.PredictedAmountPerSQM,
@@ -408,6 +417,49 @@ type marketCandidate struct {
 	packageSignature             string
 	municipalityID               *int64
 }
+
+// totalAmountColumns and buildingPartTables name, per transaction kind, the agreement's total
+// amount column and the table of the parts it names.
+var (
+	totalAmountColumns = map[string]string{"sale": "price", "rent": "monthly_rent_ex_vat"}
+	buildingPartTables = map[string]string{"sale": "building_parts", "rent": "rental_building_parts"}
+)
+
+// Weights of the comparable scores in the current-market estimate; they sum to 100.
+const (
+	areaWeight     = 35
+	ageWeight      = 25
+	distanceWeight = 20
+	recencyWeight  = 10
+	packageWeight  = 10
+	// distanceScoreRange is the distance (m) at which the distance score of a comparable is 0.
+	distanceScoreRange = 20000.0
+	// recencyScoreDays is the age (days) at which the recency score of a comparable is 0.
+	recencyScoreDays = 730.0
+	// minimumWeight keeps every chosen comparable in the weighted quantiles.
+	minimumWeight = 1.0
+)
+
+// Confidence thresholds of the current-market estimate.
+const (
+	// confidenceLowSample comparables raise the confidence from very_low to low.
+	confidenceLowSample = 20
+	// confidenceModerateRadius is the widest search (m) that still allows moderate confidence.
+	confidenceModerateRadius = 10000
+	// confidenceModerateAreaTolerance is the strict area profile moderate confidence requires.
+	confidenceModerateAreaTolerance = 15
+)
+
+// Bounds of the municipality-vs-surroundings factor, raw and after shrinkage.
+const (
+	rawLocationFactorMin = .65
+	rawLocationFactorMax = 1.35
+	locationFactorMin    = .8
+	locationFactorMax    = 1.2
+	// locationLocalSufficient: with this many comparables in the subject's own municipality
+	// the estimate needs no location factor.
+	locationLocalSufficient = 5
+)
 
 const (
 	currentMarketMinimumSample = 5
@@ -575,14 +627,15 @@ func loadCurrentMarketEstimate(
 			ageScore = math.Max(0, 1-math.Abs(float64(*candidate.constructionYear-*input.constructionYear))/
 				float64(profile.constructionYearTolerance))
 		}
-		distanceScore := math.Max(0, 1-candidate.distance/20000)
-		recencyScore := math.Max(0, 1-input.now.Sub(candidate.contractDate).Hours()/(24*730))
+		distanceScore := math.Max(0, 1-candidate.distance/distanceScoreRange)
+		recencyScore := math.Max(0, 1-input.now.Sub(candidate.contractDate).Hours()/(24*recencyScoreDays))
 		packageScore := 0.0
 		if candidate.packageSignature == input.packageSignature {
 			packageScore = 1
 		}
-		weight := 35*areaScore + 25*ageScore + 20*distanceScore + 10*recencyScore + 10*packageScore
-		weighted = append(weighted, weightedValue{candidate.amountPerSQM, math.Max(weight, 1)})
+		weight := areaWeight*areaScore + ageWeight*ageScore + distanceWeight*distanceScore +
+			recencyWeight*recencyScore + packageWeight*packageScore
+		weighted = append(weighted, weightedValue{candidate.amountPerSQM, math.Max(weight, minimumWeight)})
 	}
 
 	locationFactor, rawLocationFactor, localSample, adjustmentErr := currentMarketLocationFactor(
@@ -613,10 +666,11 @@ func loadCurrentMarketEstimate(
 		warnings = append(warnings, "premalo poslov z enako sestavo vrst sestavin paketa; uporabljena je mešana sestava paketov")
 	}
 	confidence := "very_low"
-	if len(selected) >= 20 {
+	if len(selected) >= confidenceLowSample {
 		confidence = "low"
 	}
-	if len(selected) >= currentMarketTargetSample && selectedRadius <= 10000 && profile.areaTolerancePercent == 15 {
+	if len(selected) >= currentMarketTargetSample && selectedRadius <= confidenceModerateRadius &&
+		profile.areaTolerancePercent == confidenceModerateAreaTolerance {
 		confidence = "moderate"
 	}
 	var ageTolerance *int
@@ -673,12 +727,12 @@ func queryCurrentCandidates(
 	  AND abs(fact.area/%[8]s-1)<=%[9]f AND %[10]s
 	  AND fact.transaction_id NOT IN (
 	    SELECT candidate_transaction_id FROM analytics.near_duplicate_candidates
-	    WHERE transaction_kind='%[11]s')
+	    WHERE transaction_kind=%[11]s)
 	ORDER BY distance,fact.transaction_id`,
 		input.amountColumn, input.table, input.subjectTable, subject,
 		args.add(input.propertyGroup), args.add(thisYear),
 		args.add(currentMarketRadii[len(currentMarketRadii)-1]), args.add(input.area),
-		float64(profile.areaTolerancePercent)/100, ageClause, input.transactionKind)
+		float64(profile.areaTolerancePercent)/100, ageClause, args.add(input.transactionKind))
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load current market candidates: %w", err)
@@ -693,7 +747,7 @@ func queryCurrentCandidates(
 		}
 		result = append(result, candidate)
 	}
-	return result, rows.Err()
+	return result, rowsErr(rows, "load current market candidates")
 }
 
 // loadMarketComparables returns the chosen comparables, in their order (nearest first), with
@@ -707,7 +761,7 @@ func loadMarketComparables(
 	for _, candidate := range selected {
 		ids = append(ids, candidate.transactionID)
 	}
-	parts := map[string]string{"sale": "building_parts", "rent": "rental_building_parts"}[input.transactionKind]
+	parts := buildingPartTables[input.transactionKind]
 	rows, err := tx.Query(ctx, fmt.Sprintf(`
 		SELECT fact.transaction_id,
 		  ST_X(ST_Transform(fact.location,4326))::float8, ST_Y(ST_Transform(fact.location,4326))::float8,
@@ -813,7 +867,7 @@ func currentMarketLocationFactor(
 	ctx context.Context, tx database.Querier, input currentMarketQuery, profile benchmarkProfile,
 	radius, localCurrent int,
 ) (float64, float64, int, error) {
-	if input.municipalityID == nil || localCurrent >= 5 {
+	if input.municipalityID == nil || localCurrent >= locationLocalSufficient {
 		return 1, 1, localCurrent, nil
 	}
 	args := []any{input.subjectID, input.propertyGroup, input.now.Year() - 3,
@@ -824,6 +878,8 @@ func currentMarketLocationFactor(
 		ageClause = fmt.Sprintf("fact.construction_year IS NOT NULL AND abs(fact.construction_year-$%d)<=%d",
 			len(args), profile.constructionYearTolerance)
 	}
+	args = append(args, input.transactionKind)
+	kind := fmt.Sprintf("$%d", len(args))
 	query := fmt.Sprintf(`SELECT count(*) FILTER(WHERE fact.municipality_id=$7)::integer,
 	  count(*)::integer,
 	  percentile_cont(.5) WITHIN GROUP(ORDER BY fact.%s) FILTER(WHERE fact.municipality_id=$7)::float8,
@@ -836,9 +892,9 @@ func currentMarketLocationFactor(
 	  AND abs(fact.area/$5-1)<=%f AND %s
 	  AND fact.transaction_id NOT IN (
 	    SELECT candidate_transaction_id FROM analytics.near_duplicate_candidates
-	    WHERE transaction_kind='%s')`, input.amountColumn, input.amountColumn,
+	    WHERE transaction_kind=%s)`, input.amountColumn, input.amountColumn,
 		input.table, input.subjectTable, input.amountColumn,
-		float64(profile.areaTolerancePercent)/100, ageClause, input.transactionKind)
+		float64(profile.areaTolerancePercent)/100, ageClause, kind)
 	var localN, allN int
 	var localMedian, allMedian *float64
 	if err := tx.QueryRow(ctx, query, args...).Scan(&localN, &allN, &localMedian, &allMedian); err != nil {
@@ -847,7 +903,7 @@ func currentMarketLocationFactor(
 	if localMedian == nil || allMedian == nil || *allMedian <= 0 {
 		return 1, 1, localN, nil
 	}
-	rawFactor := math.Max(.65, math.Min(1.35, *localMedian / *allMedian))
+	rawFactor := math.Max(rawLocationFactorMin, math.Min(rawLocationFactorMax, *localMedian / *allMedian))
 	if localN < locationMinimumLocalSample || allN < locationMinimumTotalSample {
 		return 1, rawFactor, localN, nil
 	}
@@ -857,7 +913,7 @@ func currentMarketLocationFactor(
 func shrinkLocationFactor(rawFactor float64, localSample int) float64 {
 	weight := float64(localSample) / (float64(localSample) + locationShrinkageStrength)
 	shrunkFactor := 1 + weight*(rawFactor-1)
-	return math.Max(.8, math.Min(1.2, shrunkFactor))
+	return math.Max(locationFactorMin, math.Min(locationFactorMax, shrunkFactor))
 }
 
 type weightedValue struct{ value, weight float64 }
@@ -877,6 +933,9 @@ func weightedQuantile(values []weightedValue, quantile float64) float64 {
 	}
 	return values[len(values)-1].value
 }
+
+// maxDirectComparables bounds the same-building comparables shown with a transaction.
+const maxDirectComparables = 8
 
 type directComparableQuery struct {
 	table, amountColumn, totalColumn, outlierTable, propertyGroup, buildingNumber string
@@ -919,14 +978,15 @@ func loadDirectComparables(
 		    OR abs(fact.area/$4-1)<=.15)
 		  AND fact.transaction_id NOT IN (
 		    SELECT candidate_transaction_id FROM analytics.near_duplicate_candidates
-		    WHERE transaction_kind='%s')
+		    WHERE transaction_kind=$8)
 		ORDER BY match_tier,abs(fact.area/$4-1),
 		  abs(fact.contract_date-make_date($5,7,1)),fact.transaction_id
-		LIMIT 8`, input.totalColumn, input.amountColumn, input.amountColumn,
+		LIMIT %d`, input.totalColumn, input.amountColumn, input.amountColumn,
 		input.table, input.outlierTable, input.amountColumn, input.totalColumn,
-		input.transactionKind)
+		maxDirectComparables)
 	rows, err := tx.Query(ctx, query, input.subjectID, input.propertyGroup,
-		input.actual, input.area, input.year, input.cadastralCode, input.buildingNumber)
+		input.actual, input.area, input.year, input.cadastralCode, input.buildingNumber,
+		input.transactionKind)
 	if err != nil {
 		return nil, fmt.Errorf("load direct comparables: %w", err)
 	}
@@ -1144,7 +1204,7 @@ func newContextBenchmark(input benchmarkQuery, sample int64, median, percentile 
 		benchmark.AreaTolerancePct = &input.profile.areaTolerancePercent
 	}
 	if input.profile.constructionYearTolerance > 0 {
-		benchmark.BuildingAgeYears = &input.profile.constructionYearTolerance
+		benchmark.ConstructionYearTolerance = &input.profile.constructionYearTolerance
 	}
 	if input.scope == "nearby" {
 		radius := input.radius
