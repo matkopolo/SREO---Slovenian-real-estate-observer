@@ -1,5 +1,5 @@
 # golang:1.26.11-bookworm, pinned to its digest (Dependabot keeps it current).
-FROM golang:1.26.11-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0 AS build
+FROM golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS build
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -9,7 +9,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/real-estate-api ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/sreo-mcp ./cmd/sreo-mcp
 
 # alpine:3.22, pinned to its digest.
-FROM alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 
 RUN apk add --no-cache ca-certificates \
     && addgroup -S -g 10001 realestate \

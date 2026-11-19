@@ -1,5 +1,5 @@
 # postgres:16.15-bookworm (the same build as the database image), pinned to its digest.
-FROM postgres:16.15-bookworm@sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9
+FROM postgres:18.6-bookworm@sha256:f1ea2a1a4fb7b68d4836be1fdcb8a6466a89b072158bf9d97663600538c294c5
 COPY database/migrations/ /migrations/
 COPY database/roles.sql /roles.sql
 COPY database/run-migrations.sh /run-migrations.sh
