@@ -122,6 +122,38 @@ services:
       retries: 5
       start_period: 5s
 
+  # The MCP server: the same image as the API, a second binary, read-only tools over the API for
+  # agents (Claude Desktop, Claude Code). Reachable at 127.0.0.1:8090 and through the observer at /mcp.
+  sreo-mcp:
+    image: real-estate-api:development
+    pull_policy: never
+    entrypoint: ["/usr/local/bin/sreo-mcp"]
+    environment:
+      MCP_TRANSPORT: http
+      MCP_ADDRESS: ":8090"
+      SREO_API_URL: http://real-estate-api:8080
+      MCP_DOCS_DIR: /docs
+      MCP_SITE_URL: ${MCP_SITE_URL:-http://localhost:3000}
+    volumes:
+      - ./docs:/docs:ro
+    ports:
+      - "127.0.0.1:${MCP_PORT:-8090}:8090"
+    mem_limit: 128m
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      real-estate-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:8090/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
   pipeline-worker:
     build:
       context: ./apps/data-pipeline

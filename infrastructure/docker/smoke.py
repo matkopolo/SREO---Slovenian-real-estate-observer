@@ -47,6 +47,14 @@ def main():
                 with urllib.request.urlopen(base + endpoint, timeout=30) as response:
                     assert response.status == 200
                     print(f"PASS {endpoint}: HTTP 200", flush=True)
+            # The MCP server answers an initialize request through the observer's /mcp proxy.
+            initialize = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "smoke", "version": "0"}}}).encode()
+            request = urllib.request.Request(base + "/mcp", data=initialize, method="POST", headers={
+                "Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
+            with urllib.request.urlopen(request, timeout=30) as response:
+                assert response.status == 200 and response.headers.get("Mcp-Session-Id"), "MCP initialize failed"
+                print("PASS /mcp: initialize answered with a session", flush=True)
             with urllib.request.urlopen(base + "/", timeout=30) as response:
                 script = re.search(r'src="(/assets/[^"]+\.js)"', response.read().decode())
             assert script, "index.html references no hashed /assets/*.js"

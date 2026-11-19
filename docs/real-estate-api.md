@@ -78,6 +78,9 @@ timeouts, graceful shutdown, and readiness checks.
 The authoritative operation and schema definitions are in
 `apps/real-estate-api/openapi/openapi.yaml`.
 
+Agents reach the same endpoints through the MCP server `sreo-mcp` (a second binary
+in this image, package `internal/mcpserver`); see [mcp.md](mcp.md).
+
 Property history adds three read-only endpoints:
 
 - `GET /api/v1/sales/transactions/{id}/history`
