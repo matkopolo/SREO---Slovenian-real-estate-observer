@@ -1,5 +1,5 @@
 # python:3.11-slim, pinned to its digest (Dependabot keeps it current).
-FROM python:3.11-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535 AS base
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS base
 
 # PIP_CONSTRAINT pins every install in the image to constraints.txt. The *_NUM_THREADS
 # variables give each model fit one native thread: the trainer already runs property
