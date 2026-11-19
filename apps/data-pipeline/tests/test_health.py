@@ -43,3 +43,33 @@ def test_old_heartbeat_fails_the_check(tmp_path: Path):
     healthy, reason = check_health_file(tmp_path / "healthy", now=lambda: NOW + timedelta(minutes=10))
     assert not healthy
     assert "heartbeat" in reason
+
+
+def test_concurrent_writes_from_the_heartbeat_and_the_scheduler_never_fail(tmp_path: Path, caplog):
+    """Two threads rewriting the same health file race on the temporary name unless the IO is locked."""
+    import threading
+
+    from real_estate_etl.health import HealthHeartbeat
+
+    path = tmp_path / "healthy"
+    worker = WorkerHealth(path, stale_after=timedelta(days=16), refreshing=True)
+    stop = threading.Event()
+
+    def flip_state() -> None:
+        while not stop.is_set():
+            worker.update(refreshing=True)
+            worker.update(published_at=None, refreshing=False)  # unhealthy: the file is removed
+
+    with HealthHeartbeat(worker, interval=0.0005):
+        flipper = threading.Thread(target=flip_state)
+        flipper.start()
+        for _ in range(300):
+            worker.update(refreshing=True)
+        stop.set()
+        flipper.join()
+
+    assert "Could not update health file" not in caplog.text
+    worker.update(refreshing=True)
+    assert json.loads(path.read_text())["healthy"] is True
+    worker.update(refreshing=False)
+    assert not path.exists()

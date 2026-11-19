@@ -3,12 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Protocol
 
 from .formatting import format_duration
 
 
-def format_model_report(result: Any) -> str:
+class ModelReport(Protocol):
+    """What :func:`format_model_report` reads from a model result."""
+
+    @property
+    def transaction_kind(self) -> str: ...
+    @property
+    def rows(self) -> int: ...
+    @property
+    def model_version(self) -> str: ...
+    @property
+    def elapsed_seconds(self) -> float: ...
+    @property
+    def metrics(self) -> Mapping[str, Any]: ...
+
+
+def format_model_report(result: ModelReport) -> str:
     """Format persisted model metrics without implying a single accuracy score."""
     metrics: Mapping[str, Any] = result.metrics
     kind = "sale price/m²" if result.transaction_kind == "sale" else "rent/m²"

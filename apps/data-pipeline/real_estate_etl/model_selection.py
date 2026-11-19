@@ -9,6 +9,7 @@ from datetime import date
 from typing import Any
 
 import numpy as np
+from sklearn.base import RegressorMixin
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import ElasticNet, Ridge
 from sklearn.model_selection import GroupShuffleSplit
@@ -18,6 +19,7 @@ from .formatting import format_duration
 from .model_features import feature_preprocessor
 from .model_validation import (
     NOMINAL_INTERVAL_COVERAGE,
+    TemporalFold,
     final_holdout_split,
     interval_half_width,
     interval_metrics,
@@ -42,10 +44,21 @@ HIST_GRADIENT_BOOSTING_GRID = [
      "min_samples_leaf": 40, "l2_regularization": 5.0},
 ]
 PRACTICAL_NONLINEAR_MAE_IMPROVEMENT = 0.03
+#: Distinct robustness groups (buildings, else municipalities) needed for a grouped hold-out.
+MIN_ROBUSTNESS_GROUPS = 5
+ROBUSTNESS_HELD_OUT_SHARE = 0.2
+ELASTIC_NET_MAX_ITER = 5_000
+#: Candidate-fit progress is reported about this many times per property group.
+PROGRESS_REPORTS = 10
+
+Configuration = dict[str, Any]
+Progress = Callable[[str], None]
 
 
 @dataclass(frozen=True)
 class SelectionSettings:
+    """Row minima, nominal coverage, seed and verbosity for one model selection."""
+
     min_training_rows: int = 100
     min_calibration_rows: int = 30
     min_validation_rows: int = 30
@@ -54,7 +67,8 @@ class SelectionSettings:
     detailed_progress: bool = False
 
 
-def candidate_configurations() -> list[dict[str, Any]]:
+def candidate_configurations() -> list[Configuration]:
+    """The 20 candidate configurations: 10 Ridge, 6 Elastic Net, 4 histogram gradient boosting."""
     return (
         [{"family": "ridge", "alpha": value} for value in RIDGE_ALPHA_GRID]
         + [{"family": "elastic_net", **values} for values in ELASTIC_NET_GRID]
@@ -63,7 +77,8 @@ def candidate_configurations() -> list[dict[str, Any]]:
     )
 
 
-def build_pipeline(configuration: dict[str, Any], seed: int) -> Pipeline:
+def build_pipeline(configuration: Configuration, seed: int) -> Pipeline:
+    """Preprocessing plus the configured regressor, for fits on raw feature matrices."""
     estimator = build_estimator(configuration, seed)
     return Pipeline([
         ("features", feature_preprocessor(dense=True)),
@@ -71,15 +86,20 @@ def build_pipeline(configuration: dict[str, Any], seed: int) -> Pipeline:
     ])
 
 
-def build_estimator(configuration: dict[str, Any], seed: int):
-    """Build only the regressor for already fold-local preprocessed features."""
+def build_estimator(configuration: Configuration, seed: int) -> RegressorMixin:
+    """Build only the regressor for already fold-local preprocessed features.
+
+    Raises:
+        ValueError: On an unknown ``family``.
+    """
     family = configuration["family"]
+    estimator: RegressorMixin
     if family == "ridge":
         estimator = Ridge(alpha=configuration["alpha"])
     elif family == "elastic_net":
         estimator = ElasticNet(
             alpha=configuration["alpha"], l1_ratio=configuration["l1_ratio"],
-            max_iter=5_000, random_state=seed,
+            max_iter=ELASTIC_NET_MAX_ITER, random_state=seed,
         )
     elif family == "hist_gradient_boosting":
         estimator = HistGradientBoostingRegressor(
@@ -91,7 +111,10 @@ def build_estimator(configuration: dict[str, Any], seed: int):
     return estimator
 
 
-def _timed_fit_predict(model, train_x, train_y, validation_x):
+def _timed_fit_predict(
+    model: Any, train_x: np.ndarray, train_y: np.ndarray, validation_x: np.ndarray,
+) -> tuple[np.ndarray, float, float]:
+    """Fit and predict; returns the predictions and the training and prediction seconds."""
     started = time.monotonic()
     model.fit(train_x, train_y)
     training_seconds = time.monotonic() - started
@@ -120,6 +143,7 @@ def _aggregate(folds: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _selection_key(candidate: dict[str, Any]) -> tuple[Any, ...]:
+    """Lower is better: MAE, then p90 APE, then |bias|, then simpler family, then lexical."""
     aggregate = candidate["aggregate"]
     return (
         aggregate["weighted_mae_amount_per_sqm"],
@@ -131,6 +155,7 @@ def _selection_key(candidate: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def select_configuration(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """The best evaluated candidate; a non-linear winner must beat Ridge by a practical margin in every fold."""
     ranked = sorted(candidates, key=_selection_key)
     winner = ranked[0]
     ridge = next((item for item in ranked if item["configuration"]["family"] == "ridge"), None)
@@ -153,109 +178,47 @@ def optimize_model(
     dates: list[date],
     groups: np.ndarray,
     settings: SelectionSettings,
-    configurations: list[dict[str, Any]] | None = None,
-    progress: Callable[[str], None] | None = None,
+    configurations: list[Configuration] | None = None,
+    progress: Progress | None = None,
 ) -> dict[str, Any]:
-    progress = progress or (lambda _message: None)
+    """Select, validate and calibrate one property group's model with leakage-safe temporal folds.
+
+    Args:
+        features: ``MODEL_FEATURES`` matrix (object dtype), one row per transaction.
+        target: Natural log of the amount per m².
+        dates: Contract dates aligned with ``features``.
+        groups: Robustness group per row (building identity, else municipality).
+        settings: Row minima, nominal coverage, seed and verbosity.
+        configurations: Candidates to evaluate; the full grid when omitted.
+        progress: Receives human-readable progress lines.
+
+    Returns:
+        A dictionary whose ``status`` is ``"selected"`` (with the selected configuration,
+        candidate results, final-holdout metrics, grouped robustness, the conformal
+        ``interval_half_width_log`` and runtimes), ``"insufficient_temporal_folds"`` or
+        ``"insufficient_final_holdout"`` (then the caller fits its sparse-group fallback).
+    """
+    report = progress or (lambda _message: None)
     folds, skipped, holdout_year = temporal_folds(
         dates, min_training_rows=settings.min_training_rows,
         min_calibration_rows=settings.min_calibration_rows,
         min_validation_rows=settings.min_validation_rows,
     )
     if holdout_year is None or not folds:
-        progress("selection unavailable: insufficient temporal folds")
+        report("selection unavailable: insufficient temporal folds")
         return {"status": "insufficient_temporal_folds", "skipped_folds": skipped,
                 "final_holdout_year": holdout_year}
-    progress(
+    report(
         f"temporal selection: {len(folds)} valid folds, {len(skipped)} skipped, "
         f"untouched holdout={holdout_year}"
     )
-    evaluated = []
     candidates = configurations or candidate_configurations()
-    candidate_results: list[list[dict[str, Any]]] = [[] for _ in candidates]
-    total_candidate_fits = len(candidates) * len(folds)
-    progress_interval = max(1, (total_candidate_fits + 9) // 10)
-    completed_candidate_fits = 0
     selection_started = time.monotonic()
-    progress(
-        f"fit plan: {len(candidates)} candidates × {len(folds)} folds = "
-        f"{total_candidate_fits} candidate fits, plus holdout, grouped, and production stages"
-    )
-    preprocessing_seconds = 0.0
-    for fold_number, fold in enumerate(folds, start=1):
-        preprocessing_started = time.monotonic()
-        fold_preprocessor = feature_preprocessor(dense=True)
-        training_features = fold_preprocessor.fit_transform(features[fold.training])
-        calibration_features = fold_preprocessor.transform(features[fold.calibration])
-        validation_features = fold_preprocessor.transform(features[fold.validation])
-        fold_preprocessing_seconds = time.monotonic() - preprocessing_started
-        preprocessing_seconds += fold_preprocessing_seconds
-        if settings.detailed_progress:
-            progress(
-                f"fold {fold_number}/{len(folds)} preprocessing complete "
-                f"(train through {fold.train_years[-1]}, "
-                f"calibrate {fold.calibration_year}, validate {fold.validation_year})"
-            )
-        for candidate_number, configuration in enumerate(candidates, start=1):
-            if settings.detailed_progress:
-                progress(
-                    f"fit {completed_candidate_fits + 1}/{total_candidate_fits}: "
-                    f"candidate {candidate_number}/{len(candidates)}, "
-                    f"fold {fold_number}/{len(folds)} "
-                    f"(train through {fold.train_years[-1]}, "
-                    f"calibrate {fold.calibration_year}, "
-                    f"validate {fold.validation_year})"
-                )
-            model = build_estimator(configuration, settings.random_seed)
-            predicted, training_seconds, prediction_seconds = _timed_fit_predict(
-                model, training_features, target[fold.training], validation_features
-            )
-            calibration_prediction = model.predict(calibration_features)
-            half_width = interval_half_width(
-                target[fold.calibration], calibration_prediction, settings.nominal_coverage
-            )
-            candidate_results[candidate_number - 1].append({
-                "name": fold.name, "train_years": list(fold.train_years),
-                "calibration_year": fold.calibration_year,
-                "validation_year": fold.validation_year,
-                "training_rows": len(fold.training),
-                "calibration_rows": len(fold.calibration),
-                "validation_rows": len(fold.validation),
-                **regression_metrics(target[fold.validation], predicted),
-                **interval_metrics(target[fold.validation], predicted, half_width),
-                "baseline": regression_metrics(
-                    target[fold.validation],
-                    np.full(len(fold.validation), np.median(target[fold.training])),
-                ),
-                "training_seconds": training_seconds,
-                "prediction_seconds": prediction_seconds,
-                "shared_preprocessing_seconds": fold_preprocessing_seconds,
-            })
-            completed_candidate_fits += 1
-            elapsed = time.monotonic() - selection_started
-            average = elapsed / completed_candidate_fits
-            remaining = average * (total_candidate_fits - completed_candidate_fits)
-            if (
-                settings.detailed_progress
-                or completed_candidate_fits % progress_interval == 0
-                or completed_candidate_fits == total_candidate_fits
-            ):
-                progress(
-                    f"progress {completed_candidate_fits}/{total_candidate_fits} "
-                    f"({100 * completed_candidate_fits / total_candidate_fits:.1f}%): "
-                    f"candidate {candidate_number}/{len(candidates)}, "
-                    f"fold {fold_number}/{len(folds)}; "
-                    f"elapsed={format_duration(elapsed)}, ETA={format_duration(remaining)}"
-                )
-    for configuration, results in zip(candidates, candidate_results, strict=True):
-        evaluated.append({"configuration": configuration, "folds": results,
-                          "aggregate": _aggregate(results)})
-    progress(
-        f"shared fold preprocessing: {len(folds)} fits instead of "
-        f"{total_candidate_fits}; elapsed={format_duration(preprocessing_seconds)}"
+    evaluated, preprocessing_seconds = _evaluate_candidates(
+        features, target, folds, candidates, settings, report,
     )
     selected = select_configuration(evaluated)
-    progress(f"selected: {_configuration_label(selected['configuration'])}")
+    report(f"selected: {_configuration_label(selected['configuration'])}")
     try:
         training, calibration, holdout = final_holdout_split(
             dates, holdout_year, min_training_rows=settings.min_training_rows,
@@ -266,35 +229,19 @@ def optimize_model(
         # Valid folds do not guarantee a large enough final calibration/holdout year.
         # Return a status so the caller uses its sparse-group fallback instead of
         # aborting the whole model refresh for every property group.
-        progress(f"selection unavailable: {error}")
+        report(f"selection unavailable: {error}")
         return {"status": "insufficient_final_holdout", "reason": str(error),
                 "skipped_folds": skipped, "final_holdout_year": holdout_year}
-    final_model = build_pipeline(selected["configuration"], settings.random_seed)
-    progress(f"final holdout: fitting pre-{holdout_year} training population")
-    holdout_prediction, training_seconds, prediction_seconds = _timed_fit_predict(
-        final_model, features[training], target[training], features[holdout]
+    report(f"final holdout: fitting pre-{holdout_year} training population")
+    final_metrics, half_width = _final_holdout(
+        features, target, training, calibration, holdout, holdout_year, selected["configuration"], settings,
     )
-    calibration_prediction = final_model.predict(features[calibration])
-    half_width = interval_half_width(target[calibration], calibration_prediction,
-                                     settings.nominal_coverage)
-    baseline = np.full(len(holdout), np.median(target[training]))
-    final_metrics = {
-        **regression_metrics(target[holdout], holdout_prediction),
-        **interval_metrics(target[holdout], holdout_prediction, half_width),
-        "nominal_interval_coverage": settings.nominal_coverage,
-        "calibration_rows": len(calibration),
-        "holdout_rows": len(holdout),
-        "holdout_year": holdout_year,
-        "training_seconds": training_seconds,
-        "prediction_seconds": prediction_seconds,
-        "baseline": regression_metrics(target[holdout], baseline),
-    }
     pre_holdout = np.flatnonzero(np.asarray([value.year for value in dates]) < holdout_year)
     robustness = grouped_robustness(
         features[pre_holdout], target[pre_holdout], groups[pre_holdout],
         selected["configuration"], settings,
     )
-    progress(
+    report(
         "grouped robustness: "
         + (
             f"{robustness['held_out_group_count']} groups / "
@@ -330,20 +277,179 @@ def optimize_model(
     }
 
 
-def _configuration_label(configuration: dict[str, Any]) -> str:
+def _evaluate_candidates(
+    features: np.ndarray,
+    target: np.ndarray,
+    folds: list[TemporalFold],
+    candidates: list[Configuration],
+    settings: SelectionSettings,
+    report: Progress,
+) -> tuple[list[dict[str, Any]], float]:
+    """Fit every candidate on every fold (fold-local preprocessing shared across candidates).
+
+    Returns:
+        The evaluated candidates (configuration, per-fold results, aggregate) and the
+        seconds spent on the shared preprocessing.
+    """
+    candidate_results: list[list[dict[str, Any]]] = [[] for _ in candidates]
+    total_candidate_fits = len(candidates) * len(folds)
+    progress_interval = max(1, (total_candidate_fits + PROGRESS_REPORTS - 1) // PROGRESS_REPORTS)
+    completed_candidate_fits = 0
+    selection_started = time.monotonic()
+    report(
+        f"fit plan: {len(candidates)} candidates × {len(folds)} folds = "
+        f"{total_candidate_fits} candidate fits, plus holdout, grouped, and production stages"
+    )
+    preprocessing_seconds = 0.0
+    for fold_number, fold in enumerate(folds, start=1):
+        preprocessing_started = time.monotonic()
+        fold_preprocessor = feature_preprocessor(dense=True)
+        training_features = fold_preprocessor.fit_transform(features[fold.training])
+        calibration_features = fold_preprocessor.transform(features[fold.calibration])
+        validation_features = fold_preprocessor.transform(features[fold.validation])
+        fold_preprocessing_seconds = time.monotonic() - preprocessing_started
+        preprocessing_seconds += fold_preprocessing_seconds
+        fold_label = (
+            f"(train through {fold.train_years[-1]}, "
+            f"calibrate {fold.calibration_year}, validate {fold.validation_year})"
+        )
+        if settings.detailed_progress:
+            report(f"fold {fold_number}/{len(folds)} preprocessing complete {fold_label}")
+        for candidate_number, configuration in enumerate(candidates, start=1):
+            if settings.detailed_progress:
+                report(
+                    f"fit {completed_candidate_fits + 1}/{total_candidate_fits}: "
+                    f"candidate {candidate_number}/{len(candidates)}, "
+                    f"fold {fold_number}/{len(folds)} {fold_label}"
+                )
+            candidate_results[candidate_number - 1].append(_evaluate_fold(
+                configuration, fold, training_features, calibration_features, validation_features,
+                target, settings, fold_preprocessing_seconds,
+            ))
+            completed_candidate_fits += 1
+            elapsed = time.monotonic() - selection_started
+            remaining = elapsed / completed_candidate_fits * (total_candidate_fits - completed_candidate_fits)
+            if (
+                settings.detailed_progress
+                or completed_candidate_fits % progress_interval == 0
+                or completed_candidate_fits == total_candidate_fits
+            ):
+                report(
+                    f"progress {completed_candidate_fits}/{total_candidate_fits} "
+                    f"({100 * completed_candidate_fits / total_candidate_fits:.1f}%): "
+                    f"candidate {candidate_number}/{len(candidates)}, "
+                    f"fold {fold_number}/{len(folds)}; "
+                    f"elapsed={format_duration(elapsed)}, ETA={format_duration(remaining)}"
+                )
+    evaluated = [
+        {"configuration": configuration, "folds": results, "aggregate": _aggregate(results)}
+        for configuration, results in zip(candidates, candidate_results, strict=True)
+    ]
+    report(
+        f"shared fold preprocessing: {len(folds)} fits instead of "
+        f"{total_candidate_fits}; elapsed={format_duration(preprocessing_seconds)}"
+    )
+    return evaluated, preprocessing_seconds
+
+
+def _evaluate_fold(
+    configuration: Configuration,
+    fold: TemporalFold,
+    training_features: np.ndarray,
+    calibration_features: np.ndarray,
+    validation_features: np.ndarray,
+    target: np.ndarray,
+    settings: SelectionSettings,
+    fold_preprocessing_seconds: float,
+) -> dict[str, Any]:
+    """One candidate on one fold: regression, interval and baseline metrics with timings."""
+    model = build_estimator(configuration, settings.random_seed)
+    predicted, training_seconds, prediction_seconds = _timed_fit_predict(
+        model, training_features, target[fold.training], validation_features
+    )
+    calibration_prediction = model.predict(calibration_features)
+    half_width = interval_half_width(
+        target[fold.calibration], calibration_prediction, settings.nominal_coverage
+    )
+    return {
+        "name": fold.name, "train_years": list(fold.train_years),
+        "calibration_year": fold.calibration_year,
+        "validation_year": fold.validation_year,
+        "training_rows": len(fold.training),
+        "calibration_rows": len(fold.calibration),
+        "validation_rows": len(fold.validation),
+        **regression_metrics(target[fold.validation], predicted),
+        **interval_metrics(target[fold.validation], predicted, half_width),
+        "baseline": regression_metrics(
+            target[fold.validation],
+            np.full(len(fold.validation), np.median(target[fold.training])),
+        ),
+        "training_seconds": training_seconds,
+        "prediction_seconds": prediction_seconds,
+        "shared_preprocessing_seconds": fold_preprocessing_seconds,
+    }
+
+
+def _final_holdout(
+    features: np.ndarray,
+    target: np.ndarray,
+    training: np.ndarray,
+    calibration: np.ndarray,
+    holdout: np.ndarray,
+    holdout_year: int,
+    configuration: Configuration,
+    settings: SelectionSettings,
+) -> tuple[dict[str, Any], float]:
+    """Fit the selected configuration before the holdout year; returns its metrics and conformal half-width."""
+    final_model = build_pipeline(configuration, settings.random_seed)
+    holdout_prediction, training_seconds, prediction_seconds = _timed_fit_predict(
+        final_model, features[training], target[training], features[holdout]
+    )
+    calibration_prediction = final_model.predict(features[calibration])
+    half_width = interval_half_width(target[calibration], calibration_prediction,
+                                     settings.nominal_coverage)
+    baseline = np.full(len(holdout), np.median(target[training]))
+    metrics = {
+        **regression_metrics(target[holdout], holdout_prediction),
+        **interval_metrics(target[holdout], holdout_prediction, half_width),
+        "nominal_interval_coverage": settings.nominal_coverage,
+        "calibration_rows": len(calibration),
+        "holdout_rows": len(holdout),
+        "holdout_year": holdout_year,
+        "training_seconds": training_seconds,
+        "prediction_seconds": prediction_seconds,
+        "baseline": regression_metrics(target[holdout], baseline),
+    }
+    return metrics, half_width
+
+
+def _configuration_label(configuration: Configuration) -> str:
     parameters = ", ".join(
         f"{key}={value}" for key, value in configuration.items() if key != "family"
     )
     return f"{configuration['family']}({parameters})"
 
 
-def grouped_robustness(features, target, groups, configuration, settings):
+def grouped_robustness(
+    features: np.ndarray,
+    target: np.ndarray,
+    groups: np.ndarray,
+    configuration: Configuration,
+    settings: SelectionSettings,
+) -> dict[str, Any]:
+    """Hold out whole buildings (or municipalities) and score the configuration on them.
+
+    Returns:
+        ``{"status": "insufficient_groups", ...}`` with fewer than ``MIN_ROBUSTNESS_GROUPS``
+        distinct groups, otherwise ``{"status": "evaluated", ...}`` with the held-out
+        counts, a disjointness check and the regression metrics.
+    """
     valid = np.asarray([bool(value) for value in groups])
     distinct = sorted(set(groups[valid]))
-    if len(distinct) < 5:
+    if len(distinct) < MIN_ROBUSTNESS_GROUPS:
         return {"status": "insufficient_groups", "distinct_groups": len(distinct)}
     local_features, local_target, local_groups = features[valid], target[valid], groups[valid]
-    split = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=settings.random_seed)
+    split = GroupShuffleSplit(n_splits=1, test_size=ROBUSTNESS_HELD_OUT_SHARE, random_state=settings.random_seed)
     training, validation = next(split.split(local_features, groups=local_groups))
     model = build_pipeline(configuration, settings.random_seed)
     predicted, training_seconds, prediction_seconds = _timed_fit_predict(

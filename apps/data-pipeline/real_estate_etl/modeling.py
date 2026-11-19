@@ -16,9 +16,10 @@ import time
 import uuid
 from collections import Counter
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from typing import Any
 
 import numpy as np
 import psycopg
@@ -43,6 +44,12 @@ MODEL_FLAG_THRESHOLD = 0.99
 INDEX_MIN_PERIOD_OBSERVATIONS = 30
 INDEX_BOOTSTRAP_REPLICATES = 100
 INDEX_REFERENCE_SIZE = 5_000
+#: Two-sided bootstrap interval of the hedonic index (stored with every index row).
+INDEX_NOMINAL_COVERAGE = 0.95
+INDEX_LOWER_QUANTILE = (1 - INDEX_NOMINAL_COVERAGE) / 2
+INDEX_UPPER_QUANTILE = 1 - INDEX_LOWER_QUANTILE
+#: Production fallback for a property group without a valid temporal selection.
+SPARSE_GROUP_FALLBACK = {"family": "ridge", "alpha": 2.0}
 INDEX_METHODOLOGY = "constant-quality-ridge-v2"
 MODEL_VERSION_PREFIX = "selected-hedonic-iforest-v3"
 
@@ -94,22 +101,26 @@ def _environment_flag(name: str) -> bool:
 
 @dataclass(frozen=True)
 class ModelResult:
+    """One trained population: its version, row count, duration and persisted metrics."""
+
     transaction_kind: str
     rows: int
     model_version: str
     elapsed_seconds: float
-    metrics: dict[str, object]
+    metrics: dict[str, Any]
 
 
 @dataclass(frozen=True)
 class PropertyGroupResult:
+    """One property group's production predictions, interval widths, scores and model."""
+
     group: str
     indices: np.ndarray
     predictions: np.ndarray
     interval_widths: np.ndarray
     residual_scores: np.ndarray
     model: Pipeline
-    metrics: dict[str, object]
+    metrics: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -141,6 +152,22 @@ class ModelScores:
     isolation_scores: np.ndarray
 
 
+def _fit_production(
+    model: Pipeline, features: np.ndarray, target: np.ndarray, predictions: np.ndarray,
+) -> dict[str, float | int]:
+    """Fit ``model`` on the whole group, fill ``predictions`` in place and return the timings."""
+    production_started = time.monotonic()
+    model.fit(features, target)
+    training_seconds = time.monotonic() - production_started
+    production_started = time.monotonic()
+    predictions[:] = model.predict(features)
+    return {
+        "training_rows": len(features),
+        "training_seconds": training_seconds,
+        "prediction_seconds": time.monotonic() - production_started,
+    }
+
+
 def _train_property_group(
     kind: str,
     group: str,
@@ -153,6 +180,10 @@ def _train_property_group(
     property_groups: np.ndarray,
     settings: SelectionSettings,
 ) -> PropertyGroupResult:
+    """Select, validate and fit the production model of one property group (runs on a worker thread).
+
+    Shares only read-only arrays and the frozen ``settings`` with the other groups.
+    """
     group_indices = np.flatnonzero(property_groups == group)
     group_features = features[group_indices]
     group_target = target[group_indices]
@@ -177,26 +208,17 @@ def _train_property_group(
     widths = np.empty(len(group_indices), dtype=float)
     residuals = np.zeros(len(group_indices), dtype=float)
     if selection["status"] != "selected":
-        fallback = build_pipeline({"family": "ridge", "alpha": 2.0}, RANDOM_SEED)
+        fallback = build_pipeline(SPARSE_GROUP_FALLBACK, RANDOM_SEED)
         logger.info("%s fitting sparse-group production fallback", prefix)
-        production_started = time.monotonic()
-        fallback.fit(group_features, group_target)
-        production_training_seconds = time.monotonic() - production_started
-        production_started = time.monotonic()
-        predictions[:] = fallback.predict(group_features)
-        production_prediction_seconds = time.monotonic() - production_started
+        production = _fit_production(fallback, group_features, group_target, predictions)
         widths[:] = float(np.quantile(
             np.abs(group_target - predictions), NOMINAL_INTERVAL_COVERAGE
         ))
         metrics = {
             **selection,
             "population_rows": len(group_indices),
-            "production_fallback": {"family": "ridge", "alpha": 2.0},
-            "production": {
-                "training_rows": len(group_indices),
-                "training_seconds": production_training_seconds,
-                "prediction_seconds": production_prediction_seconds,
-            },
+            "production_fallback": SPARSE_GROUP_FALLBACK,
+            "production": production,
             "interval_status": "uncalibrated_sparse_group_fallback",
         }
         return PropertyGroupResult(
@@ -206,12 +228,7 @@ def _train_property_group(
     widths[:] = float(selection["interval_half_width_log"])
     final_model = build_pipeline(selection["selected_configuration"], RANDOM_SEED)
     logger.info("%s fitting selected production model", prefix)
-    production_started = time.monotonic()
-    final_model.fit(group_features, group_target)
-    production_training_seconds = time.monotonic() - production_started
-    production_started = time.monotonic()
-    predictions[:] = final_model.predict(group_features)
-    production_prediction_seconds = time.monotonic() - production_started
+    production = _fit_production(final_model, group_features, group_target, predictions)
     holdout_year = selection["final_holdout_year"]
     holdout_indices = np.flatnonzero(
         np.asarray([value.year for value in group_dates]) == holdout_year
@@ -223,11 +240,7 @@ def _train_property_group(
     metrics = {
         "population_rows": len(group_indices),
         **selection,
-        "production": {
-            "training_rows": len(group_indices),
-            "training_seconds": production_training_seconds,
-            "prediction_seconds": production_prediction_seconds,
-        },
+        "production": production,
     }
     return PropertyGroupResult(
         group, group_indices, predictions, widths, residuals, final_model, metrics
@@ -252,10 +265,9 @@ def _train_property_groups(
     )
     started = time.monotonic()
     results: list[PropertyGroupResult] = []
-    with ThreadPoolExecutor(
-        max_workers=group_workers, thread_name_prefix=f"{kind}-model"
-    ) as executor:
-        futures = [
+    executor = ThreadPoolExecutor(max_workers=group_workers, thread_name_prefix=f"{kind}-model")
+    try:
+        pending: set[Future[PropertyGroupResult]] = {
             executor.submit(
                 _train_property_group,
                 kind,
@@ -270,16 +282,24 @@ def _train_property_groups(
                 settings,
             )
             for number, group in enumerate(groups, start=1)
-        ]
-        for completed, future in enumerate(as_completed(futures), start=1):
-            results.append(future.result())
-            elapsed = time.monotonic() - started
-            remaining = elapsed / completed * (len(groups) - completed)
-            logger.info(
-                "[%s model] group completion %s/%s (%.1f%%); elapsed=%s; ETA=%s",
-                kind, completed, len(groups), 100 * completed / len(groups),
-                format_duration(elapsed), format_duration(remaining),
-            )
+        }
+        while pending:
+            # The first failure cancels the groups still queued instead of training them to the end.
+            done, pending = wait(pending, return_when=FIRST_EXCEPTION)
+            for future in done:
+                results.append(future.result())
+                completed = len(results)
+                elapsed = time.monotonic() - started
+                remaining = elapsed / completed * (len(groups) - completed)
+                logger.info(
+                    "[%s model] group completion %s/%s (%.1f%%); elapsed=%s; ETA=%s",
+                    kind, completed, len(groups), 100 * completed / len(groups),
+                    format_duration(elapsed), format_duration(remaining),
+                )
+    except BaseException:
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    executor.shutdown(wait=True)
     return results
 
 
@@ -369,8 +389,20 @@ def _format_model_plan(workers: int) -> str:
     return "\n".join(lines)
 
 
-def refresh_models(connection: psycopg.Connection, workers: int | None = None) -> list[ModelResult]:
-    """Train and publish the sale and rent models atomically (all or nothing)."""
+def refresh_models(connection: psycopg.Connection[Any], workers: int | None = None) -> list[ModelResult]:
+    """Train and publish the sale and rent models atomically (all or nothing).
+
+    Args:
+        connection: The maintenance connection; inside a system refresh the block is a
+            savepoint of the release transaction.
+        workers: Property groups trained in parallel (``DEFAULT_WORKERS`` when omitted).
+
+    Returns:
+        One result per population, sale first.
+
+    Raises:
+        RuntimeError: When a population has fewer than ``MIN_POPULATION_ROWS`` eligible rows.
+    """
     workers = workers or DEFAULT_WORKERS
     results: list[ModelResult] = []
     all_started = time.monotonic()
@@ -412,7 +444,7 @@ def refresh_models(connection: psycopg.Connection, workers: int | None = None) -
     return results
 
 
-def _load_training_frame(connection: psycopg.Connection, population: ModelPopulation) -> TrainingFrame:
+def _load_training_frame(connection: psycopg.Connection[Any], population: ModelPopulation) -> TrainingFrame:
     with connection.cursor() as cursor:
         cursor.execute(
             _training_query(population),
@@ -469,8 +501,8 @@ def _fit_isolation_forest(
 
 
 def _aggregate_metrics(
-    group_metrics: dict[str, dict[str, object]], workers: int, group_workers: int,
-) -> dict[str, object]:
+    group_metrics: dict[str, dict[str, Any]], workers: int, group_workers: int,
+) -> dict[str, Any]:
     """Row-weighted holdout metrics across the property groups that selected a model."""
     selected = [value for value in group_metrics.values() if value.get("status") == "selected"]
     holdout_rows = sum(value["final_holdout"]["holdout_rows"] for value in selected)
@@ -509,7 +541,7 @@ def _aggregate_metrics(
     }
 
 
-def _refresh_kind(connection: psycopg.Connection, kind: str, workers: int) -> ModelResult:
+def _refresh_kind(connection: psycopg.Connection[Any], kind: str, workers: int) -> ModelResult:
     """Train one population and persist its run, predictions, anomaly scores and indices."""
     started = time.monotonic()
     population = POPULATIONS[kind]
@@ -518,7 +550,7 @@ def _refresh_kind(connection: psycopg.Connection, kind: str, workers: int) -> Mo
     fitted_log = np.empty(frame.rows, dtype=float)
     interval_widths = np.empty(frame.rows, dtype=float)
     residual_scores = np.zeros(frame.rows, dtype=float)
-    group_metrics: dict[str, dict[str, object]] = {}
+    group_metrics: dict[str, dict[str, Any]] = {}
     final_models: dict[str, Pipeline] = {}
     for result in _train_property_groups(
         kind, groups, workers, frame.features, frame.target, frame.contract_dates,
@@ -554,13 +586,13 @@ def _refresh_kind(connection: psycopg.Connection, kind: str, workers: int) -> Mo
 
 
 def _persist_model_run(
-    cursor: psycopg.Cursor,
+    cursor: psycopg.Cursor[Any],
     population: ModelPopulation,
     model_run_id: uuid.UUID,
     version: str,
     frame: TrainingFrame,
-    metrics: dict[str, object],
-    group_metrics: dict[str, dict[str, object]],
+    metrics: dict[str, Any],
+    group_metrics: dict[str, dict[str, Any]],
 ) -> None:
     feature_schema = {
         "hedonic": MODEL_FEATURES,
@@ -602,17 +634,22 @@ def _persist_model_run(
 
 
 def _persist_scores(
-    cursor: psycopg.Cursor, kind: str, model_run_id: uuid.UUID, frame: TrainingFrame, scores: ModelScores,
+    cursor: psycopg.Cursor[Any], kind: str, model_run_id: uuid.UUID, frame: TrainingFrame, scores: ModelScores,
 ) -> None:
-    """Stage per-row scores in ``model_scores`` and insert the versioned predictions."""
+    """Stage per-row scores in ``pg_temp.model_scores`` and insert the versioned predictions.
+
+    The staging table is ``ON COMMIT DROP``, but sale and rent run inside one transaction,
+    so the rent run drops the sale run's table first (qualified with ``pg_temp`` so no
+    permanent table of that name could ever be targeted).
+    """
     predicted = np.exp(scores.fitted_log)
     lower = np.exp(scores.fitted_log - scores.interval_widths)
     upper = np.exp(scores.fitted_log + scores.interval_widths)
     actual = np.exp(frame.target)
-    cursor.execute("DROP TABLE IF EXISTS model_scores")
+    cursor.execute("DROP TABLE IF EXISTS pg_temp.model_scores")
     cursor.execute(
         """
-        CREATE TEMP TABLE model_scores(
+        CREATE TEMP TABLE pg_temp.model_scores(
             transaction_id bigint,
             predicted numeric,
             lower_bound numeric,
@@ -665,7 +702,7 @@ def _persist_scores(
     )
 
 
-def _update_anomaly_signals(cursor: psycopg.Cursor, kind: str, version: str) -> None:
+def _update_anomaly_signals(cursor: psycopg.Cursor[Any], kind: str, version: str) -> None:
     """Attach model evidence to scored rows and clear it from rows the model did not score.
 
     The combined review score comes from ``analytics.anomaly_review_score`` so the SQL
@@ -720,7 +757,7 @@ def _update_anomaly_signals(cursor: psycopg.Cursor, kind: str, version: str) -> 
 
 
 def _persist_hedonic_indices(
-    cursor: psycopg.Cursor,
+    cursor: psycopg.Cursor[Any],
     population: ModelPopulation,
     model_run_id: uuid.UUID,
     frame: TrainingFrame,
@@ -740,12 +777,15 @@ def _persist_hedonic_indices(
             json.dumps({
                 "minimumPeriodObservations": INDEX_MIN_PERIOD_OBSERVATIONS,
                 "bootstrapReplicates": INDEX_BOOTSTRAP_REPLICATES,
-                "nominalCoverage": 0.95,
+                "nominalCoverage": INDEX_NOMINAL_COVERAGE,
                 "landPopulation": population.land_population,
             }),
         ),
     )
-    index_run_id = cursor.fetchone()[0]
+    run_row = cursor.fetchone()
+    if run_row is None:
+        raise RuntimeError("index_calculation_runs insert returned no id")
+    index_run_id = run_row[0]
     indices = _hedonic_indices(frame.property_groups, frame.features, frame.contract_dates, final_models, generator)
     cursor.executemany(
         """
@@ -758,14 +798,14 @@ def _persist_hedonic_indices(
             suppression_reason
         ) VALUES(
             %s,'hedonic',%s,NULL,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-            %s,.95,'deterministic_reference_bootstrap',%s,%s
+            %s,%s,'deterministic_reference_bootstrap',%s,%s
         )
         """,
         [
             (
                 population.kind, group, period, index_value, observed_size, base_period, model_run_id,
                 INDEX_METHODOLOGY, index_run_id, observed_size, reference_size, lower_value, upper_value,
-                observed_size >= INDEX_MIN_PERIOD_OBSERVATIONS,
+                INDEX_NOMINAL_COVERAGE, observed_size >= INDEX_MIN_PERIOD_OBSERVATIONS,
                 None
                 if observed_size >= INDEX_MIN_PERIOD_OBSERVATIONS
                 else f"below_minimum_period_observations_{INDEX_MIN_PERIOD_OBSERVATIONS}",
@@ -824,8 +864,8 @@ def _hedonic_indices(
                     observed_size,
                     reference_size,
                     periods[0],
-                    float(np.quantile(bootstrap_index, 0.025)),
-                    float(np.quantile(bootstrap_index, 0.975)),
+                    float(np.quantile(bootstrap_index, INDEX_LOWER_QUANTILE)),
+                    float(np.quantile(bootstrap_index, INDEX_UPPER_QUANTILE)),
                 )
             )
     return rows

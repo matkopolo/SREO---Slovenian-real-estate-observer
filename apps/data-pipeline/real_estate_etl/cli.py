@@ -13,14 +13,15 @@ import enum
 import logging
 import os
 import sys
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, Protocol
 
 import psycopg
 
 from .construction import sync_construction
 from .context import sync_context
+from .database import connect
 from .demography import sync_demography
 from .geography import export_boundary_seed, sync_geographies
 from .health import DEFAULT_MAX_AGE, check_health_file
@@ -50,11 +51,15 @@ from .settings import (
     DEFAULT_DATABASE_URL,
     DEFAULT_WORKERS,
     NATIONAL_DATASETS,
-    RAW_DATA_DIR,
     SALES_START_YEAR,
+    raw_data_dir,
 )
 
 logger = logging.getLogger(__name__)
+
+#: Exit status of a command that failed with an exception (argparse uses 2 for usage errors).
+EXIT_FAILURE = 1
+BOUNDARY_SEED_NAME = "rpe-boundaries.zip"
 
 
 class Database(enum.Enum):
@@ -66,90 +71,104 @@ class Database(enum.Enum):
     READ_ONLY = "read_only"  # a plain connection without the lock: the command only reads
 
 
-Handler = Callable[[argparse.Namespace, "psycopg.Connection | None"], None]
+class Handler(Protocol):
+    """A command implementation; ``connection`` is ``None`` for ``Database.NONE`` commands."""
+
+    def __call__(self, args: argparse.Namespace, connection: psycopg.Connection[Any] | None, /) -> None: ...
 
 
 def _current_year() -> int:
     return datetime.now(UTC).year
 
 
+def _require(connection: psycopg.Connection[Any] | None) -> psycopg.Connection[Any]:
+    if connection is None:
+        raise RuntimeError("this command needs a database connection")
+    return connection
+
+
 def _command(
-    commands: argparse._SubParsersAction, name: str, handler: Handler, database: Database, **kwargs: str,
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+    name: str,
+    handler: Handler,
+    database: Database,
+    help: str | None = None,
 ) -> argparse.ArgumentParser:
-    parser = commands.add_parser(name, **kwargs)
+    parser = commands.add_parser(name, help=help)
     parser.set_defaults(handler=handler, database=database)
     return parser
 
 
 # --------------------------------------------------------------------------- handlers
 
-def _sync_reference_data(_args: argparse.Namespace, connection: psycopg.Connection) -> None:
-    sync_reference_data(connection)
+def _sync_reference_data(_args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
+    sync_reference_data(_require(connection))
 
 
-def _sync_geographies(_args: argparse.Namespace, connection: psycopg.Connection) -> None:
-    sync_geographies(connection)
+def _sync_geographies(_args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
+    sync_geographies(_require(connection))
 
 
-def _export_boundaries(args: argparse.Namespace, connection: psycopg.Connection) -> None:
-    export_boundary_seed(connection, Path(args.output))
+def _export_boundaries(args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
+    export_boundary_seed(_require(connection), Path(args.output))
 
 
-def _sync_context(_args: argparse.Namespace, connection: psycopg.Connection) -> None:
-    sync_context(connection)
+def _sync_context(_args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
+    sync_context(_require(connection))
 
 
-def _sync_demography(_args: argparse.Namespace, connection: psycopg.Connection) -> None:
-    sync_demography(connection)
+def _sync_demography(_args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
+    sync_demography(_require(connection))
 
 
-def _sync_construction(args: argparse.Namespace, connection: psycopg.Connection) -> None:
-    sync_construction(connection, args.output_dir)
+def _sync_construction(args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
+    sync_construction(_require(connection), args.output_dir)
 
 
-def _sync_registers(args: argparse.Namespace, connection: psycopg.Connection) -> None:
-    sync_registers(connection, args.output_dir)
+def _sync_registers(args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
+    sync_registers(_require(connection), args.output_dir)
 
 
-def _refresh_models(args: argparse.Namespace, connection: psycopg.Connection) -> None:
+def _refresh_models(args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
     from .model_reporting import format_model_report
     from .modeling import refresh_models
 
-    for result in refresh_models(connection, args.workers):
+    for result in refresh_models(_require(connection), args.workers):
         logger.info("%s", format_model_report(result))
 
 
-def _fetch(args: argparse.Namespace, _connection: None) -> None:
+def _fetch(args: argparse.Namespace, _connection: psycopg.Connection[Any] | None) -> None:
     fetch_zip(args.municipality, args.year, args.output_dir)
 
 
-def _fetch_national(args: argparse.Namespace, _connection: None) -> None:
+def _fetch_national(args: argparse.Namespace, _connection: psycopg.Connection[Any] | None) -> None:
     fetch_national_zip(args.dataset_type, args.year, args.output_dir)
 
 
-def _import(args: argparse.Namespace, connection: psycopg.Connection) -> None:
-    import_zip(connection, args.zip_file, verbose=args.verbose)
+def _import(args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
+    import_zip(_require(connection), args.zip_file, verbose=args.verbose)
 
 
-def _refresh(args: argparse.Namespace, connection: psycopg.Connection) -> None:
-    sync_reference_data(connection)
+def _refresh(args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
+    sync_reference_data(_require(connection))
     archive = fetch_zip(args.municipality, args.year, args.output_dir)
-    import_zip(connection, archive, verbose=args.verbose)
+    import_zip(_require(connection), archive, verbose=args.verbose)
 
 
-def _refresh_all_sales(args: argparse.Namespace, connection: psycopg.Connection) -> None:
+def _refresh_all_sales(args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
     refresh_all_sales(
-        connection, args.output_dir, args.start_year, args.end_year, args.force, args.workers, args.verbose,
+        _require(connection), args.output_dir, args.start_year, args.end_year, args.force, args.workers,
+        args.verbose,
     )
 
 
-def _refresh_all_data(args: argparse.Namespace, connection: psycopg.Connection) -> None:
-    refresh_all_national(connection, args.output_dir, args.end_year, args.force, args.workers, args.verbose)
+def _refresh_all_data(args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
+    refresh_all_national(_require(connection), args.output_dir, args.end_year, args.force, args.workers, args.verbose)
 
 
-def _refresh_system(args: argparse.Namespace, connection: psycopg.Connection) -> None:
+def _refresh_system(args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
     refresh_system(
-        connection,
+        _require(connection),
         output_dir=args.output_dir,
         end_year=args.end_year,
         force=args.force,
@@ -159,13 +178,13 @@ def _refresh_system(args: argparse.Namespace, connection: psycopg.Connection) ->
     )
 
 
-def _refresh_analytics(_args: argparse.Namespace, connection: psycopg.Connection) -> None:
-    logger.info("Refreshed analytics: %s", format_analytics_counts(refresh_analytics(connection)))
+def _refresh_analytics(_args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
+    logger.info("Refreshed analytics: %s", format_analytics_counts(refresh_analytics(_require(connection))))
 
 
-def _reset_and_repopulate(args: argparse.Namespace, connection: psycopg.Connection) -> None:
+def _reset_and_repopulate(args: argparse.Namespace, connection: psycopg.Connection[Any] | None) -> None:
     reset_and_repopulate(
-        connection,
+        _require(connection),
         output_dir=args.output_dir,
         end_year=args.end_year,
         workers=args.workers,
@@ -174,7 +193,7 @@ def _reset_and_repopulate(args: argparse.Namespace, connection: psycopg.Connecti
     )
 
 
-def _schedule(args: argparse.Namespace, _connection: None) -> None:
+def _schedule(args: argparse.Namespace, _connection: psycopg.Connection[Any] | None) -> None:
     scheduled_refresh_loop(
         args.database_url,
         output_dir=args.output_dir,
@@ -186,7 +205,7 @@ def _schedule(args: argparse.Namespace, _connection: None) -> None:
     )
 
 
-def _healthcheck(args: argparse.Namespace, _connection: None) -> None:
+def _healthcheck(args: argparse.Namespace, _connection: psycopg.Connection[Any] | None) -> None:
     healthy, reason = check_health_file(args.health_file, max_age=timedelta(seconds=args.max_age_seconds))
     if not healthy:
         raise SystemExit(f"unhealthy: {reason}")
@@ -196,17 +215,24 @@ def _healthcheck(args: argparse.Namespace, _connection: None) -> None:
 # --------------------------------------------------------------------------- parser
 
 def build_parser() -> argparse.ArgumentParser:
+    """The ``real-estate-etl`` parser; every subcommand carries its handler and database mode."""
     parser = argparse.ArgumentParser(description="Fetch and import Slovenian JGP real-estate data")
     parser.add_argument("--database-url", default=os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL))
     commands = parser.add_subparsers(dest="command", required=True)
-    current_year = _current_year()
+    _add_source_commands(commands)
+    _add_archive_commands(commands, _current_year())
+    _add_system_commands(commands, _current_year())
+    return parser
 
+
+def _add_source_commands(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Reference data, boundaries, context sources, registers and models."""
     _command(commands, "sync-reference-data", _sync_reference_data, Database.LOCKED)
     _command(commands, "sync-geographies", _sync_geographies, Database.LOCKED,
              help="Import current GURS RPE boundaries into the analytics schema")
     export = _command(commands, "export-boundaries", _export_boundaries, Database.READ_ONLY,
                       help="Write the stored RPE boundaries to a seed archive for first installs")
-    export.add_argument("--output", default="/data/raw/rpe-boundaries.zip")
+    export.add_argument("--output", default=str(raw_data_dir() / BOUNDARY_SEED_NAME))
     _command(commands, "sync-context", _sync_context, Database.LOCKED,
              help="Import SURS wages, Banka Slovenije housing-loan rates and ECB EURIBOR")
     _command(commands, "sync-demography", _sync_demography, Database.LOCKED,
@@ -217,11 +243,13 @@ def build_parser() -> argparse.ArgumentParser:
     registers = _command(commands, "sync-registers", _sync_registers, Database.LOCKED,
                          help="Import energy certificates, GURS generalised values and DRSV flood classes")
     _add_output_dir(registers)
-
     models = _command(commands, "refresh-models", _refresh_models, Database.LOCKED,
                       help="Cross-fit hedonic and Isolation Forest models and refresh anomaly scores")
     _add_workers(models, "Parallel property-group and Isolation Forest workers")
 
+
+def _add_archive_commands(commands: argparse._SubParsersAction[argparse.ArgumentParser], current_year: int) -> None:
+    """Downloading and importing GURS ETN archives."""
     fetch = _command(commands, "fetch", _fetch, Database.NONE,
                      help="Diagnostics: download one municipality/year sales archive")
     fetch.add_argument("--municipality", type=int, required=True)
@@ -256,6 +284,9 @@ def build_parser() -> argparse.ArgumentParser:
     all_national.add_argument("--end-year", type=int, default=current_year)
     _add_refresh_options(all_national, "Refresh national years already imported")
 
+
+def _add_system_commands(commands: argparse._SubParsersAction[argparse.ArgumentParser], current_year: int) -> None:
+    """Whole-system refresh, analytics, reset, the scheduler and its health probe."""
     system = _command(
         commands, "refresh-system", _refresh_system, Database.SELF_LOCKING,
         help=(
@@ -294,13 +325,13 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Exit non-zero unless the scheduler's health file is fresh and healthy")
     health.add_argument("--health-file", type=Path, required=True)
     health.add_argument("--max-age-seconds", type=int, default=int(DEFAULT_MAX_AGE.total_seconds()))
-    return parser
 
 
 def _add_output_dir(parser: argparse.ArgumentParser) -> None:
+    default = raw_data_dir()
     parser.add_argument(
-        "--output-dir", type=Path, default=RAW_DATA_DIR,
-        help=f"Download directory (default: $RAW_DATA_DIR or {RAW_DATA_DIR})",
+        "--output-dir", type=Path, default=default,
+        help=f"Download directory (default: $RAW_DATA_DIR or {default})",
     )
 
 
@@ -322,6 +353,7 @@ def _add_refresh_options(parser: argparse.ArgumentParser, force_help: str) -> No
 
 
 def validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Cross-argument checks argparse cannot express; reports through ``parser.error`` (exit 2)."""
     if args.command == "fetch-national":
         start_year = NATIONAL_DATASETS[args.dataset_type].start_year
         if args.year < start_year:
@@ -345,18 +377,21 @@ def validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace
 
 
 def run(args: argparse.Namespace) -> None:
+    """Open the connection the command's database mode needs and call its handler."""
+    handler: Handler = args.handler
     if args.database is Database.NONE:
-        args.handler(args, None)
+        handler(args, None)
         return
-    with psycopg.connect(args.database_url) as connection:
+    with connect(args.database_url) as connection:
         if args.database in (Database.SELF_LOCKING, Database.READ_ONLY):
-            args.handler(args, connection)
+            handler(args, connection)
             return
         with maintenance_lock(connection):
-            args.handler(args, connection)
+            handler(args, connection)
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Entry point: configure logging, parse, validate and run; failures exit with status 1."""
     configure_logging()
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -367,7 +402,7 @@ def main(argv: list[str] | None = None) -> None:
         raise
     except Exception:
         logger.exception("command %s failed", args.command)
-        sys.exit(1)
+        sys.exit(EXIT_FAILURE)
 
 
 if __name__ == "__main__":

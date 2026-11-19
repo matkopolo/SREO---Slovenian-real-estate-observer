@@ -14,6 +14,8 @@ NOMINAL_INTERVAL_COVERAGE = 0.90
 
 @dataclass(frozen=True)
 class TemporalFold:
+    """One expanding-window fold: train years, a calibration year and a later validation year."""
+
     name: str
     train_years: tuple[int, ...]
     calibration_year: int
@@ -23,6 +25,7 @@ class TemporalFold:
     validation: np.ndarray
 
     def definition(self) -> dict[str, object]:
+        """The fold without its index arrays (row counts instead), for persistence."""
         result = asdict(self)
         for key in ("training", "calibration", "validation"):
             result[f"{key}_rows"] = len(result.pop(key))
@@ -37,7 +40,19 @@ def temporal_folds(
     min_calibration_rows: int = 30,
     min_validation_rows: int = 30,
 ) -> tuple[list[TemporalFold], list[dict[str, object]], int | None]:
-    """Build expanding folds, reserving the latest complete year as holdout."""
+    """Build expanding folds, reserving the latest complete year as holdout.
+
+    Args:
+        contract_dates: One date per row.
+        as_of: Today; years from ``as_of.year`` on are incomplete and excluded.
+        min_training_rows: Smallest training set a fold may have.
+        min_calibration_rows: Smallest calibration year a fold may have.
+        min_validation_rows: Smallest validation year a fold may have.
+
+    Returns:
+        The valid folds, the skipped folds with their reasons, and the holdout year
+        (``None`` when no calendar year is complete).
+    """
     as_of = as_of or datetime.now(UTC).date()
     years = np.asarray([value.year for value in contract_dates], dtype=int)
     complete_years = sorted(int(value) for value in set(years[years < as_of.year]))
@@ -94,6 +109,11 @@ def final_holdout_split(
     min_calibration_rows: int,
     min_holdout_rows: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Training, calibration and holdout row indices for the final fit before ``holdout_year``.
+
+    Raises:
+        ValueError: When no year precedes the holdout or a part is below its minimum.
+    """
     years = np.asarray([value.year for value in contract_dates], dtype=int)
     prior = sorted(int(value) for value in set(years[years < holdout_year]))
     if not prior:
@@ -113,6 +133,7 @@ def final_holdout_split(
 
 
 def percentile_scores(values: np.ndarray) -> np.ndarray:
+    """Each value's rank share in ``values`` (``1.0`` for the largest; empty input gives empty)."""
     if len(values) == 0:
         return np.array([], dtype=float)
     ordered = np.sort(values)
@@ -121,6 +142,11 @@ def percentile_scores(values: np.ndarray) -> np.ndarray:
 
 def interval_half_width(actual_log: np.ndarray, predicted_log: np.ndarray,
                         coverage: float = NOMINAL_INTERVAL_COVERAGE) -> float:
+    """Split-conformal half-width: the finite-sample ``coverage`` quantile of |residual| (log scale).
+
+    Raises:
+        ValueError: On empty or unequal arrays.
+    """
     if len(actual_log) == 0 or len(actual_log) != len(predicted_log):
         raise ValueError("calibration arrays must be non-empty and equal length")
     rank = min(len(actual_log) - 1, math.ceil((len(actual_log) + 1) * coverage) - 1)
@@ -128,6 +154,7 @@ def interval_half_width(actual_log: np.ndarray, predicted_log: np.ndarray,
 
 
 def regression_metrics(actual_log: np.ndarray, predicted_log: np.ndarray) -> dict[str, float]:
+    """MAE and percentage errors on the amount scale, RMSE and R² on the log scale."""
     actual = np.exp(actual_log)
     predicted = np.exp(predicted_log)
     percentage = (predicted - actual) / actual
@@ -146,6 +173,7 @@ def regression_metrics(actual_log: np.ndarray, predicted_log: np.ndarray) -> dic
 
 def interval_metrics(actual_log: np.ndarray, predicted_log: np.ndarray,
                      half_width: float) -> dict[str, float]:
+    """Empirical coverage and widths of ``predicted ± half_width`` (log scale) on the amount scale."""
     lower = np.exp(predicted_log - half_width)
     upper = np.exp(predicted_log + half_width)
     widths = upper - lower

@@ -7,6 +7,7 @@ alters GURS ETN facts, market statistics or valuation models.
 from __future__ import annotations
 
 import csv
+import functools
 import io
 import json
 import logging
@@ -14,7 +15,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from itertools import product
 from types import TracebackType
-from typing import Any
+from typing import Any, Self
 
 import httpx
 import psycopg
@@ -48,14 +49,18 @@ class Observation:
     source_table: str
 
 
-def jsonstat_rows(payload: dict) -> Iterable[tuple[dict[str, str], float]]:
-    """Flatten a JSON-stat 2.0 dataset into ({dimension: category code}, value) pairs."""
+def jsonstat_rows(payload: dict[str, Any]) -> Iterable[tuple[dict[str, str], float]]:
+    """Flatten a JSON-stat 2.0 dataset into ({dimension: category code}, value) pairs.
+
+    Raises:
+        ValueError: When a dimension lists a different number of categories than ``size`` says.
+    """
     ids = payload["id"]
     sizes = payload["size"]
-    codes = []
+    codes: list[list[str]] = []
     for dimension in ids:
         index = payload["dimension"][dimension]["category"]["index"]
-        ordered = sorted(index, key=index.get) if isinstance(index, dict) else list(index)
+        ordered = sorted(index, key=lambda code: int(index[code])) if isinstance(index, dict) else list(index)
         codes.append(ordered)
     values = payload["value"]
     keyed = values.items() if isinstance(values, dict) else enumerate(values)
@@ -70,18 +75,20 @@ def jsonstat_rows(payload: dict) -> Iterable[tuple[dict[str, str], float]]:
         yield dict(zip(ids, combination, strict=True)), float(value)
 
 
-def latest_value(metadata: dict, variable: str) -> str:
+def latest_value(metadata: dict[str, Any], variable: str) -> str:
     """Newest code of a PX-Web variable whose values are sortable period labels."""
     values = next(item["values"] for item in metadata["variables"] if item["code"] == variable)
     return max(values)
 
 
 def municipality_key(code: str) -> str:
+    """``SI`` for the national total (code 0), otherwise ``municipality:<code>``."""
     number = int(code)
     return "SI" if number == 0 else f"municipality:{number}"
 
 
-def surs_wage_observations(payload: dict) -> list[Observation]:
+def surs_wage_observations(payload: dict[str, Any]) -> list[Observation]:
+    """Net-wage distribution rows (mean, quartiles, deciles) per municipality and month."""
     rows = []
     for dims, value in jsonstat_rows(payload):
         series = WAGE_MEASURES.get(dims["MERITVE"])
@@ -91,25 +98,29 @@ def surs_wage_observations(payload: dict) -> list[Observation]:
     return rows
 
 
-def surs_average_observations(payload: dict) -> list[Observation]:
+def surs_average_observations(payload: dict[str, Any]) -> list[Observation]:
+    """National average net wage per month."""
     return [Observation("surs", "net_wage_mean_monthly", "SI", dims["MESEC"], value, "EUR/month",
                         "SURS 0701015S") for dims, value in jsonstat_rows(payload)]
 
 
-def bsi_rate_observations(payload: dict) -> list[Observation]:
+def bsi_rate_observations(payload: dict[str, Any]) -> list[Observation]:
+    """Banka Slovenije housing-loan rates (variable, fixed 10y, APRC) per month."""
     return [Observation("bsi", BSI_ITEMS[dims["Postavke"]], "SI", dims["Datum"], value, "percent",
                         "Banka Slovenije I2_4_3AS") for dims, value in jsonstat_rows(payload)
             if dims["Postavke"] in BSI_ITEMS]
 
 
 def ecb_observations(text: str) -> list[Observation]:
+    """Monthly 6-month EURIBOR averages from the ECB CSV export."""
     reader = csv.DictReader(io.StringIO(text))
     return [Observation("ecb", "euribor_6m", "SI", row["TIME_PERIOD"], float(row["OBS_VALUE"]),
                         "percent", "ECB FM EURIBOR6MD_ (monthly average)")
             for row in reader if row.get("OBS_VALUE")]
 
 
-def px_query(selections: dict[str, tuple[str, list[str]]]) -> dict:
+def px_query(selections: dict[str, tuple[str, list[str]]]) -> dict[str, Any]:
+    """A PX-Web query body: ``{code: (filter kind, values)}`` with a JSON-stat 2 response."""
     return {"query": [{"code": code, "selection": {"filter": kind, "values": values}}
                       for code, (kind, values) in selections.items()],
             "response": {"format": "json-stat2"}}
@@ -118,11 +129,11 @@ def px_query(selections: dict[str, tuple[str, list[str]]]) -> dict:
 class ContextClient:
     """PX-Web and ECB client; owns its HTTP connection pool unless one is injected."""
 
-    def __init__(self, client: httpx.Client | None = None):
+    def __init__(self, client: httpx.Client | None = None) -> None:
         self._owns_client = client is None
         self._client = client or http_client.create_client()
 
-    def __enter__(self) -> ContextClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(
@@ -168,7 +179,8 @@ class ContextClient:
         return ecb_observations(self._get(ECB_EURIBOR_6M))
 
 
-def store_observations(connection: psycopg.Connection, observations: list[Observation]) -> int:
+def store_observations(connection: psycopg.Connection[Any], observations: list[Observation]) -> int:
+    """Upsert ``observations`` into ``analytics.context_series``; returns how many were written."""
     with connection.cursor() as cursor:
         cursor.executemany(
             """INSERT INTO analytics.context_series
@@ -183,7 +195,7 @@ def store_observations(connection: psycopg.Connection, observations: list[Observ
     return len(observations)
 
 
-def store_fetched(connection: psycopg.Connection, fetch: Callable[[], list[Observation]]) -> int:
+def store_fetched(connection: psycopg.Connection[Any], fetch: Callable[[], list[Observation]]) -> int:
     """Fetch one source and upsert it; an empty response is a failure, never a wipe."""
     observations = fetch()
     if not observations:
@@ -191,7 +203,14 @@ def store_fetched(connection: psycopg.Connection, fetch: Callable[[], list[Obser
     return store_observations(connection, observations)
 
 
-def sync_context(connection: psycopg.Connection, client: ContextClient | None = None) -> SourceSyncReport:
+def storing_steps(
+    connection: psycopg.Connection[Any], fetchers: dict[str, Callable[[], list[Observation]]],
+) -> dict[str, Callable[[], int]]:
+    """Wrap each fetcher in a step that stores its observations (for :func:`run_isolated_sources`)."""
+    return {name: functools.partial(store_fetched, connection, fetch) for name, fetch in fetchers.items()}
+
+
+def sync_context(connection: psycopg.Connection[Any], client: ContextClient | None = None) -> SourceSyncReport:
     """Fetch and upsert every context series; one failing source does not block the others."""
     if client is None:
         with ContextClient() as owned:
@@ -202,8 +221,4 @@ def sync_context(connection: psycopg.Connection, client: ContextClient | None = 
         "bsi_housing_rates": client.housing_rates,
         "ecb_euribor_6m": client.euribor,
     }
-    return run_isolated_sources(
-        connection,
-        {name: (lambda fetch=fetch: store_fetched(connection, fetch)) for name, fetch in fetchers.items()},
-        group="affordability context",
-    )
+    return run_isolated_sources(connection, storing_steps(connection, fetchers), group="affordability context")

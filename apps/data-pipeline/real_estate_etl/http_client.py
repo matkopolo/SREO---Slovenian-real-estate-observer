@@ -8,6 +8,8 @@ errors such as 400 or 404 come from a wrong query and fail immediately.
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 import time
 import zipfile
 from collections.abc import Callable
@@ -17,7 +19,7 @@ from typing import Any, TypeVar
 import httpx
 from tenacity import RetryCallState, Retrying, retry_if_exception, stop_after_attempt, wait_exponential
 
-from .settings import MAX_DOWNLOAD_ATTEMPTS, USER_AGENT
+from .settings import MAX_DOWNLOAD_ATTEMPTS, MAX_DOWNLOAD_BYTES, USER_AGENT
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +31,25 @@ T = TypeVar("T")
 DEFAULT_TIMEOUT = httpx.Timeout(180, connect=30)
 DOWNLOAD_CHUNK_BYTES = 1 << 20
 RETRYABLE_STATUSES = frozenset({408, 425, 429})
+#: Transport failures a later attempt can plausibly fix. ``UnsupportedProtocol`` and
+#: ``ProxyError`` (also ``TransportError`` subclasses) come from the request itself.
+TRANSIENT_TRANSPORT_ERRORS = (
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.CloseError,
+    httpx.TimeoutException,
+    httpx.RemoteProtocolError,
+    httpx.PoolTimeout,
+)
 
 
 class InvalidDownload(ValueError):
     """A completed download failed validation (for example, it is not a ZIP archive)."""
+
+
+class DownloadTooLarge(ValueError):
+    """A download exceeded :data:`real_estate_etl.settings.MAX_DOWNLOAD_BYTES`."""
 
 
 def create_client(timeout: httpx.Timeout = DEFAULT_TIMEOUT) -> httpx.Client:
@@ -42,7 +59,7 @@ def create_client(timeout: httpx.Timeout = DEFAULT_TIMEOUT) -> httpx.Client:
 
 def is_transient(error: BaseException) -> bool:
     """True for errors that a later attempt can plausibly fix."""
-    if isinstance(error, httpx.TransportError):
+    if isinstance(error, TRANSIENT_TRANSPORT_ERRORS):
         return True
     if isinstance(error, httpx.HTTPStatusError):
         status = error.response.status_code
@@ -126,20 +143,48 @@ def download_file(
     *,
     validate: Callable[[Path], bool] | None = zipfile.is_zipfile,
     chunk_bytes: int = DOWNLOAD_CHUNK_BYTES,
+    max_bytes: int = MAX_DOWNLOAD_BYTES,
 ) -> Path:
     """Stream ``url`` to ``target`` atomically.
 
-    Bytes go to ``<target>.part``, which is validated and then renamed over the target.
-    The partial file is removed on every failure, so an interrupted download never
-    leaves a large truncated file behind.
+    Bytes go to a uniquely named ``<target>.<random>.part`` file next to the target
+    (so two processes downloading the same archive never share a partial file),
+    which is validated and then renamed over the target. The partial file is removed
+    on every failure, so an interrupted download never leaves a truncated file behind.
+
+    Args:
+        client: The HTTP client to stream with.
+        url: The URL to download.
+        target: The final path; its parent directory is created.
+        validate: Predicate run on the completed partial file; ``None`` skips validation.
+        chunk_bytes: Size of the chunks streamed to disk.
+        max_bytes: Reject the download once more than this many bytes arrive (or the
+            ``Content-Length`` header announces more).
+
+    Returns:
+        ``target``.
+
+    Raises:
+        httpx.HTTPError: On transport failures or a non-2xx status.
+        DownloadTooLarge: When the response exceeds ``max_bytes``.
+        InvalidDownload: When ``validate`` rejects the completed file.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(target.name + ".part")
+    descriptor, name = tempfile.mkstemp(prefix=target.name + ".", suffix=".part", dir=target.parent)
+    os.close(descriptor)  # the unique name is reserved; the stream below reopens it
+    temporary = Path(name)
     try:
+        received = 0
         with client.stream("GET", url) as response:
             response.raise_for_status()
+            announced = response.headers.get("content-length")
+            if announced and announced.isdigit() and int(announced) > max_bytes:
+                raise DownloadTooLarge(f"{target.name}: Content-Length {announced} exceeds {max_bytes} bytes")
             with temporary.open("wb") as output:
                 for chunk in response.iter_bytes(chunk_bytes):
+                    received += len(chunk)
+                    if received > max_bytes:
+                        raise DownloadTooLarge(f"{target.name}: download exceeds {max_bytes} bytes")
                     output.write(chunk)
         if validate is not None and not validate(temporary):
             raise InvalidDownload(f"downloaded file failed validation: {target.name}")

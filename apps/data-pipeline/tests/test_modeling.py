@@ -1,6 +1,5 @@
 from datetime import date, timedelta
-from threading import Lock
-from time import sleep
+from threading import Barrier, Lock
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -66,13 +65,15 @@ def test_property_groups_use_bounded_parallel_workers(monkeypatch, caplog):
     lock = Lock()
     active = 0
     maximum_active = 0
+    both_started = Barrier(2, timeout=5)  # two groups must overlap: proves the pool is parallel
 
     def train(_kind, group, number, _count, *_args):
         nonlocal active, maximum_active
         with lock:
             active += 1
             maximum_active = max(maximum_active, active)
-        sleep(0.03)
+        if number <= 2:
+            both_started.wait()  # the first two groups run at the same time; the third waits for a slot
         with lock:
             active -= 1
         indices = np.asarray([number - 1])

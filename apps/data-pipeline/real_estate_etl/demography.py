@@ -17,10 +17,11 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from typing import Any
 
 import psycopg
 
-from .context import ContextClient, Observation, jsonstat_rows, municipality_key, px_query, store_fetched
+from .context import ContextClient, Observation, jsonstat_rows, municipality_key, px_query, storing_steps
 from .source_sync import SourceSyncReport, run_isolated_sources
 
 logger = logging.getLogger(__name__)
@@ -47,23 +48,27 @@ CENSUS_YEARS = ["2018", "2021"]
 
 
 def region_key(code: str) -> str:
+    """``SI`` for the national total (code 0), otherwise ``region:<code>``."""
     number = int(code)
     return "SI" if number == 0 else f"region:{number}"
 
 
-def population_observations(payload: dict) -> list[Observation]:
+def population_observations(payload: dict[str, Any]) -> list[Observation]:
+    """Population on 1 January per municipality, period and age group."""
     return [Observation("surs", f"population_{POPULATION_AGES[dims['STAROST']]}", municipality_key(dims["OBČINE"]),
                         dims["POLLETJE"], value, "persons", f"SURS {POPULATION}")
             for dims, value in jsonstat_rows(payload) if dims["STAROST"] in POPULATION_AGES]
 
 
-def death_observations(payload: dict) -> list[Observation]:
+def death_observations(payload: dict[str, Any]) -> list[Observation]:
+    """Deaths per statistical region, year and age group."""
     return [Observation("surs", f"deaths_{DEATH_AGES[dims['STAROST']]}", region_key(dims["STATISTIČNA REGIJA"]),
                         dims["LETO"], value, "persons", f"SURS {DEATHS}")
             for dims, value in jsonstat_rows(payload) if dims["STAROST"] in DEATH_AGES]
 
 
-def migration_observations(payload: dict) -> list[Observation]:
+def migration_observations(payload: dict[str, Any]) -> list[Observation]:
+    """Net migration series per municipality and year."""
     rows = []
     for dims, value in jsonstat_rows(payload):
         series = MIGRATION_MEASURES.get(dims["MERITVE"])
@@ -74,8 +79,9 @@ def migration_observations(payload: dict) -> list[Observation]:
 
 
 def stock_observations(
-    payload: dict, dimension: str, series: dict[str, str], unit: str, table: str,
+    payload: dict[str, Any], dimension: str, series: dict[str, str], unit: str, table: str,
 ) -> list[Observation]:
+    """Dwelling, tenure or household stock per municipality and year for the codes in ``series``."""
     rows = []
     for dims, value in jsonstat_rows(payload):
         name = series.get(dims[dimension])
@@ -85,7 +91,8 @@ def stock_observations(
     return rows
 
 
-def living_alone_observations(payload: dict) -> list[Observation]:
+def living_alone_observations(payload: dict[str, Any]) -> list[Observation]:
+    """People living alone and all persons, by age group (Slovenia)."""
     rows = []
     for dims, value in jsonstat_rows(payload):
         age = ALONE_AGES.get(dims["STAROST"])
@@ -97,7 +104,9 @@ def living_alone_observations(payload: dict) -> list[Observation]:
 
 
 class DemographyClient(ContextClient):
-    def _metadata(self, table: str) -> dict:
+    """PX-Web client for the SURS demographic tables."""
+
+    def _metadata(self, table: str) -> dict[str, Any]:
         return json.loads(self._get(PX.format(table)))
 
     def _values(self, table: str, variable: str) -> list[str]:
@@ -149,18 +158,14 @@ class DemographyClient(ContextClient):
         })))
 
 
-def sync_demography(connection: psycopg.Connection, client: DemographyClient | None = None) -> SourceSyncReport:
+def sync_demography(connection: psycopg.Connection[Any], client: DemographyClient | None = None) -> SourceSyncReport:
     """Fetch and upsert every demographic table; one failing table keeps its stored values."""
     if client is None:
-        with DemographyClient() as owned:
-            return sync_demography(connection, owned)
+        with DemographyClient() as owned_client:
+            return sync_demography(connection, owned_client)
     fetchers: dict[str, Callable[[], list[Observation]]] = {
         "surs_population": client.population, "surs_deaths": client.deaths, "surs_migration": client.migration,
         "surs_dwellings": client.dwellings, "surs_tenure": client.tenure, "surs_households": client.households,
         "surs_living_alone": client.living_alone,
     }
-    return run_isolated_sources(
-        connection,
-        {name: (lambda fetch=fetch: store_fetched(connection, fetch)) for name, fetch in fetchers.items()},
-        group="demography",
-    )
+    return run_isolated_sources(connection, storing_steps(connection, fetchers), group="demography")

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 INT_FIELDS = {
@@ -63,7 +63,25 @@ def converted(
     member: str = "<unknown member>",
     row_number: int = 0,
     source_field: str = "<unknown field>",
-):
+) -> int | bool | date | Decimal | str | None:
+    """Convert one source value to the Python type of its destination column.
+
+    Args:
+        field: Destination column name; decides the conversion.
+        value: The raw CSV text.
+        archive: Archive name for the error message.
+        member: Member name for the error message.
+        row_number: CSV row number for the error message.
+        source_field: Source column name for the error message.
+
+    Returns:
+        ``None`` for an empty value or a zero-date sentinel, otherwise the typed value
+        (free text is stripped).
+
+    Raises:
+        SourceConversionError: When the value cannot be converted (including a numeric
+            ``NaN`` or infinity, which PostgreSQL would otherwise store).
+    """
     stripped = value.strip()
     if not stripped:
         return None
@@ -82,7 +100,10 @@ def converted(
                 return None
             return datetime.strptime(stripped, "%d.%m.%Y").date()  # noqa: DTZ007 - calendar date, no time zone
         if field in NUMERIC_FIELDS:
-            return Decimal(stripped.replace(",", "."))
+            number = Decimal(stripped.replace(",", "."))
+            if not number.is_finite():
+                raise ValueError("numeric value is not finite")
+            return number
         return stripped
     except (ValueError, InvalidOperation) as error:
         raise SourceConversionError(

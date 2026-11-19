@@ -16,6 +16,7 @@ from psycopg import sql
 
 from . import http_client
 from .settings import RPE_OGC_BASE
+from .shapefile import read_member
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +39,20 @@ COLLECTIONS = (
 
 
 def collection_url(collection_id: str) -> str:
+    """The OGC API Features items URL of one RPE collection (GeoJSON, 1000 per page)."""
     encoded = collection_id.replace(":", "%3A")
     return f"{RPE_OGC_BASE}/collections/{encoded}/items?f=application%2Fgeo%2Bjson&limit=1000"
 
 
-def iter_collection_pages(fetch_json: Callable[[str], dict], collection: BoundaryCollection) -> Iterator[dict]:
-    url = collection_url(collection.collection_id)
+def iter_collection_pages(
+    fetch_json: Callable[[str], dict[str, Any]], collection: BoundaryCollection,
+) -> Iterator[dict[str, Any]]:
+    """Yield every FeatureCollection page of ``collection``, following ``next`` links.
+
+    Raises:
+        ValueError: On a page that is not a FeatureCollection or on a pagination cycle.
+    """
+    url: str | None = collection_url(collection.collection_id)
     visited: set[str] = set()
     while url:
         if url in visited:
@@ -59,7 +68,12 @@ def iter_collection_pages(fetch_json: Callable[[str], dict], collection: Boundar
         )
 
 
-def normalized_feature(feature: dict, collection: BoundaryCollection) -> tuple:
+def normalized_feature(feature: dict[str, Any], collection: BoundaryCollection) -> tuple[Any, ...]:
+    """One GeoJSON feature as the ``geographic_units`` row values (without ``imported_at``).
+
+    Raises:
+        ValueError: When the feature lacks its id, name or geometry, or is not a polygon.
+    """
     properties = feature.get("properties") or {}
     geometry = feature.get("geometry")
     eid = properties.get(collection.eid_field)
@@ -83,11 +97,24 @@ def normalized_feature(feature: dict, collection: BoundaryCollection) -> tuple:
 
 
 def sync_geographies(
-    connection: psycopg.Connection,
+    connection: psycopg.Connection[Any],
     fetch_json: Callable[[str], dict[str, Any]] | None = None,
     schema: str = "analytics",
 ) -> dict[str, int]:
-    """Atomically refresh current RPE boundaries and their hierarchy."""
+    """Atomically refresh current RPE boundaries and their hierarchy.
+
+    Args:
+        connection: The maintenance connection; the refresh is one transaction on it.
+        fetch_json: Returns the parsed GeoJSON for a URL; the OGC API client when omitted.
+        schema: Schema of ``geographic_units`` and ``refresh_runs`` (tests use a throwaway one).
+
+    Returns:
+        Feature counts per level, plus ``country`` (derived).
+
+    Raises:
+        Exception: Whatever the fetch or the database raised, after the transaction was
+            rolled back and the ``refresh_runs`` row marked failed.
+    """
     if fetch_json is None:
         with http_client.create_client() as client:
             return sync_geographies(
@@ -97,7 +124,7 @@ def sync_geographies(
             )
 
     token = datetime.now(UTC)
-    run_id = connection.execute(
+    run_row = connection.execute(
         sql.SQL(
             "INSERT INTO {}.refresh_runs(process,status,started_at) "
             "VALUES ('geographies','running',%s) RETURNING id"
@@ -105,7 +132,10 @@ def sync_geographies(
             sql.Identifier(schema)
         ),
         (token,),
-    ).fetchone()[0]
+    ).fetchone()
+    if run_row is None:
+        raise RuntimeError("refresh_runs insert returned no id")
+    run_id = run_row[0]
     connection.commit()
 
     counts: dict[str, int] = {}
@@ -178,7 +208,7 @@ def sync_geographies(
     return counts
 
 
-def _assign_hierarchy(cursor, table) -> None:
+def _assign_hierarchy(cursor: psycopg.Cursor[Any], table: sql.Identifier) -> None:
     cursor.execute(
         sql.SQL(
             """UPDATE {} child SET parent_id=parent.id
@@ -212,7 +242,7 @@ def _parent_eid(properties: dict[str, Any], collection: BoundaryCollection) -> s
     return str(parent) if parent else None
 
 
-def _optional_int(value) -> int | None:
+def _optional_int(value: Any) -> int | None:
     return int(value) if value is not None and value != "" else None
 
 
@@ -221,7 +251,7 @@ def seed_archive_name(collection_id: str) -> str:
     return f"{collection_id.replace(':', '_')}.geojson"
 
 
-def seed_fetcher(archive: Path) -> Callable[[str], dict]:
+def seed_fetcher(archive: Path) -> Callable[[str], dict[str, Any]]:
     """A ``fetch_json`` that answers collection requests from the boundary seed archive.
 
     The archive holds one GeoJSON FeatureCollection per RPE collection, in the shape the
@@ -231,14 +261,14 @@ def seed_fetcher(archive: Path) -> Callable[[str], dict]:
     with zipfile.ZipFile(archive) as bundle:
         names = set(bundle.namelist())
 
-    def fetch(url: str) -> dict:
+    def fetch(url: str) -> dict[str, Any]:
         for collection in COLLECTIONS:
             if collection.collection_id.replace(":", "%3A") in url or collection.collection_id in url:
                 name = seed_archive_name(collection.collection_id)
                 if name not in names:
                     raise ValueError(f"Boundary seed {archive.name} has no {name}")
-                with zipfile.ZipFile(archive) as bundle, bundle.open(name) as handle:
-                    payload = json.load(handle)
+                with zipfile.ZipFile(archive) as bundle:
+                    payload: dict[str, Any] = json.loads(read_member(bundle, name))
                 payload.pop("links", None)
                 return payload
         raise ValueError(f"Boundary seed cannot answer {url}")
@@ -246,7 +276,9 @@ def seed_fetcher(archive: Path) -> Callable[[str], dict]:
     return fetch
 
 
-def export_boundary_seed(connection: psycopg.Connection, archive: Path, schema: str = "analytics") -> dict[str, int]:
+def export_boundary_seed(
+    connection: psycopg.Connection[Any], archive: Path, schema: str = "analytics",
+) -> dict[str, int]:
     """Write the currently stored RPE boundaries to a seed archive :func:`seed_fetcher` can serve.
 
     Features keep the GURS properties and the WGS84 geometry (7 decimals, as published), so a

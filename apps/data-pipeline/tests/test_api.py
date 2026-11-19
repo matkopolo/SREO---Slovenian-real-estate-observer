@@ -63,3 +63,25 @@ def test_national_fetch_downloads_prepared_archive(tmp_path: Path):
 
     assert path == tmp_path / "raw" / "ETN_SLO_2020_KPP_x.zip"
     assert zipfile.is_zipfile(path)
+
+
+@pytest.mark.parametrize("published_name", ["../../ETN_SLO_2020_KPP_x.zip", "/tmp/ETN_SLO_2020_KPP_x.zip", "evil.zip"])
+def test_server_supplied_archive_names_cannot_leave_the_data_directory(tmp_path: Path, published_name: str):
+    downloads = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/result"):
+            return httpx.Response(200, json={"statusText": "OK", "file": {"name": published_name}})
+        if request.url.path.endswith("/file"):
+            return httpx.Response(200, json={"url": "https://files.test/archive.zip"})
+        downloads.append(request.url)
+        return httpx.Response(200, content=b"PK")
+
+    with JGPClient(tmp_path / "raw", sleep=Mock()) as client:
+        client._local.client = httpx.Client(transport=httpx.MockTransport(handler))
+        client._clients.append(client._local.client)
+        with pytest.raises(ValueError, match="unsafe file name"):
+            client.fetch_national("sales", 2020)
+
+    assert downloads == []  # rejected before any bytes are fetched
+    assert not (tmp_path / "raw").exists()

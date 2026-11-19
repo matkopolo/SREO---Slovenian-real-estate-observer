@@ -8,7 +8,8 @@ A system refresh runs these stages in order, each recorded on the analytical rel
    whose per-source outcome is stored in ``details.sources`` on the release;
 3. ``analytics``  rebuild the analytical facts in one transaction;
 4. ``models``     retrain valuation models when the policy and new data call for it;
-5. ``published``  switch the active release, in the same transaction as 3 and 4.
+5. ``published``  switch the active release, in the same transaction as 3 and 4;
+6. ``retention``  prune superseded model runs and index vintages (its own transaction).
 
 Stages 3 to 5 deliberately share one long transaction: readers keep seeing the
 previous release until the new one is complete. That holds back vacuum for the
@@ -35,6 +36,7 @@ from . import http_client
 from .analytics_plan import ANALYTICS_REFRESH_FUNCTIONS, format_analytics_plan
 from .construction import sync_construction
 from .context import sync_context
+from .database import connect, scalar
 from .demography import sync_demography
 from .geography import seed_fetcher, sync_geographies
 from .health import HEARTBEAT_SECONDS, STALE_SLACK, HealthHeartbeat, WorkerHealth, utc_now
@@ -48,10 +50,12 @@ from .publication import (
     record_source_status,
     set_release_stage,
     start_release,
+    supersede_stale_releases,
     update_release_source,
 )
 from .registers import sync_registers
-from .settings import RPE_BOUNDARIES_SEED_URL
+from .retention import prune_model_history
+from .settings import rpe_boundaries_seed_url
 from .source_sync import SOURCE_OK, SOURCE_SEED, SUCCESSFUL_STATUSES, SourceSyncReport
 
 logger = logging.getLogger(__name__)
@@ -62,6 +66,12 @@ DEFAULT_ANALYTICS_PROGRESS_INTERVAL_SECONDS = 15.0
 #: The current and previous GURS years are re-downloaded on every refresh: late
 #: registrations keep arriving for the year that just ended.
 REVISION_YEARS = 2
+#: Longest single sleep. The deadline is wall-clock time: Docker Desktop pauses
+#: its VM while the host sleeps and a monotonic wait does not advance then, so a
+#: single 14-day Event.wait() silently stretched into months.
+SCHEDULER_POLL_SECONDS = 300
+#: Longest wait between two checks that the database accepts connections again.
+DATABASE_RETRY_SECONDS = 5.0
 
 #: Tables emptied by ``reset-and-repopulate``. TRUNCATE runs without CASCADE, so a new
 #: table that references one of these fails the reset loudly until it is listed here.
@@ -97,6 +107,8 @@ class RefreshInterrupted(RuntimeError):
 
 @dataclass(frozen=True)
 class SystemRefreshResult:
+    """What one system refresh did: archives, boundary counts, model rows and source statuses."""
+
     archives: RefreshSummary
     geography_counts: dict[str, int]
     model_rows: dict[str, int]
@@ -107,7 +119,8 @@ class ReleaseLogger(logging.LoggerAdapter):
     """Prefix every message with the release id so logs match the release row."""
 
     def process(self, msg: Any, kwargs: MutableMapping[str, Any]) -> tuple[Any, MutableMapping[str, Any]]:
-        return f"release={self.extra['release_id']} {msg}", kwargs
+        extra = self.extra or {}
+        return f"release={extra.get('release_id')} {msg}", kwargs
 
 
 def model_training_enabled() -> bool:
@@ -141,7 +154,7 @@ def _function_call(function: str) -> sql.Composed:
 
 
 def _refresh_functions(
-    connection: psycopg.Connection,
+    connection: psycopg.Connection[Any],
     functions: tuple[str, ...],
     *,
     progress_interval_seconds: float | None = None,
@@ -167,22 +180,24 @@ def _refresh_functions(
             finally:
                 done.set()
                 heartbeat.join()
-            value = int(cursor.fetchone()[0] or 0)
+            row = cursor.fetchone()
+            value = int(row[0] or 0) if row is not None else 0
             counts[function] = value
             logger.info("  %s: %s rows in %.1fs", label, f"{value:,}", time.monotonic() - started)
     return counts
 
 
-def refresh_analytics(connection: psycopg.Connection) -> dict[str, int]:
+def refresh_analytics(connection: psycopg.Connection[Any]) -> dict[str, int]:
     """Build one coherent analytical generation in the caller's transaction."""
     return _refresh_functions(connection, ANALYTICS_REFRESH_FUNCTIONS)
 
 
 def format_analytics_counts(counts: dict[str, int]) -> str:
+    """``refresh_sale_facts=123, ...`` for the completion log line."""
     return ", ".join(f"{name.rsplit('.', 1)[-1]}={count}" for name, count in counts.items())
 
 
-def reset_market_data(connection: psycopg.Connection) -> None:
+def reset_market_data(connection: psycopg.Connection[Any]) -> None:
     """Delete market data while preserving users and installation state."""
     tables = sql.SQL(", ").join(sql.Identifier(*table.split(".")) for table in RESET_TABLES)
     with connection.transaction(), connection.cursor() as cursor:
@@ -190,7 +205,7 @@ def reset_market_data(connection: psycopg.Connection) -> None:
 
 
 def refresh_system(
-    connection: psycopg.Connection,
+    connection: psycopg.Connection[Any],
     *,
     output_dir: Path,
     end_year: int,
@@ -215,7 +230,7 @@ def refresh_system(
 
 
 def reset_and_repopulate(
-    connection: psycopg.Connection,
+    connection: psycopg.Connection[Any],
     *,
     output_dir: Path,
     end_year: int,
@@ -239,7 +254,7 @@ def reset_and_repopulate(
 
 
 def _sync_geographies_or_keep_existing(
-    connection: psycopg.Connection, output_dir: Path | None = None
+    connection: psycopg.Connection[Any], output_dir: Path | None = None
 ) -> tuple[dict[str, int], str]:
     """Refresh RPE boundaries, but never let a boundary-service outage block new GURS data.
 
@@ -253,7 +268,7 @@ def _sync_geographies_or_keep_existing(
         return sync_geographies(connection), SOURCE_OK
     except Exception as error:
         connection.rollback()
-        existing = connection.execute("SELECT count(*) FROM analytics.geographic_units").fetchone()[0]
+        existing = scalar(connection, "SELECT count(*) FROM analytics.geographic_units")
         connection.commit()
         if existing:
             logger.warning(
@@ -261,20 +276,21 @@ def _sync_geographies_or_keep_existing(
                 existing, exc_info=error,
             )
             return {}, f"{type(error).__name__}: {error}"[:500]
+        seed_url = rpe_boundaries_seed_url()
         logger.warning(
             "Geographic boundary sync failed on a first install (%s: %s); loading the published boundary seed from %s",
-            type(error).__name__, error, RPE_BOUNDARIES_SEED_URL,
+            type(error).__name__, error, seed_url, exc_info=error,
         )
         archive = (output_dir or Path(".")) / "rpe-boundaries.zip"
         if not archive.exists():
             with http_client.create_client() as client:
-                http_client.download_file(client, RPE_BOUNDARIES_SEED_URL, archive)
+                http_client.download_file(client, seed_url, archive)
         counts = sync_geographies(connection, seed_fetcher(archive))
         logger.warning("Boundaries loaded from the seed archive; the next refresh will take them from GURS again.")
         return counts, SOURCE_SEED
 
 
-def _sync_optional_sources(connection: psycopg.Connection, output_dir: Path) -> SourceSyncReport:
+def _sync_optional_sources(connection: psycopg.Connection[Any], output_dir: Path) -> SourceSyncReport:
     """Affordability, demographic, construction and building-register context; failures keep stored values."""
     return (
         sync_context(connection)
@@ -284,22 +300,21 @@ def _sync_optional_sources(connection: psycopg.Connection, output_dir: Path) -> 
     )
 
 
-def _bootstrap_required(connection: psycopg.Connection) -> bool:
-    required = connection.execute(
-        "SELECT model_bootstrap_completed_at IS NULL FROM analytics.pipeline_state WHERE singleton"
-    ).fetchone()[0]
+def _bootstrap_required(connection: psycopg.Connection[Any]) -> bool:
+    required = scalar(
+        connection, "SELECT model_bootstrap_completed_at IS NULL FROM analytics.pipeline_state WHERE singleton"
+    )
     connection.commit()
     return bool(required)
 
 
-def _published_model_versions(connection: psycopg.Connection) -> str | None:
-    return connection.execute(
-        "SELECT model_bootstrap_version FROM analytics.pipeline_state WHERE singleton"
-    ).fetchone()[0]
+def _published_model_versions(connection: psycopg.Connection[Any]) -> str | None:
+    versions = scalar(connection, "SELECT model_bootstrap_version FROM analytics.pipeline_state WHERE singleton")
+    return None if versions is None else str(versions)
 
 
 def _train_models(
-    connection: psycopg.Connection, workers: int, log: logging.LoggerAdapter,
+    connection: psycopg.Connection[Any], workers: int, log: logging.LoggerAdapter[Any],
 ) -> tuple[dict[str, int], str]:
     from .model_reporting import format_model_report
     from .modeling import refresh_models
@@ -314,8 +329,18 @@ def _train_models(
     )
 
 
+def _prune_history(connection: psycopg.Connection[Any], log: logging.LoggerAdapter[Any]) -> None:
+    """Retention after publication; a failure here is logged, the publication stands."""
+    try:
+        prune_model_history(connection)
+    except Exception:
+        if not connection.closed and not connection.broken:
+            connection.rollback()
+        log.exception("Retention of model and index history failed; the published release is unaffected")
+
+
 def _refresh_system_unlocked(
-    connection: psycopg.Connection,
+    connection: psycopg.Connection[Any],
     *,
     output_dir: Path,
     end_year: int,
@@ -367,17 +392,26 @@ def _refresh_system_unlocked(
             "published (archives imported=%s, models=%s, failed optional sources=%s)",
             archives.imported, model_versions, ", ".join(failed) or "none",
         )
-        return SystemRefreshResult(archives, geography_counts, model_rows, sources)
     except BaseException as error:
-        connection.rollback()
-        fail_release(database_url, release_id, error)
+        _abandon_release(connection, database_url, release_id, error)
         raise
+    _prune_history(connection, log)
+    return SystemRefreshResult(archives, geography_counts, model_rows, sources)
 
 
-#: Longest single sleep. The deadline is wall-clock time: Docker Desktop pauses
-#: its VM while the host sleeps and a monotonic wait does not advance then, so a
-#: single 14-day Event.wait() silently stretched into months.
-SCHEDULER_POLL_SECONDS = 300
+def _abandon_release(
+    connection: psycopg.Connection[Any], database_url: str, release_id: Any, error: BaseException,
+) -> None:
+    """Roll back and mark the release failed without masking ``error`` when the database is gone."""
+    try:
+        if not connection.closed and not connection.broken:
+            connection.rollback()
+    except psycopg.Error:
+        logger.exception("release=%s could not be rolled back after %s", release_id, type(error).__name__)
+    try:
+        fail_release(database_url, release_id, error)
+    except psycopg.Error:
+        logger.exception("release=%s could not be marked failed after %s", release_id, type(error).__name__)
 
 
 def wait_until(
@@ -397,10 +431,59 @@ def wait_until(
 
 def _reader_for_active_release(database_url: str) -> Callable[[], datetime | None]:
     def read() -> datetime | None:
-        with psycopg.connect(database_url) as connection:
+        with connect(database_url) as connection:
             return active_release_published_at(connection)
 
     return read
+
+
+class _StopHandler:
+    """Turn SIGTERM/SIGINT into a stop request and cancel the query the refresh is running.
+
+    The stop event is honoured between stages; a stage that is one long SQL statement
+    (an analytics function, a COPY) cannot observe it, so the handler also sends a
+    cancel request for the connection registered as current. The cancelled statement
+    raises in the refresh, which rolls back and marks the release failed; the loop
+    then exits because the stop event is set.
+    """
+
+    def __init__(self, stop_event: Event) -> None:
+        self._stop_event = stop_event
+        self._connection: psycopg.Connection[Any] | None = None
+        self._previous: dict[int, Any] = {}
+
+    def __call__(self, signal_number: int, _frame: object) -> None:
+        logger.info("Received signal %s; stopping after the current refresh stage.", signal_number)
+        self._stop_event.set()
+        connection = self._connection
+        if connection is not None:
+            Thread(target=_cancel_running_query, args=(connection,), name="cancel-refresh", daemon=True).start()
+
+    def watch(self, connection: psycopg.Connection[Any] | None) -> None:
+        """Register (or with ``None`` forget) the connection whose query a stop should cancel."""
+        self._connection = connection
+
+    def install(self) -> None:
+        """Install the handlers when this thread owns signals; previous handlers are kept for restore."""
+        # Compose runs the worker under tini (init: true), so it is not PID 1; install
+        # graceful-stop handlers whenever the loop owns the main thread.
+        if current_thread() is not main_thread():
+            return
+        for signal_number in (signal.SIGTERM, signal.SIGINT):
+            self._previous[signal_number] = signal.signal(signal_number, self)
+
+    def restore(self) -> None:
+        """Put back the handlers that were active before :meth:`install`."""
+        for signal_number, previous in self._previous.items():
+            signal.signal(signal_number, previous)
+        self._previous.clear()
+
+
+def _cancel_running_query(connection: psycopg.Connection[Any]) -> None:
+    try:
+        connection.cancel_safe()
+    except Exception:
+        logger.exception("Could not cancel the running refresh statement")
 
 
 def scheduled_refresh_loop(
@@ -422,6 +505,24 @@ def scheduled_refresh_loop(
     """Run immediately, then every interval; retry failures after ``retry_hours``.
 
     Health semantics are documented in :mod:`real_estate_etl.health`.
+
+    Args:
+        database_url: Connection URL for the maintenance and status connections.
+        output_dir: Download directory for the source archives.
+        interval_days: Days between two successful refreshes (at least 1).
+        retry_hours: Hours to wait after a failed refresh (at least 1).
+        workers: Parallel download and model-training workers.
+        verbose: Per-archive and per-table logging in the importer.
+        health_file: Heartbeat file for the container probe; ``None`` disables it.
+        stop_event: Set to stop between stages; created when omitted (SIGTERM/SIGINT set it).
+        refresh: The refresh to run (``refresh_system``); injectable for tests.
+        active_release: Reads the active release's publication time; injectable for tests.
+        now: Wall clock; injectable for tests.
+        poll_seconds: Longest single sleep while waiting for the next run.
+        heartbeat_seconds: Health-file rewrite interval.
+
+    Raises:
+        ValueError: When ``interval_days`` or ``retry_hours`` is below 1.
     """
     if interval_days < 1:
         raise ValueError("interval_days must be at least 1")
@@ -430,26 +531,49 @@ def scheduled_refresh_loop(
     stop_event = stop_event or Event()
     active_release = active_release or _reader_for_active_release(database_url)
     health = WorkerHealth(health_file, stale_after=timedelta(days=interval_days) + STALE_SLACK, now=now)
+    stop_handler = _StopHandler(stop_event)
+    stop_handler.install()
+    try:
+        with HealthHeartbeat(health, heartbeat_seconds):
+            _run_scheduled_refreshes(
+                database_url, output_dir=output_dir, interval_days=interval_days, retry_hours=retry_hours,
+                workers=workers, verbose=verbose, health=health, stop_event=stop_event, stop_handler=stop_handler,
+                refresh=refresh, active_release=active_release, now=now, poll_seconds=poll_seconds,
+            )
+    finally:
+        stop_handler.restore()
 
-    def request_stop(signal_number: int, _frame: object) -> None:
-        logger.info("Received signal %s; stopping after the current refresh stage.", signal_number)
-        stop_event.set()
 
-    # Compose runs the worker under tini (init: true), so it is not PID 1; install
-    # graceful-stop handlers whenever the loop owns the main thread.
-    if current_thread() is main_thread():
-        signal.signal(signal.SIGTERM, request_stop)
-        signal.signal(signal.SIGINT, request_stop)
-
-    with HealthHeartbeat(health, heartbeat_seconds):
-        while not stop_event.is_set():
-            # After a host or Docker restart the database can still be recovering: wait for it
-            # instead of counting that as a failed refresh and sleeping for an hour unhealthy.
-            if not _wait_for_database(database_url, stop_event, poll_seconds=poll_seconds):
-                break
-            health.update(refreshing=True, published_at=_safe_active_release(active_release, health))
-            try:
-                with psycopg.connect(database_url) as connection:
+def _run_scheduled_refreshes(
+    database_url: str,
+    *,
+    output_dir: Path,
+    interval_days: int,
+    retry_hours: int,
+    workers: int,
+    verbose: bool,
+    health: WorkerHealth,
+    stop_event: Event,
+    stop_handler: _StopHandler,
+    refresh: Callable[..., SystemRefreshResult],
+    active_release: Callable[[], datetime | None],
+    now: Callable[[], datetime],
+    poll_seconds: float,
+) -> None:
+    first_run = True
+    while not stop_event.is_set():
+        # After a host or Docker restart the database can still be recovering: wait for it
+        # instead of counting that as a failed refresh and sleeping for an hour unhealthy.
+        if not _wait_for_database(database_url, stop_event, poll_seconds=poll_seconds):
+            break
+        if first_run:
+            _supersede_abandoned_releases(database_url)
+            first_run = False
+        health.update(refreshing=True, published_at=_safe_active_release(active_release, health))
+        try:
+            with connect(database_url) as connection:
+                stop_handler.watch(connection)
+                try:
                     refresh(
                         connection,
                         output_dir=output_dir,
@@ -460,36 +584,48 @@ def scheduled_refresh_loop(
                         database_url=database_url,
                         stop_requested=stop_event.is_set,
                     )
-                wait = timedelta(days=interval_days)
-                health.update(last_error=None)
-                logger.info(
-                    "Scheduled refresh succeeded; next run in %s days (at %s).",
-                    interval_days, (now() + wait).isoformat(timespec="minutes"),
-                )
-            except RefreshInterrupted as interrupted:
-                logger.info("Scheduled refresh stopped: %s", interrupted)
+                finally:
+                    stop_handler.watch(None)
+            wait = timedelta(days=interval_days)
+            health.update(last_error=None)
+            logger.info(
+                "Scheduled refresh succeeded; next run in %s days (at %s).",
+                interval_days, (now() + wait).isoformat(timespec="minutes"),
+            )
+        except RefreshInterrupted as interrupted:
+            logger.info("Scheduled refresh stopped: %s", interrupted)
+            break
+        except Exception as exc:
+            if stop_event.is_set():
+                logger.info("Scheduled refresh stopped during a running stage (%s: %s)", type(exc).__name__, exc)
                 break
-            except Exception as exc:
-                logger.exception("Scheduled refresh failed")
-                health.update(last_error=f"{type(exc).__name__}: {exc}"[:500])
-                wait = timedelta(hours=retry_hours)
-                logger.warning(
-                    "Retrying scheduled refresh in %s hour(s) (at %s).",
-                    retry_hours, (now() + wait).isoformat(timespec="minutes"),
-                )
-            finally:
-                health.update(refreshing=False, published_at=_safe_active_release(active_release, health))
-            wait_until(now() + wait, stop_event, now=now, poll_seconds=poll_seconds)
+            logger.exception("Scheduled refresh failed")
+            health.update(last_error=f"{type(exc).__name__}: {exc}"[:500])
+            wait = timedelta(hours=retry_hours)
+            logger.warning(
+                "Retrying scheduled refresh in %s hour(s) (at %s).",
+                retry_hours, (now() + wait).isoformat(timespec="minutes"),
+            )
+        finally:
+            health.update(refreshing=False, published_at=_safe_active_release(active_release, health))
+        wait_until(now() + wait, stop_event, now=now, poll_seconds=poll_seconds)
+
+
+def _supersede_abandoned_releases(database_url: str) -> None:
+    try:
+        supersede_stale_releases(database_url)
+    except Exception:
+        logger.exception("Could not check for abandoned releases; continuing with the scheduled refresh")
 
 
 def _wait_for_database(
-    database_url: str, stop_event: Event, *, poll_seconds: float, connect: Callable[..., Any] | None = None
+    database_url: str, stop_event: Event, *, poll_seconds: float, connect_to: Callable[..., Any] | None = None
 ) -> bool:
     """Block until the database accepts connections (or a stop is requested; then False)."""
     announced = False
     while not stop_event.is_set():
         try:
-            (connect or psycopg.connect)(database_url).close()
+            (connect_to or connect)(database_url).close()
             if announced:
                 logger.info("Database is accepting connections again.")
             return True
@@ -497,7 +633,7 @@ def _wait_for_database(
             if not announced:
                 logger.warning("Database not ready (%s); waiting.", str(error).splitlines()[0][:160])
                 announced = True
-            stop_event.wait(min(5.0, max(poll_seconds, 0.05)))
+            stop_event.wait(min(DATABASE_RETRY_SECONDS, max(poll_seconds, 0.05)))
     return False
 
 

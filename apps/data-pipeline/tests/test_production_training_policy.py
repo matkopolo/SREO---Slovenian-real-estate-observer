@@ -24,6 +24,8 @@ def test_invalid_policy_fails_closed(monkeypatch):
 
 def test_manual_maintenance_releases_lock_after_failure():
     connection = MagicMock()
+    connection.closed = False
+    connection.broken = False
     connection.execute.return_value.fetchone.return_value = (True,)
     with pytest.raises(ValueError, match="operation failed"), maintenance_lock(connection):
         raise ValueError("operation failed")
@@ -36,3 +38,15 @@ def test_manual_maintenance_refuses_concurrent_refresh():
     connection.execute.return_value.fetchone.return_value = (False,)
     with pytest.raises(RefreshAlreadyRunning), maintenance_lock(connection):
         pytest.fail("Concurrent maintenance must not execute")
+
+
+def test_lost_connection_is_not_touched_when_releasing_the_lock():
+    """A broken session already lost its advisory lock; unlocking it would only mask the error."""
+    connection = MagicMock()
+    connection.closed = False
+    connection.broken = True
+    connection.execute.return_value.fetchone.return_value = (True,)
+    with pytest.raises(ValueError, match="database went away"), maintenance_lock(connection):
+        raise ValueError("database went away")
+    assert not any("pg_advisory_unlock" in str(call.args[0]) for call in connection.execute.call_args_list)
+    connection.rollback.assert_not_called()

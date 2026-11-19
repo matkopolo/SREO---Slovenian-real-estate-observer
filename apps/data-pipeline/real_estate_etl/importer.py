@@ -9,10 +9,11 @@ import logging
 import re
 import time
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import psycopg
 from psycopg import sql
@@ -22,12 +23,17 @@ from .models import ArchiveIdentity, ImportStats
 
 logger = logging.getLogger(__name__)
 
+#: Free-text source columns that are never stored.
 IGNORED_SOURCE_COLUMNS = {
     "OPOMBE_O_PRAVNEM_POSLU",
     "OPOMBE_O_NEPREMICNINI",
     "OPOMBE_O_ODDANIH_PROSTORIH",
 }
-
+#: Mapped columns a member may legitimately lack: national BUY archives carry no
+#: ``RPE_OBCINE_SIFRA`` (locations come from the building parts and parcels). Every
+#: other missing mapped column means the source changed its layout and the import
+#: fails instead of loading NULLs.
+OPTIONAL_SOURCE_COLUMNS = {"RPE_OBCINE_SIFRA"}
 
 
 @dataclass(frozen=True)
@@ -139,14 +145,18 @@ def parse_archive_name(name: str) -> ArchiveIdentity:
     raise ValueError(f"Cannot determine dataset scope/type/year from archive name: {name}")
 
 
-def supersede_other_years(cur, table: str, ids: set[int], year: int) -> list[int]:
-    """Drop transactions that the archive for `year` now contains but that are stored
+def supersede_other_years(cur: psycopg.Cursor[Any], table: str, ids: set[int], year: int) -> list[int]:
+    """Drop transactions that the archive for ``year`` now contains but that are stored
     under another dataset year.
 
     GURS occasionally republishes an agreement in a different yearly archive. The
     transaction id is the primary key, so the newest archive being imported wins;
-    child rows (building parts, parcels, rented spaces, derived facts) cascade and are
-    reloaded from this archive.
+    the source child rows (building parts, parcels, rented spaces) cascade and are
+    reloaded from this archive. Published analytical facts do not reference the
+    source rows; the analytics refresh rebuilds them.
+
+    Returns:
+        The superseded transaction ids, sorted.
     """
     if not ids:
         return []
@@ -159,9 +169,26 @@ def supersede_other_years(cur, table: str, ids: set[int], year: int) -> list[int
 
 
 def copy_rows(
-    cur: psycopg.Cursor, table: str, mapping: dict[str, str], rows: Iterable[dict[str, str]], source_file_id: int,
+    cur: psycopg.Cursor[Any], table: str, mapping: dict[str, str], rows: Iterable[dict[str, str]], source_file_id: int,
     *, archive_name: str = "<unknown archive>", member: str = "<unknown member>",
 ) -> int:
+    """COPY ``rows`` into ``table``, converting each mapped source column.
+
+    Args:
+        cur: Cursor on the import transaction.
+        table: Destination table.
+        mapping: ``{source column: destination column}``; the COPY column list follows its order.
+        rows: CSV rows as dictionaries.
+        source_file_id: ``source_files.id`` of the archive.
+        archive_name: Archive name for conversion diagnostics.
+        member: Member name for conversion diagnostics.
+
+    Returns:
+        The number of rows copied.
+
+    Raises:
+        SourceConversionError: When a value does not match its destination type.
+    """
     preserve_source_rows = table in {"building_parts", "land_parcels", "rental_building_parts"}
     columns = [*mapping.values(), "source_file_id"]
     if preserve_source_rows:
@@ -188,7 +215,7 @@ def copy_rows(
     return count
 
 
-def _reader(archive: zipfile.ZipFile, member: str):
+def _reader(archive: zipfile.ZipFile, member: str) -> tuple[io.TextIOWrapper, csv.DictReader[str]]:
     binary = archive.open(member)
     text = io.TextIOWrapper(binary, encoding="utf-8-sig", newline="")
     return text, csv.DictReader(text)
@@ -217,7 +244,7 @@ def _historical_cadastral_units(
 
 
 def _import_codebook(
-    cur, archive: zipfile.ZipFile, member: str, source_file_id: int,
+    cur: psycopg.Cursor[Any], archive: zipfile.ZipFile, member: str, source_file_id: int,
 ) -> int:
     count = 0
     batch = []
@@ -240,7 +267,7 @@ def _import_codebook(
     return count
 
 
-def _write_codebook_batch(cur, values) -> None:
+def _write_codebook_batch(cur: psycopg.Cursor[Any], values: Sequence[tuple[Any, ...]]) -> None:
     cur.executemany(
         """INSERT INTO codebook_values(
                codebook_id,codebook_name,numeric_value,description,source_file_id
@@ -261,7 +288,7 @@ def _file_sha256(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def _already_imported(connection: psycopg.Connection, identity: ArchiveIdentity, digest: str) -> bool:
+def _already_imported(connection: psycopg.Connection[Any], identity: ArchiveIdentity, digest: str) -> bool:
     existing = connection.execute(
         """
         SELECT 1 FROM source_files
@@ -274,7 +301,7 @@ def _already_imported(connection: psycopg.Connection, identity: ArchiveIdentity,
     return existing is not None
 
 
-def _register_source_file(cur: psycopg.Cursor, path: Path, identity: ArchiveIdentity, digest: str) -> int:
+def _register_source_file(cur: psycopg.Cursor[Any], path: Path, identity: ArchiveIdentity, digest: str) -> int:
     cur.execute(
         """INSERT INTO source_files(
                file_name,municipality_code,dataset_year,dataset_type,dataset_scope,sha256,downloaded_at
@@ -287,10 +314,13 @@ def _register_source_file(cur: psycopg.Cursor, path: Path, identity: ArchiveIden
             identity.dataset_scope, digest, datetime.fromtimestamp(path.stat().st_mtime, UTC),
         ),
     )
-    return cur.fetchone()[0]
+    row = cur.fetchone()
+    if row is None:
+        raise RuntimeError(f"{path.name}: source_files registration returned no id")
+    return int(row[0])
 
 
-def _replace_snapshot(cur: psycopg.Cursor, identity: ArchiveIdentity) -> None:
+def _replace_snapshot(cur: psycopg.Cursor[Any], identity: ArchiveIdentity) -> None:
     """Delete the rows this archive replaces; child rows cascade."""
     if identity.dataset_type == "rent":
         cur.execute("DELETE FROM rental_transactions WHERE dataset_year=%s", (identity.year,))
@@ -304,7 +334,7 @@ def _replace_snapshot(cur: psycopg.Cursor, identity: ArchiveIdentity) -> None:
 
 
 def _import_codebook_member(
-    cur: psycopg.Cursor, archive: zipfile.ZipFile, member: str, source_file_id: int, verbose: bool,
+    cur: psycopg.Cursor[Any], archive: zipfile.ZipFile, member: str, source_file_id: int, verbose: bool,
 ) -> int:
     checksum = _member_checksum(archive, member)
     cur.execute(
@@ -331,7 +361,7 @@ def _transaction_ids(archive: zipfile.ZipFile, member: str) -> set[int]:
 
 
 def _import_member(
-    cur: psycopg.Cursor,
+    cur: psycopg.Cursor[Any],
     archive: zipfile.ZipFile,
     archive_name: str,
     member: str,
@@ -359,9 +389,16 @@ def _import_member(
             )
     text, rows = _reader(archive, member)
     try:
-        unknown = set(rows.fieldnames or ()) - set(spec.columns) - IGNORED_SOURCE_COLUMNS
+        present = set(rows.fieldnames or ())
+        unknown = present - set(spec.columns) - IGNORED_SOURCE_COLUMNS
         if unknown:
             raise ValueError(f"{archive_name}: unmapped columns in {member}: {sorted(unknown)}")
+        missing = set(spec.columns) - present - OPTIONAL_SOURCE_COLUMNS
+        if missing:
+            raise ValueError(
+                f"{archive_name}: expected columns missing from {member}: {sorted(missing)} "
+                "(the source layout changed; the mapping must be updated before this archive is imported)"
+            )
         return copy_rows(
             cur, spec.table, spec.columns, rows, source_file_id,
             archive_name=archive_name, member=member,
@@ -375,10 +412,23 @@ def _ordered_members(names: Iterable[str]) -> list[str]:
     return sorted(names, key=lambda name: 0 if "_POSLI_" in name else 1)
 
 
-def import_zip(connection: psycopg.Connection, path: Path, verbose: bool = False) -> ImportStats:
+def import_zip(connection: psycopg.Connection[Any], path: Path, verbose: bool = False) -> ImportStats:
     """Import one ETN archive atomically, replacing the snapshot it supersedes.
 
     An archive whose checksum is already registered for the same dataset is skipped.
+
+    Args:
+        connection: The maintenance connection; the import is one transaction on it.
+        path: The archive; its name decides scope, type and year.
+        verbose: Log per-member row counts and codebook decisions.
+
+    Returns:
+        Row counts and timings; ``unchanged`` when the checksum was already imported.
+
+    Raises:
+        ValueError: On an unknown archive or member name, or a member whose columns
+            differ from the mapping.
+        SourceConversionError: When a value does not match its destination type.
     """
     stats = ImportStats()
     identity = parse_archive_name(path.name)

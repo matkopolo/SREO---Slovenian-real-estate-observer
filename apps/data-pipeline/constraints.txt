@@ -1,0 +1,30 @@
+# Resolved versions of every dependency of the pipeline image (`pip freeze` of the dev
+# image: python:3.11-slim with `.[dev,ml]` and mypy). pyproject.toml stays the only
+# dependency list; this file only pins what it resolves to, so image builds and the
+# host-side checks are reproducible. Refresh it after changing pyproject.toml:
+#   docker run --rm -v "$PWD:/src" -w /src python:3.11-slim \
+#     sh -c "pip install -q -e '.[dev,ml]' mypy && pip freeze --exclude-editable"
+anyio==4.16.0
+certifi==2026.10.23
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+iniconfig==2.3.1
+joblib==1.6.0
+mypy==2.4.1
+mypy_extensions==1.2.0
+numpy==2.4.6
+packaging==26.3
+pathspec==1.1.1
+pluggy==1.7.0
+psycopg==3.2.9
+psycopg-binary==3.2.9
+Pygments==2.21.0
+pytest==9.2.0
+ruff==0.17.4
+scikit-learn==1.6.1
+scipy==1.17.1
+tenacity==9.2.1
+threadpoolctl==3.8.0
+typing_extensions==4.16.0

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 import psycopg
 
@@ -33,11 +34,12 @@ class SourceSyncReport:
         return {**dict.fromkeys(self.counts, SOURCE_OK), **self.failures}
 
     def merge(self, other: SourceSyncReport) -> SourceSyncReport:
+        """A new report with both reports' counts and failures (``other`` wins on a shared name)."""
         return SourceSyncReport({**self.counts, **other.counts}, {**self.failures, **other.failures})
 
 
 def run_isolated_sources(
-    connection: psycopg.Connection,
+    connection: psycopg.Connection[Any],
     steps: Mapping[str, Callable[[], int]],
     *,
     group: str,
