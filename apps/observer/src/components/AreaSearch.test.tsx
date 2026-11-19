@@ -38,9 +38,9 @@ const responses: Record<string, unknown> = {
 };
 
 beforeEach(() => {
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+  vi.stubGlobal("fetch", vi.fn((url: string) => {
     const q = new URL(url, "http://localhost").searchParams.get("q") ?? "";
-    return { ok: true, status: 200, json: async () => responses[q] ?? empty } as Response;
+    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(responses[q] ?? empty) } as Response);
   }));
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -54,7 +54,7 @@ function setup(extra: { onStreet?: (street: string, settlement?: string, municip
   return { onArea, onAddress, input, type };
 }
 
-it("is an ARIA combobox: arrows move the active option, Enter picks it, Escape closes", async () => {
+it("is an ARIA combobox: arrows move the active option, Enter picks it, Escape closes", () => {
   const { onArea, input, type } = setup();
   type("kranj");
   expect(input).toHaveAttribute("aria-expanded", "true");

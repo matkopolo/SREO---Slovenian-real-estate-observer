@@ -3,10 +3,11 @@ import { loadDataStatus } from "../api";
 import { dateCompact } from "../format";
 import { useLoad } from "../hooks/useLoad";
 import { LANG, setLanguage, t, tx, type Language } from "../i18n";
-import { ABOUT, OVERVIEW, overviewHref, pageOf, parseHash, translateLegacyHash, trendsHref, TRENDS, type Page } from "../url-state";
+import { ABOUT, followLegacyHash, OVERVIEW, overviewHref, pageOf, parseHash, trendsHref, TRENDS, type Page } from "../url-state";
 import { ExplorerView } from "../views/ExplorerView";
 import { DataStatusBanner } from "./DataStatusBanner";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { LoadFailed } from "./LoadState";
 
 const TimeView = lazy(() => import("../views/TimeView").then((module) => ({ default: module.TimeView })));
 const MarketView = lazy(() => import("../views/MarketView").then((module) => ({ default: module.MarketView })));
@@ -39,16 +40,13 @@ function LanguageSwitch() {
   </div>;
 }
 
-/** Old links (`#pregled?g=133`) are rewritten in place to the explorer's address. */
-function followLegacyHash() {
-  const legacy = translateLegacyHash(window.location.hash);
-  if (legacy) window.history.replaceState(null, "", legacy);
-}
+const loading = <p className="muted" role="status">{t("Nalagam …")}</p>;
 
 export function App() {
-  const [page, setPage] = useState<Page>(() => { followLegacyHash(); return pageOf(); });
-  const dataStatus = useLoad("data-status", (signal) => loadDataStatus(signal)).data;
-  const cutoff = dataStatus?.activeRelease?.analyticsSaleThrough?.slice(0, 10);
+  // main.tsx rewrites an old link before the first render; a link typed later is rewritten on the change.
+  const [page, setPage] = useState<Page>(() => pageOf());
+  const status = useLoad("data-status", (signal) => loadDataStatus(signal));
+  const cutoff = status.data?.activeRelease?.analyticsSaleThrough?.slice(0, 10);
   // "Trg po območjih" returns to the area last looked at (not to Slovenija) after Trendi or O podatkih: the explorer's
   // address is remembered when the reader leaves it (oldURL includes the explorer's own pushState navigations).
   const [lastArea, setLastArea] = useState(() => pageOf() === "explorer" && window.location.hash ? window.location.hash : "#");
@@ -63,6 +61,25 @@ export function App() {
     window.addEventListener("popstate", change);
     return () => { window.removeEventListener("hashchange", change); window.removeEventListener("popstate", change); };
   }, []);
+
+  // Every page's figures hang on the data's cutoff: until it is known nothing is asked for (no second round of
+  // requests once it arrives), and when it cannot be loaded the page says so once, with a retry, instead of waiting forever.
+  const content = status.error ? <LoadFailed retry={status.retry}>{t("Stanja podatkov trenutno ni bilo mogoče naložiti (povezava ali strežnik).")}</LoadFailed> // i18n-ignore (code, not text)
+    : !status.data ? loading
+    : !cutoff ? <p className="muted" role="status">{t("Podatki še niso objavljeni. Analitika GURS ETN se pripravlja.")}</p>
+    : <ErrorBoundary name={`page ${page}`} resetKey={page}><Suspense fallback={loading}>
+      {page === "explorer" && <ExplorerView cutoff={cutoff}/>}
+      {page === TRENDS && <div className="view">
+        <div className="part-tabs" role="group" aria-label={t("Del strani")}>
+          <button type="button" aria-pressed={trendPart === "time"} onClick={() => setTrendPart("time")}>{t("Cene skozi čas")}</button>
+          <button type="button" aria-pressed={trendPart === "distribution"} onClick={() => setTrendPart("distribution")}>{t("Porazdelitev in skrajni posli")}</button>
+        </div>
+        {/* The part's own boundary: the switch stays while a part's chunk loads. */}
+        <Suspense fallback={loading}>{trendPart === "time" ? <TimeView cutoff={cutoff}/> : <MarketView cutoff={cutoff}/>}</Suspense>
+      </div>}
+      {page === OVERVIEW && <OverviewView cutoff={cutoff}/>}
+      {page === ABOUT && <QualityView cutoff={cutoff}/>}
+    </Suspense></ErrorBoundary>;
 
   return <div className={page === "explorer" ? "observer full" : "observer"}>
     <a className="skip" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById("main")?.focus(); }}>{t("Na vsebino")}</a>
@@ -83,22 +100,9 @@ export function App() {
       </nav>
       <LanguageSwitch/>
     </header>
-    <DataStatusBanner status={dataStatus}/>
+    <DataStatusBanner status={status.data}/>
 
-    <main id="main" tabIndex={-1}>
-      <ErrorBoundary name={`page ${page}`} resetKey={page}><Suspense fallback={<p className="muted" role="status">{t("Nalagam …")}</p>}>
-        {page === "explorer" && <ExplorerView cutoff={cutoff}/>}
-        {page === TRENDS && <div className="view">
-          <div className="part-tabs" role="tablist" aria-label={t("Del strani")}>
-            <button type="button" role="tab" aria-selected={trendPart === "time"} onClick={() => setTrendPart("time")}>{t("Cene skozi čas")}</button>
-            <button type="button" role="tab" aria-selected={trendPart === "distribution"} onClick={() => setTrendPart("distribution")}>{t("Porazdelitev in skrajni posli")}</button>
-          </div>
-          {trendPart === "time" ? <TimeView cutoff={cutoff}/> : <MarketView cutoff={cutoff}/>}
-        </div>}
-        {page === OVERVIEW && <OverviewView cutoff={cutoff}/>}
-        {page === ABOUT && <QualityView cutoff={cutoff}/>}
-      </Suspense></ErrorBoundary>
-    </main>
+    <main id="main" tabIndex={-1}>{content}</main>
 
     {/* The attribution (GURS ETN, CC BY 4.0) and the data date stay visible on every page; the reading pages list every source. */}
     <footer className={page === "explorer" ? "colophon compact" : "colophon"}>

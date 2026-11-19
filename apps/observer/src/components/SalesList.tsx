@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { loadRecent, type RecentTransaction, type RentSegment, type SalesSort, type Segment, type Window } from "../api";
+import { loadRecent, type DateWindow, type RecentTransaction, type RentSegment, type SalesSort, type Segment } from "../api";
 import { addressLabel } from "./AreaSearch";
 import { LoadFailed } from "./LoadState";
 import { useLoad } from "../hooks/useLoad";
@@ -38,7 +38,7 @@ const PREVIEW = 5;
  * the newest five open by default, then all of them with sorting and paging. A thin period falls back to five years.
  */
 export function SalesList({ scopeId, scopeName, segment, window, fallback, kind = "sale", noun, linkArea, street, onClearStreet }: {
-  scopeId?: number; scopeName: string; segment: Segment | RentSegment; window?: Window; fallback?: Window; kind?: "sale" | "rent";
+  scopeId?: number; scopeName: string; segment: Segment | RentSegment; window?: DateWindow; fallback?: DateWindow; kind?: "sale" | "rent";
   /** Genitive plural of the type (`Noun.genitive`): "stanovanj" / "apartments". */
   noun: string;
   /** Area kept in sale links, so the breadcrumb and Back return here. */
@@ -55,13 +55,13 @@ export function SalesList({ scopeId, scopeName, segment, window, fallback, kind 
   const [shownKey, setShownKey] = useState(listKey);
   if (shownKey !== listKey) { setShownKey(listKey); setOffset(0); setAll(false); }
   const page = { limit: all ? PAGE : PREVIEW, offset: all ? offset : 0, sort, order: descending ? "desc" as const : "asc" as const, street };
-  const load = useLoad(window ? `sales-list|${listKey}|${JSON.stringify(page)}` : null, async (signal) => {
+  const load = useLoad(window ? { window, fallback, street, page, listKey, scopeId, segment, kind } : null, (input) => `sales-list|${input.listKey}|${JSON.stringify(input.page)}`, async (input, signal) => {
     // A street is short: its list covers five years (the period would leave a handful of sales).
-    const span = street && fallback ? fallback : window!;
-    const response = await loadRecent(scopeId, segment, kind, span, signal, page);
+    const span = input.street && input.fallback ? input.fallback : input.window;
+    const response = await loadRecent(input.scopeId, input.segment, input.kind, span, signal, input.page);
     // Fewer than five in the period: show the last five years instead, and say so ("show all" keeps those five years).
-    if (response.total < PREVIEW && fallback && !street) {
-      const widened = await loadRecent(scopeId, segment, kind, fallback, signal, page);
+    if (response.total < PREVIEW && input.fallback && !input.street) {
+      const widened = await loadRecent(input.scopeId, input.segment, input.kind, input.fallback, signal, input.page);
       if (widened.total > response.total) return { items: widened.items, total: widened.total, wide: true };
     }
     return { items: response.items, total: response.total, wide: false };

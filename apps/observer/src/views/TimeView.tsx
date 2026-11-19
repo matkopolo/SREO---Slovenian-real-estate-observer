@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   api, loadGeography, loadIndices, loadInflation, loadInflationFactor, loadRegions, loadRentalTimeSeries, loadTimeSeries,
   type Geography, type MarketIndex, type RentalTimePoint, type TimePoint,
@@ -9,7 +9,7 @@ import { useLoad } from "../hooks/useLoad";
 import { decimal1, integer } from "../format";
 import { Name, t, tx } from "../i18n";
 import { NOUNS, ROOMS_GENITIVE } from "../nouns";
-import { hashQuery } from "../url-state";
+import { trendsArea } from "../url-state";
 
 type IndexGroup = MarketIndex["propertyGroup"];
 /** Property groups for which /api/v1/indices publishes a national series (land: sales only; rooms: rentals only). */
@@ -41,21 +41,27 @@ const MEASURES: Array<{ id: Measure; label: string; unit: string; digits: number
 const year = (period: string) => Number(period.slice(0, 4));
 
 interface RegionSeries { region: Geography; sales: TimePoint[]; rentals: RentalTimePoint[] }
+interface AreaSeries { area: Geography; sales: TimePoint[]; rentals: RentalTimePoint[] }
 
 const value = (measure: Measure, sale?: TimePoint, rent?: RentalTimePoint) => measure === "volume" ? sale?.transactionCount ?? null
   : measure === "sale" ? (sale?.isPublishable ? sale.medianPricePerSqm ?? null : null)
     : (rent?.isPublishable ? rent.medianMonthlyRentPerSqm ?? null : null);
 
 /** Prices over time: twelve regional small multiples on one scale with Slovenia as the reference line. */
-export function TimeView({ cutoff }: { cutoff?: string }) {
-  // The year the data reaches (the clock's year until the data status is known): it is not complete yet.
-  const THIS_YEAR = cutoff ? Number(cutoff.slice(0, 4)) : new Date().getFullYear();
+export function TimeView({ cutoff }: { cutoff: string }) {
+  // The year the data reaches: it is not complete yet.
+  const THIS_YEAR = Number(cutoff.slice(0, 4));
   const [indexGroup, setIndexGroup] = useState<IndexGroup>("apartment");
   const [measure, setMeasure] = useState<Measure>("sale");
-  // The area the user came from (#trendi?g=…): its own line against Slovenia above the regions.
-  const areaId = Number(hashQuery().get("g")) || undefined;
-  const own = useLoad(areaId ? `trend-area-${areaId}` : null, async (signal) => {
-    const [area, sales, rentals] = await Promise.all([loadGeography(areaId!, signal), loadTimeSeries(areaId, signal), loadRentalTimeSeries(areaId, signal)]);
+  // The area the user came from (#trendi?g=…): its own line against Slovenia above the regions; an edited address is followed.
+  const [areaId, setAreaId] = useState(() => trendsArea());
+  useEffect(() => {
+    const follow = () => setAreaId(trendsArea());
+    window.addEventListener("hashchange", follow);
+    return () => window.removeEventListener("hashchange", follow);
+  }, []);
+  const own = useLoad(areaId ?? null, (id) => `trend-area-${id}`, async (id, signal): Promise<AreaSeries> => {
+    const [area, sales, rentals] = await Promise.all([loadGeography(id, signal), loadTimeSeries(id, signal), loadRentalTimeSeries(id, signal)]);
     return { area, sales: sales.items, rentals: rentals.items };
   }).data;
   const regional = useLoad("trend-regions", async (signal): Promise<RegionSeries[]> => {
@@ -70,16 +76,16 @@ export function TimeView({ cutoff }: { cutoff?: string }) {
   const nationalRent = useLoad("trend-national-rent", async (signal) => (await loadRentalTimeSeries(undefined, signal)).items).data ?? [];
   const inflation = useLoad("trend-inflation", async (signal) => (await loadInflation(signal)).items).data ?? [];
   // Index series per property group, loaded when first chosen (switching back is answered from the API cache).
-  const indexLoad = useLoad(`indices-${indexGroup}`, (signal) => loadGroupIndices(indexGroup, signal));
+  const indexLoad = useLoad(indexGroup, (group) => `indices-${group}`, (group, signal) => loadGroupIndices(group, signal));
   // Real prices: SURS CPI factor from January of each year to January of the current year.
   const nationalYears = [...new Set(national.map((point) => year(point.period)))].filter((item) => item < THIS_YEAR).join(","); // i18n-ignore (comparison, not JSX text)
-  const factors = useLoad(nationalYears ? `factors|${nationalYears}|${THIS_YEAR}` : null, async (signal) => {
-    const results = await Promise.allSettled(nationalYears.split(",").map(Number).map((item) => loadInflationFactor(item, `${THIS_YEAR}-01-01`, signal).then((result) => [item, result.factor] as const)));
+  const factors = useLoad(nationalYears ? { years: nationalYears, to: THIS_YEAR } : null, (input) => `factors|${input.years}|${input.to}`, async (input, signal) => {
+    const results = await Promise.allSettled(input.years.split(",").map(Number).map((item) => loadInflationFactor(item, `${input.to}-01-01`, signal).then((result) => [item, result.factor] as const)));
     return new Map(results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []));
   }).data ?? new Map<number, number>();
 
-  const years = useMemo(() => [...new Set(series.flatMap((item) => item.sales.map((point) => year(point.period))))].sort(), [series]);
-  const definition = MEASURES.find((item) => item.id === measure)!;
+  const years = useMemo(() => [...new Set(series.flatMap((item) => item.sales.map((point) => year(point.period))))].sort((a, b) => a - b), [series]);
+  const definition = MEASURES.find((item) => item.id === measure) ?? MEASURES[0];
   // Complete years only in the charts; the table marks the current year.
   const complete = years.filter((item) => item < THIS_YEAR); // i18n-ignore (comparison, not JSX text)
   const reference = complete.map((item) => ({ x: item, y: value(measure, national.find((point) => year(point.period) === item),
@@ -89,13 +95,13 @@ export function TimeView({ cutoff }: { cutoff?: string }) {
   const shared = Math.max(0, ...panels.flatMap((panel) => panel.points.map((point) => point.y ?? 0)),
     ...(measure === "volume" ? [] : reference.map((point) => point.y ?? 0)));
 
-  const nominal = national.filter((point) => point.isPublishable && point.medianPricePerSqm != null && !point.incomplete)
-    .map((point) => ({ x: year(point.period), y: point.medianPricePerSqm! }));
-  const real = nominal.map((point) => ({ x: point.x, y: factors.has(point.x) ? point.y * factors.get(point.x)! : null }));
+  const nominal = national.flatMap((point) => point.isPublishable && point.medianPricePerSqm != null && !point.incomplete
+    ? [{ x: year(point.period), y: point.medianPricePerSqm }] : []);
+  const real = nominal.map((point) => { const factor = factors.get(point.x); return { x: point.x, y: factor != null ? point.y * factor : null }; });
   const toX = (item: MarketIndex) => Number(item.period.slice(0, 4)) + (Number(item.period.slice(5, 7)) - 1) / 12;
   const indices = indexLoad.data?.sale ?? [];
   const rentIndices = indexLoad.data?.rent ?? [];
-  const groupDefinition = INDEX_GROUPS.find((item) => item.id === indexGroup)!;
+  const groupDefinition = INDEX_GROUPS.find((item) => item.id === indexGroup) ?? INDEX_GROUPS[0];
   const pick = (items: MarketIndex[], method: MarketIndex["method"]) => items.filter((item) => item.method === method && item.isPublishable)
     .map((item) => ({ x: toX(item), y: item.indexValue }));
   const indexSeries = [

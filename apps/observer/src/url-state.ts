@@ -20,14 +20,16 @@ export function pageOf(url: string = window.location.href): Page {
 }
 
 /** The query part of a hash: "#trendi?g=133" → g=133. */
-export const hashQuery = (hash: string = window.location.hash) => new URLSearchParams(hash.replace(/^#[^?]*\??/, ""));
+export const hashQuery = (hash: string = window.location.hash): URLSearchParams => new URLSearchParams(hash.replace(/^#[^?]*\??/, ""));
 
 /** An opened sale or rental. */
 export type Selected = { kind: "sale" | "rent"; id: number };
+/** A building by cadastral municipality and number, as the registers name it. */
+export type BuildingRef = { ko: number; st: string };
 
 /** Everything the explorer shows. */
 export interface ExplorerState {
-  g?: number; building?: { ko: number; st: string }; selected?: Selected; group: PropertyGroup; landScope: LandScope; landChosen: boolean;
+  g?: number; building?: BuildingRef; selected?: Selected; group: PropertyGroup; landScope: LandScope; landChosen: boolean;
   size?: string; street?: string; years: Period; layer: MetricId; value: boolean;
 }
 export const DEFAULT_STATE: ExplorerState = { group: "apartment", landScope: "strict", landChosen: false, years: 1, layer: "salePrice", value: false };
@@ -36,38 +38,49 @@ const GROUP_SLUGS: Record<PropertyGroup, string> = { apartment: "", house: "hise
 const LAND_SLUGS: Record<LandScope, string> = { strict: "zazidljiva", agricultural: "kmetijska", forest: "gozdna", all: "vsa" }; // i18n-ignore: URL slugs (links keep working)
 const bySlug = <K extends string>(slugs: Record<K, string>, slug: string | null) => (Object.entries(slugs) as Array<[K, string]>).find(([, value]) => value && value === slug)?.[0];
 
+/** A positive integer id from the address, else undefined (`posel=-5`, `g=abc` and `g=0` are not ids). */
+const positiveId = (raw: string | null): number | undefined => { const id = Number(raw); return Number.isInteger(id) && id > 0 ? id : undefined; };
+
+/** The building of a map point or address part, "1734-1710": the cadastral municipality, then the building number (which may itself contain "-"). */
+export function parseBuildingKey(key: string | null | undefined): BuildingRef | undefined {
+  const separator = key?.indexOf("-") ?? -1;
+  if (!key || separator < 1) return undefined;
+  const ko = Number(key.slice(0, separator));
+  const st = key.slice(separator + 1);
+  return Number.isInteger(ko) && ko > 0 && st ? { ko, st } : undefined;
+}
+export const buildingKey = (building: BuildingRef): string => `${building.ko}-${building.st}`;
+
 /**
  * `#?g=133&b=1734-1710&posel=985416&vrsta=hise&obdobje=3&sloj=rentPrice`; a chosen year range is `od=2019&do=2021`.
  * Unknown parts are ignored and dropped on the next write (`3d=1` of links to the former 3D view among them).
  */
 export function parseHash(hash: string = window.location.hash): ExplorerState {
   const query = hashQuery(hash);
-  const g = Number(query.get("g"));
-  const [ko, st] = (query.get("b") ?? "").split("-");
-  const sale = Number(query.get("posel")); // i18n-ignore: URL parameter names (links keep working)
-  const rent = Number(query.get("najem")); // i18n-ignore: URL parameter names (links keep working)
+  const sale = positiveId(query.get("posel")); // i18n-ignore: URL parameter names (links keep working)
+  const rent = positiveId(query.get("najem")); // i18n-ignore: URL parameter names (links keep working)
   const years = Number(query.get("obdobje")); // i18n-ignore: URL parameter names (links keep working)
-  const layer = query.get("sloj") as MetricId | null; // i18n-ignore: URL parameter names (links keep working)
+  const layer = query.get("sloj"); // i18n-ignore: URL parameter names (links keep working)
   return {
-    g: Number.isInteger(g) && g > 0 ? g : undefined,
-    building: Number(ko) > 0 && st ? { ko: Number(ko), st } : undefined,
-    selected: Number.isInteger(sale) && sale !== 0 ? { kind: "sale", id: sale } : Number.isInteger(rent) && rent !== 0 ? { kind: "rent", id: rent } : undefined,
+    g: positiveId(query.get("g")),
+    building: parseBuildingKey(query.get("b")),
+    selected: sale ? { kind: "sale", id: sale } : rent ? { kind: "rent", id: rent } : undefined,
     group: bySlug(GROUP_SLUGS, query.get("vrsta")) ?? "apartment", // i18n-ignore: URL parameter names (links keep working)
     landChosen: query.has("raba"), // i18n-ignore: URL parameter names (links keep working)
     landScope: bySlug(LAND_SLUGS, query.get("raba")) ?? "strict", // i18n-ignore: URL parameter names (links keep working)
     size: query.get("m2") ?? undefined,
     street: query.get("ulica") ?? undefined, // i18n-ignore: URL parameter names (links keep working)
     years: parsePeriod(query.get("od"), query.get("do")) ?? (years === 3 || years === 5 ? years : 1), // i18n-ignore: URL parameter names (links keep working)
-    layer: layer && layer in METRICS ? layer : "salePrice",
+    layer: layer != null && Object.hasOwn(METRICS, layer) ? layer as MetricId : "salePrice",
     value: query.get("vrednost") === "1", // i18n-ignore: URL slugs (links keep working)
   };
 }
 
 /** The canonical hash of a state: defaults and invalid parts are left out ("#" for Slovenija). */
-export function toHash(state: ExplorerState) {
+export function toHash(state: ExplorerState): string {
   const query = new URLSearchParams();
   if (state.g) query.set("g", String(state.g));
-  if (state.building) query.set("b", `${state.building.ko}-${state.building.st}`);
+  if (state.building) query.set("b", buildingKey(state.building));
   if (state.selected) query.set(state.selected.kind === "sale" ? "posel" : "najem", String(state.selected.id)); // i18n-ignore: URL parameter names (links keep working)
   if (GROUP_SLUGS[state.group]) query.set("vrsta", GROUP_SLUGS[state.group]); // i18n-ignore: URL parameter names (links keep working)
   if (state.group === "land" && state.landChosen) query.set("raba", LAND_SLUGS[state.landScope]); // i18n-ignore: URL parameter names (links keep working)
@@ -82,22 +95,24 @@ export function toHash(state: ExplorerState) {
 }
 
 /** A link to the explorer with this page's state changed by `patch` (the type, period and layer are kept). */
-export const hrefWith = (patch: Partial<ExplorerState>, hash: string = window.location.hash) => toHash({ ...parseHash(hash), ...patch });
+export const hrefWith = (patch: Partial<ExplorerState>, hash: string = window.location.hash): string => toHash({ ...parseHash(hash), ...patch });
 /** A link to one area (Slovenija without an id). */
-export const areaHref = (id?: number) => toHash({ ...DEFAULT_STATE, g: id });
+export const areaHref = (id?: number): string => toHash({ ...DEFAULT_STATE, g: id });
 /** A link to one sale or rental from a page outside the explorer. */
-export const transactionHref = (selected: Selected) => toHash({ ...DEFAULT_STATE, selected });
+export const transactionHref = (selected: Selected): string => toHash({ ...DEFAULT_STATE, selected });
 /** The trends page, for the area of the explorer when there is one. */
-export const trendsHref = (g?: number) => g ? `#${TRENDS}?g=${g}` : `#${TRENDS}`;
+export const trendsHref = (g?: number): string => g ? `#${TRENDS}?g=${g}` : `#${TRENDS}`;
 /** What the market overview reads from its address: the area and flats or houses (other types fall back to flats). */
 export function overviewState(hash: string = window.location.hash): { g?: number; group: "apartment" | "house" } {
   const state = parseHash(hash);
   return { g: state.g, group: state.group === "house" ? "house" : "apartment" };
 }
+/** The area of the trends page ("#trendi?g=133"). */
+export const trendsArea = (hash: string = window.location.hash): number | undefined => positiveId(hashQuery(hash).get("g"));
 /** Rewrites the address without a history entry (choices on a page that Back should leave as a whole). */
-export const replaceHash = (hash: string) => window.history.replaceState(null, "", hash);
+export const replaceHash = (hash: string): void => window.history.replaceState(null, "", hash);
 /** The market overview of an area (Slovenija without `g`), flats unless `houses`. */
-export function overviewHref(g?: number, houses = false) {
+export function overviewHref(g?: number, houses = false): string {
   const query = new URLSearchParams();
   if (g) query.set("g", String(g));
   if (houses) query.set("vrsta", "hise"); // i18n-ignore (URL slug)
@@ -106,9 +121,9 @@ export function overviewHref(g?: number, houses = false) {
 }
 
 /** A non-numeric area id in the link (`g=abc`) is reported instead of silently showing Slovenija. */
-export function hasBadArea(hash: string = window.location.hash) {
+export function hasBadArea(hash: string = window.location.hash): boolean {
   const raw = hashQuery(hash).get("g");
-  return raw != null && !(Number(raw) > 0);
+  return raw != null && positiveId(raw) === undefined;
 }
 
 /**
@@ -121,11 +136,18 @@ export function translateLegacyHash(hash: string): string | undefined {
   if (!["pregled", "primerjava", "zemljevid", "posli", "dokazi"].includes(name)) return name === "kakovost" ? `#${ABOUT}` : name === "cas" || name === "trg" ? `#${TRENDS}${rest ? `?${rest}` : ""}` : undefined; // i18n-ignore (old URL ids)
   const old = new URLSearchParams(rest);
   const next = new URLSearchParams();
-  if (old.get("g")) next.set("g", old.get("g")!);
-  if (old.get("ko") && old.get("st")) next.set("b", `${old.get("ko")}-${old.get("st")}`);
-  for (const key of ["posel", "najem"]) if (old.get(key)) next.set(key, old.get(key)!); // i18n-ignore (URL keys)
+  const g = old.get("g"), ko = old.get("ko"), st = old.get("st"), m = old.get("m");
+  if (g) next.set("g", g);
+  if (ko && st) next.set("b", `${ko}-${st}`);
+  for (const key of ["posel", "najem"]) { const id = old.get(key); if (id) next.set(key, id); } // i18n-ignore (URL keys)
   if (old.get("vrsta") === "hise") next.set("vrsta", "hise"); // i18n-ignore (URL keys)
-  if (old.get("m") && old.get("m") !== "salePrice") next.set("sloj", old.get("m")!);
+  if (m && m !== "salePrice") next.set("sloj", m);
   const text = next.toString();
   return text ? `#?${text}` : "#";
+}
+
+/** Old links (`#pregled?g=133`) are rewritten in place to the explorer's address, before the app reads it. */
+export function followLegacyHash(): void {
+  const legacy = translateLegacyHash(window.location.hash);
+  if (legacy) replaceHash(legacy);
 }

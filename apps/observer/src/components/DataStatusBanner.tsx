@@ -19,7 +19,7 @@ const date = (value?: string) => value ? dateText(value) : "—";
 /**
  * What the reader should know about the data update; undefined when everything is current.
  * `missing` (no release at all) is the only prominent state: while a release is published the page works, so the
- * note is a single muted line ("Podatki do … · …") with the detail in `detail` (shown as a tooltip).
+ * note is a single muted line ("Podatki do … · …") that opens to its explanation in `detail`.
  */
 export interface Notice { key: string; tone: "note" | "missing"; text: string; detail?: string }
 
@@ -48,11 +48,16 @@ export function dataNotice(status: DataStatus | undefined, now = new Date()): No
   return undefined;
 }
 
-/** A quiet line about the data update (never an outage look while a release is published); nothing when all is current. */
+/**
+ * A quiet line about the data update (never an outage look while a release is published); nothing when all is current.
+ * The explanation opens under the line (a disclosure, so it is reachable by touch and keyboard, not only on hover).
+ */
 export function DataStatusBanner({ status }: { status?: DataStatus }) {
   const notice = dataNotice(status);
   // The live region stays mounted so screen readers announce the notice when it appears.
   return <div className="data-banner-region" role="status">
-    {notice && <p className={`data-banner ${notice.tone}`} title={notice.detail}>{notice.text}</p>}
+    {notice && (notice.detail
+      ? <details className={`data-banner ${notice.tone}`}><summary>{notice.text}</summary><p>{notice.detail}</p></details>
+      : <p className={`data-banner ${notice.tone}`}>{notice.text}</p>)}
   </div>;
 }

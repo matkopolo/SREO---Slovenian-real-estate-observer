@@ -9,7 +9,7 @@ export interface Route {
   path: string | RegExp;
   /** Required query values ("geographyId": "256"), or a predicate on the whole query. */
   query?: Record<string, string> | ((query: URLSearchParams) => boolean);
-  body: unknown | ((url: URL) => unknown);
+  body: unknown;
   status?: number;
 }
 
@@ -23,13 +23,13 @@ export function stubApi(routes: Route[]) {
     if (typeof route.query === "function") return route.query(url.searchParams);
     return Object.entries(route.query).every(([key, value]) => url.searchParams.get(key) === value);
   };
-  vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+  vi.stubGlobal("fetch", vi.fn((input: string): Promise<Response> => {
     calls.push(input);
     const url = new URL(input, "http://localhost");
     const route = table.find((item) => matches(item, url));
-    if (!route) { unmatched.push(input); return { ok: false, status: 404, json: async () => ({}) } as Response; }
-    const body = typeof route.body === "function" ? (route.body as (url: URL) => unknown)(url) : route.body;
-    return { ok: (route.status ?? 200) < 400, status: route.status ?? 200, json: async () => body } as Response;
+    if (!route) { unmatched.push(input); return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) } as Response); }
+    const body: unknown = typeof route.body === "function" ? (route.body as (url: URL) => unknown)(url) : route.body;
+    return Promise.resolve({ ok: (route.status ?? 200) < 400, status: route.status ?? 200, json: () => Promise.resolve(body) } as Response);
   }));
   return {
     calls, unmatched,

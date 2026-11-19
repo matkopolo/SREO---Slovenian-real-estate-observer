@@ -9,11 +9,14 @@ export const GLOSSARY = {
   donos: t("12 × mediana mesečne najemnine na m², deljeno z mediano cene na m². Pred stroški, davki, vzdrževanjem in praznimi meseci."),
 } as const;
 
-/** A statistical term with its plain-language explanation in a native popover (keyboard and Esc handled by the browser). */
+/**
+ * A statistical term with its plain-language explanation in a native popover (keyboard and Esc handled by the browser).
+ * The explanation is opened by a click, so it is a note the button controls, not a hover tooltip.
+ */
 export function Term({ children, text }: { children: ReactNode; text: string }) {
   const id = useId();
   return <>
-    <button type="button" className="term" popoverTarget={id}>{children}</button>
-    <span id={id} popover="auto" role="tooltip" className="term-popover">{text}</span>
+    <button type="button" className="term" popoverTarget={id} aria-controls={id}>{children}</button>
+    <span id={id} popover="auto" role="note" className="term-popover">{text}</span>
   </>;
 }

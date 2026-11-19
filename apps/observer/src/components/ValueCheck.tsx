@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   loadBuilding, loadInflationBetween, loadPriceIndex, loadRentOverview, loadSaleAreas, loadSaleEvidence, loadSaleOverview, loadSpread, marketWindows, shiftWindow,
   type BuildingStatistics, type Distribution, type Geography, type MarketIndex, type PropertyGroup, type RentalOverview, type RentGroup, type StatisticsOverview,
@@ -7,36 +7,34 @@ import { addressLabel, AreaSearch } from "./AreaSearch";
 import { benchmarkPlace, chooseBenchmark } from "./TransactionDetails";
 import { BuildingFacts } from "./BuildingFacts";
 import { RangeBar } from "./charts";
-import { dateCompact as date, decimal1, euro, integer, median, percent, sqm, upTo1 } from "../format";
+import { LoadFailed } from "./LoadState";
+import { dateCompact as date, decimal1, euro, integer, median, percentSigned as signed, sqm, todayIso } from "../format";
 import { useLoad } from "../hooks/useLoad";
 import { LANG, proper, t, tx } from "../i18n";
 import type { MarketComparable } from "../api";
-import { transactionHref } from "../url-state";
+import { allRejected, failed as failedResult, settled } from "../promise";
+import { buildingKey, transactionHref, type BuildingRef } from "../url-state";
 import { ALL_SOLD, OF_TYPE, SIMILAR, TYPE_LABEL, TYPE_NAME } from "../nouns";
 import { saleScenario, TAX_RULES } from "../resale";
 import { count, forms, NOUN_FORMS } from "../plural";
 import { whileLayoutSettles } from "../scroll";
 import { chooseReference, DISTRICT_MIN_SAMPLE, type Typical, type ValueBand as Band } from "../valuation";
+import { buildValueRows, join, km, roundThousand as round, span as spanIn, type Purchase } from "./value-rows";
 import "./value-check.css";
 
-const signed = (fraction: number) => percent(fraction, { signed: true });
-const round = (value: number) => Math.round(value / 1000) * 1000;
+export type { Purchase } from "./value-rows";
+
+const ENGLISH = LANG === "en";
 /** "266.000–314.000 €" / "€266,000–€314,000" */
-const range = (low: number, high: number) => LANG === "en" ? `${euro(low)}–${euro(high)}` : `${integer(low)}–${euro(high)}`;
-const span = (low: number, high: number) => range(round(low), round(high));
+const range = (low: number, high: number) => ENGLISH ? `${euro(low)}–${euro(high)}` : `${integer(low)}–${euro(high)}`;
+const span = (low: number, high: number) => spanIn(low, high, ENGLISH);
 /** A deduction: "−1.234 €", but never "−0 €". */
 const minus = (value: number) => Math.round(Math.abs(value)) === 0 ? euro(0) : `−${euro(Math.abs(value))}`;
-const km = (meters: number) => upTo1(meters / 1000);
 /** The condition question (land has none; a garage is valued by one typical price, without a band). Ticked, the value moves to the lower quarter of the evidence. */
 const CONDITION: Partial<Record<PropertyGroup, string>> = {
   apartment: t("Stanovanje je v slabšem stanju od povprečnega (ni obnovljeno)"),
   house: t("Hiša je v slabšem stanju od povprečne (ni obnovljena)"),
   commercial: t("Poslovni prostor je v slabšem stanju od povprečnega (ni obnovljen)"),
-};
-/** The similar-sales row: "Podobna stanovanja danes" (nominative plural, so each type is its own key). */
-const SIMILAR_TODAY: Record<PropertyGroup, string> = {
-  apartment: t("Podobna stanovanja danes"), house: t("Podobne hiše danes"), commercial: t("Podobni poslovni prostori danes"),
-  garage: t("Podobne garaže danes"), land: t("Podobna zemljišča danes"),
 };
 /** Accusative: "Stavba ima 11 enot". */
 const UNITS = forms(["enoto", "enoti", "enote", "enot"], ["unit", "units"]); // i18n-ignore
@@ -48,15 +46,25 @@ const inDistrict = (name: string): ReactNode => tx("v četrtni skupnosti {name}"
 /** An example address for the search field. */
 const EXAMPLE_ADDRESS = "Dunajska cesta 221, Ljubljana"; // i18n-ignore
 const SUPPORTED: PropertyGroup[] = ["apartment", "house", "commercial", "garage", "land"];
+/** How many comparables the list shows before "Prikaži vse", and how many sales the purchase picker lists. */
+const COMPARABLES_SHOWN = 8;
+const PICK_ROWS = 40;
+/** A sale far below the building's usual €/m² (a family sale, a share) is marked: below this share of the median. */
+const LOW_PRICE_SHARE = 0.4;
+/** A garage's typical price pools this many months when the year is thin. */
+const GARAGE_POOL_MONTHS = 24;
+/** The purchase-time median covers this many months around the purchase (either side). */
+const THEN_HALF_MONTHS = 6;
+/** The headline's scale leaves room above the highest marker. */
+const SCALE_HEADROOM = 1.08;
+/** Agents in Slovenia may charge at most 4 % + DDV (22 %). */
+const AGENT_FEE_RATE = 0.04 * 1.22;
 
-export interface Purchase { price: number; date: string; area: number; group: PropertyGroup; transactionId?: number }
 /** The similar sales found for the estimate, the circle they were searched in (centre and radius); `trusted` when the estimate rests on them. */
 export interface ShownComparables { comparables: MarketComparable[]; center: [number, number]; radiusMeters: number; trusted: boolean }
 /** A city district (četrtna skupnost) the property lies in. */
 interface District { id: number; name: string }
 type Evidence = Awaited<ReturnType<typeof loadSaleEvidence>>;
-const settled = <T,>(result: PromiseSettledResult<T> | undefined) => result?.status === "fulfilled" ? result.value : undefined; // i18n-ignore (generics, not text)
-const quiet = <T,>(promise: Promise<T>) => promise.catch(() => undefined); // i18n-ignore (generics, not text)
 
 /**
  * "Koliko je vredna moja nepremičnina?": find the address, pick (or type) your purchase, then today's value from the
@@ -64,7 +72,7 @@ const quiet = <T,>(promise: Promise<T>) => promise.catch(() => undefined); // i1
  * The page has one close control: "← Nazaj na pregled trga" in the explorer bar.
  */
 export function ValueCheck({ building: buildingRef, transactionId, municipalityId, cutoff, municipalities, onBuilding, onTransaction, onComparables, onHighlight, onComparable }: {
-  building?: { ko: number; st: string }; transactionId?: number; municipalityId?: number; cutoff?: string; municipalities: Geography[];
+  building?: BuildingRef; transactionId?: number; municipalityId?: number; cutoff?: string; municipalities: Geography[];
   /** The similar sales found for the estimate and their search radius, for the map; null when there are none. */
   onComparables?: (shown: ShownComparables | null) => void;
   /** The comparable the owner points at in the list, for the map to highlight. */
@@ -73,13 +81,13 @@ export function ValueCheck({ building: buildingRef, transactionId, municipalityI
   onComparable?: (item: MarketComparable) => void;
   onBuilding: (ko: number, st: string) => void; onTransaction: (id: number | undefined) => void;
 }) {
-  const buildingKey = buildingRef ? `${buildingRef.ko}-${buildingRef.st}` : null;
-  const building = useLoad(buildingKey && `building-${buildingKey}`, (signal) => loadBuilding(buildingRef!.ko, buildingRef!.st, signal)).data;
+  const key = buildingRef ? buildingKey(buildingRef) : null;
+  const building = useLoad(buildingRef ?? null, (ref) => `building-${buildingKey(ref)}`, (ref, signal) => loadBuilding(ref.ko, ref.st, signal)).data;
   // Opened without an area (or with a typed purchase): the building's municipality and district from one of its sales.
   const first = building?.saleTransactions[0]?.transactionId;
-  const areas = useLoad(first ? `sale-areas-${first}` : null, (signal) => loadSaleAreas(first!, signal)).data;
+  const areas = useLoad(first ?? null, (id) => `sale-areas-${id}`, (id, signal) => loadSaleAreas(id, signal)).data;
   const [manual, setManual] = useState<Purchase | null>(null);
-  const evidenceLoad = useLoad(transactionId ? `sale-evidence-${transactionId}` : null, (signal) => loadSaleEvidence(transactionId!, signal));
+  const evidenceLoad = useLoad(transactionId ?? null, (id) => `sale-evidence-${id}`, (id, signal) => loadSaleEvidence(id, signal));
   const evidence = evidenceLoad.data;
   const stepOne = useRef<HTMLLIElement>(null);
   const stepTwo = useRef<HTMLHeadingElement>(null);
@@ -88,10 +96,10 @@ export function ValueCheck({ building: buildingRef, transactionId, municipalityI
 
   // Step 1: the address field takes focus (and scrolls up, clear of the phone keyboard) when the check opens or the address is changed.
   useEffect(() => {
-    if (buildingKey) return;
+    if (key) return;
     const step = stepOne.current;
     return bringUp(step, step?.querySelector("input"));
-  }, [buildingKey]);
+  }, [key]);
   // Step 2: once the address is found (or the purchase is changed), focus moves to picking the purchase.
   const choosing = !!building && !transactionId && !manual;
   useEffect(() => {
@@ -101,13 +109,14 @@ export function ValueCheck({ building: buildingRef, transactionId, municipalityI
 
   const detail = manual ? undefined : settled(evidence?.detail);
   // A sale of a type the check cannot value is never valued as a flat.
-  const unsupported = !!detail && !(SUPPORTED as string[]).includes(detail.propertyGroup);
-  const purchase: Purchase | null = manual ?? (detail && !unsupported && detail.price != null && detail.area != null && detail.contractDate
-    ? { price: detail.price, date: detail.contractDate, area: detail.area, group: detail.propertyGroup as PropertyGroup, transactionId }
+  const group = detail ? SUPPORTED.find((item) => item === detail.propertyGroup) : undefined;
+  const unsupported = !!detail && !group;
+  const purchase: Purchase | null = manual ?? (detail && group && detail.price != null && detail.area != null && detail.contractDate
+    ? { price: detail.price, date: detail.contractDate, area: detail.area, group, transactionId }
     : null);
   const resolvedDistrict = areas?.find((item) => item.level === "city_district");
-  const purchaseMunicipality = detail?.geographies?.find((item) => item.level === "municipality")?.id ?? areas?.find((item) => item.level === "municipality")?.id ?? municipalityId;
-  const saleDistrict = detail?.geographies?.find((item) => item.level === "city_district") ?? resolvedDistrict;
+  const purchaseMunicipality = detail?.geographies.find((item) => item.level === "municipality")?.id ?? areas?.find((item) => item.level === "municipality")?.id ?? municipalityId;
+  const saleDistrict = detail?.geographies.find((item) => item.level === "city_district") ?? resolvedDistrict;
   const district = saleDistrict ? { id: saleDistrict.id, name: saleDistrict.name } : undefined;
   const beforeBuilt = purchase && building?.constructionYear && Number(purchase.date.slice(0, 4)) < building.constructionYear;
 
@@ -125,12 +134,13 @@ export function ValueCheck({ building: buildingRef, transactionId, municipalityI
       </li>
       {building && <li className={purchase ? "done" : "current"}>
         <h2 className="value-step" ref={stepTwo} tabIndex={-1}>{t("2. Vaš nakup")}</h2>
-        {purchase ? <><p>{tx("{type}, {area}\u00a0m², kupljeno {date} za {price} ({perSqm}\u00a0€/m²)", { type: TYPE_NAME[purchase.group], area: decimal1(purchase.area),
+        {purchase ? <><p>{tx("{type}, {area} m², kupljeno {date} za {price} ({perSqm} €/m²)", { type: TYPE_NAME[purchase.group], area: decimal1(purchase.area),
           date: whenNode(purchase.date), price: moneyNode(purchase.price), perSqm: integer(purchase.price / purchase.area) })}{" "}
           <button type="button" className="link" onClick={() => { setManual(null); onTransaction(undefined); }}>{t("spremeni")}</button></p>
           {beforeBuilt && <p className="error" role="alert">{t("Datum nakupa je pred letom izgradnje stavbe ({year}).", { year: building.constructionYear })} {t("Preverite datum.")}</p>}</>
           : <>
             {unsupported && <p className="error" role="alert">{t("Te vrste nepremičnine ne znamo oceniti.")} {t("Izberite vrsto spodaj in vnesite svoj nakup.")}</p>}
+            {evidenceLoad.error != null && <LoadFailed retry={evidenceLoad.retry}>{t("Prodaje ni bilo mogoče naložiti.")}</LoadFailed>}
             <PickPurchase building={building} onPick={(id) => { setFocusRequest((value) => value + 1); onTransaction(id); }}
               onManual={(value) => { setFocusRequest((value) => value + 1); setManual(value); }}/>
           </>}
@@ -146,16 +156,13 @@ export function ValueCheck({ building: buildingRef, transactionId, municipalityI
 /** A price and a date as they are marked up in sentences. */
 function moneyNode(amount: number) { return <span className="money">{euro(amount)}</span>; }
 function whenNode(value: string) { return <span className="when">{date(value)}</span>; }
-/** The parts of one row's note, separated; empty parts are left out. Plain text and fragments only, so the note stays one text run. */
-function join(parts: ReactNode[], separator: string): ReactNode {
-  const kept = parts.filter((part) => part != null && part !== false && part !== "");
-  return kept.length ? kept.map((part, index) => <Fragment key={index}>{index ? separator : ""}{part}</Fragment>) : null;
-}
 
 /** The building's address (a register name), else its cadastral number. */
 const buildingName = (building: BuildingStatistics) => proper(addressLabel(building))
   || t("Stavba {ko}-{st}", { ko: building.cadastralMunicipalityCode, st: building.buildingNumber });
 
+/** A step is scrolled back to the top while it sits lower than this (pixels) and still has focus. */
+const STEP_TOP_PX = 160;
 /**
  * Focus a step and scroll it to the top of the screen. The page grows while the map and the area load, so the scroll is
  * repeated briefly, but only while the step still has focus and is not near the top (the owner has not moved on).
@@ -167,7 +174,7 @@ function bringUp(step: HTMLElement | null | undefined, target: HTMLElement | nul
   const scroll = () => {
     if (document.activeElement !== target) return true;
     const y = step.getBoundingClientRect().y;
-    if (y < 0 || y > 160) step.scrollIntoView?.({ block: "start" });
+    if (y < 0 || y > STEP_TOP_PX) step.scrollIntoView({ block: "start" });
     return false;
   };
   return whileLayoutSettles(document.body, scroll);
@@ -198,7 +205,7 @@ function PickPurchase({ building, onPick, onManual }: { building: BuildingStatis
   const rows = sales.reduce<SaleRow[]>((list, item) => {
     const same = item.amount != null && list.find((row) => row.contractDate === item.contractDate && row.amount === item.amount && row.area === item.area);
     if (same) same.copies += 1;
-    else list.push({ ...item, copies: 1, lowPrice: typical != null && item.amountPerSqm != null && item.amountPerSqm < typical * 0.4 });
+    else list.push({ ...item, copies: 1, lowPrice: typical != null && item.amountPerSqm != null && item.amountPerSqm < typical * LOW_PRICE_SHARE });
     return list;
   }, []);
   // An implausible type for this building: a house among many units, or a flat in a building of one unit.
@@ -214,11 +221,11 @@ function PickPurchase({ building, onPick, onManual }: { building: BuildingStatis
         : t("Stavba ima samo eno enoto – je vaša nepremičnina morda hiša?")}{" "}
       <button type="button" className="link" onClick={() => setGroup(likely)}>{likely === "apartment" ? t("Izberi stanovanje") : t("Izberi hišo")}</button></p>}
     {rows.length ? <>
-      <p className="muted">{t("Izberite svoj nakup med evidentiranimi prodajami {type} v stavbi.", { type: OF_TYPE[group] })}</p>
+      <p className="muted">{t("Izberite svoj nakup med evidentiranimi prodajami {type} v stavbi.", { type: OF_TYPE_LABEL(group) })}</p>
       <div className="table-scroll value-pick-scroll"><table className="compact-table value-pick">
         <caption className="sr-only">{t("Prodaje v stavbi")}</caption>
         <thead><tr><th scope="col">{t("Datum")}</th><th scope="col">{t("Površina")}</th><th scope="col">{t("Cena")}</th><th scope="col"><span className="sr-only">{t("Izbira")}</span></th></tr></thead>
-        <tbody>{rows.slice(0, 40).map((item) => <tr key={item.transactionId} className={item.representative === false || item.lowPrice ? "atypical" : undefined}>
+        <tbody>{rows.slice(0, PICK_ROWS).map((item) => <tr key={item.transactionId} className={item.representative === false || item.lowPrice ? "atypical" : undefined}>
           <th scope="row" className="pick-date"><span className="when">{item.contractDate ? date(item.contractDate) : "—"}</span></th>
           <td className="pick-area"><span className="when">{item.area == null ? "—" : sqm(item.area)}</span></td>
           <td className="pick-price"><span className="money">{item.amount == null ? "—" : euro(item.amount)}</span>
@@ -240,14 +247,18 @@ function PickPurchase({ building, onPick, onManual }: { building: BuildingStatis
     </details>
   </div>;
 }
+/** "prodaje stanovanj": the type in the genitive plural, from nouns.ts. */
+const OF_TYPE_LABEL = (group: PropertyGroup) => OF_TYPE[group];
 
 function indexAt(items: MarketIndex[], month: string) {
   const published = items.filter((item) => item.isPublishable).sort((a, b) => a.period.localeCompare(b.period));
   return published.filter((item) => month >= item.period.slice(0, 7)).at(-1) ?? published[0];
 }
 
-interface AreaData { sale?: StatisticsOverview; pooled?: boolean; spread?: Distribution; districtSpread?: Distribution; districtTypical?: Typical }
-interface RentData { rent?: RentalOverview; rentSpread?: Distribution; districtRent?: RentalOverview; districtRentSpread?: Distribution }
+/** The municipality's (and district's) figures; `failed` when a part could not be loaded (never silently "no data"). */
+interface AreaData { sale?: StatisticsOverview; pooled?: boolean; spread?: Distribution; districtSpread?: Distribution; districtTypical?: Typical; failed: boolean }
+interface RentData { rent?: RentalOverview; rentSpread?: Distribution; districtRent?: RentalOverview; districtRentSpread?: Distribution; failed: boolean }
+const NO_AREA: AreaData = { failed: false };
 
 function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId, municipalityName, district, cutoff, focusRequest, onComparables, onHighlight, onComparable }: {
   purchase: Purchase; evidence?: Evidence; evidenceLoading?: boolean; municipalityId?: number; municipalityName?: string; district?: District; cutoff?: string;
@@ -257,49 +268,61 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
 }) {
   const [poorCondition, setPoorCondition] = useState(false);
   const garage = purchase.group === "garage";
-  const index = useLoad(`price-index-${purchase.group}`, async (signal) => (await loadPriceIndex(purchase.group, signal)).items);
-  const areaKey = cutoff && municipalityId ? `${cutoff}|${municipalityId}|${purchase.group}|${district?.id ?? ""}` : null;
+  const index = useLoad(purchase.group, (group) => `price-index-${group}`, async (group, signal) => (await loadPriceIndex(group, signal)).items);
+  const areaInput = cutoff && municipalityId ? { cutoff, municipalityId, group: purchase.group, district, key: `${cutoff}|${municipalityId}|${purchase.group}|${district?.id ?? ""}` } : null;
   // The headline waits for the district and the municipality together, so it never jumps from one to the other.
-  const sales = useLoad(areaKey && `value-sales|${areaKey}`, async (signal): Promise<AreaData> => {
-    const window = marketWindows(cutoff!).sales.current;
-    const segment = { propertyGroup: purchase.group };
+  const sales = useLoad(areaInput, (input) => `value-sales|${input.key}`, async (input, signal): Promise<AreaData> => {
+    const window = marketWindows(input.cutoff).sales.current;
+    const segment = { propertyGroup: input.group };
     const typical = async (id: number): Promise<Typical> => {
       const sale = await loadSaleOverview(id, segment, window, signal);
       if (!garage || sale.isPublishable) return { sale, pooled: false };
       // Garages sell rarely: like the area page, pool three years before giving up on a typical price.
-      const pooled = await loadSaleOverview(id, segment, { from: shiftWindow(window, 24).from, to: window.to }, signal);
+      const pooled = await loadSaleOverview(id, segment, { from: shiftWindow(window, GARAGE_POOL_MONTHS).from, to: window.to }, signal);
       return pooled.isPublishable ? { sale: pooled, pooled: true } : { sale, pooled: false };
     };
-    const [municipal, districtTypical, spread, districtSpread] = await Promise.all([
-      quiet(typical(municipalityId!)),
-      garage && district ? quiet(typical(district.id)) : undefined,
-      garage ? undefined : quiet(loadSpread(municipalityId!, window, segment, "sale", signal)),
-      !garage && district ? quiet(loadSpread(district.id, window, segment, "sale", signal)) : undefined,
+    const none = Promise.resolve(undefined);
+    const [municipal, districtTypical, spread, districtSpread] = await Promise.allSettled([
+      typical(input.municipalityId),
+      garage && input.district ? typical(input.district.id) : none,
+      garage ? none : loadSpread(input.municipalityId, window, segment, "sale", signal),
+      !garage && input.district ? loadSpread(input.district.id, window, segment, "sale", signal) : none,
     ]);
-    return { sale: municipal?.sale, pooled: municipal?.pooled, districtTypical, spread, districtSpread };
+    const parts = [municipal, districtTypical, spread, districtSpread];
+    const outage = allRejected(parts);
+    if (outage) throw outage.reason;
+    const own = settled(municipal);
+    return { sale: own?.sale, pooled: own?.pooled, districtTypical: settled(districtTypical), spread: settled(spread), districtSpread: settled(districtSpread), failed: parts.some(failedResult) };
   });
   // Rents: the last mostly reported full year (rental contracts are recorded up to a year late).
-  const rents = useLoad(areaKey && purchase.group !== "land" ? `value-rents|${areaKey}` : null, async (signal): Promise<RentData> => {
-    const window = marketWindows(cutoff!).rents.current;
-    const segment = { propertyGroup: purchase.group };
-    const rentSegment = { propertyGroup: purchase.group as RentGroup };
-    const [rent, rentSpread, districtRent, districtRentSpread] = await Promise.all([
-      quiet(loadRentOverview(municipalityId!, rentSegment, window, signal)),
-      quiet(loadSpread(municipalityId!, window, segment, "rent", signal)),
-      district ? quiet(loadRentOverview(district.id, rentSegment, window, signal)) : undefined,
-      district ? quiet(loadSpread(district.id, window, segment, "rent", signal)) : undefined,
+  const rents = useLoad(areaInput && purchase.group !== "land" ? areaInput : null, (input) => `value-rents|${input.key}`, async (input, signal): Promise<RentData> => {
+    const window = marketWindows(input.cutoff).rents.current;
+    const segment = { propertyGroup: input.group };
+    const rentSegment = { propertyGroup: input.group as RentGroup };
+    const none = Promise.resolve(undefined);
+    const parts = await Promise.allSettled([
+      loadRentOverview(input.municipalityId, rentSegment, window, signal),
+      loadSpread(input.municipalityId, window, segment, "rent", signal),
+      input.district ? loadRentOverview(input.district.id, rentSegment, window, signal) : none,
+      input.district ? loadSpread(input.district.id, window, segment, "rent", signal) : none,
     ]);
-    return { rent, rentSpread, districtRent, districtRentSpread };
+    const outage = allRejected(parts);
+    if (outage) throw outage.reason;
+    const [rent, rentSpread, districtRent, districtRentSpread] = parts;
+    return { rent: settled(rent), rentSpread: settled(rentSpread), districtRent: settled(districtRent), districtRentSpread: settled(districtRentSpread), failed: parts.some(failedResult) };
   });
   // The municipality's median in the 12 months around the purchase: the local market change since then.
-  const thenLoad = useLoad(municipalityId ? `value-then|${municipalityId}|${purchase.group}|${purchase.date}` : null, (signal) => {
-    const day = { from: purchase.date, to: purchase.date };
-    return loadSaleOverview(municipalityId!, { propertyGroup: purchase.group }, { from: shiftWindow(day, 6).from, to: shiftWindow(day, -6).to }, signal);
-  });
+  const thenLoad = useLoad(municipalityId ? { municipalityId, group: purchase.group, date: purchase.date } : null, (input) => `value-then|${input.municipalityId}|${input.group}|${input.date}`,
+    (input, signal) => {
+      const day = { from: input.date, to: input.date };
+      return loadSaleOverview(input.municipalityId, { propertyGroup: input.group }, { from: shiftWindow(day, THEN_HALF_MONTHS).from, to: shiftWindow(day, -THEN_HALF_MONTHS).to }, signal);
+    });
   const then = thenLoad.data;
-  const inflation = useLoad(cutoff ? `inflation|${purchase.date.slice(0, 7)}|${cutoff.slice(0, 7)}` : null,
-    async (signal) => (await loadInflationBetween(`${purchase.date.slice(0, 7)}-01`, `${cutoff!.slice(0, 7)}-01`, signal)).factor).data;
-  const area = sales.data ?? {};
+  // SURS publishes a month's CPI in the following month, so the newest index the API can serve is the month before the data's cutoff month.
+  const inflation = useLoad(cutoff ? { from: `${purchase.date.slice(0, 7)}-01`, to: shiftWindow({ from: cutoff, to: `${cutoff.slice(0, 7)}-01` }, 1).to } : null,
+    (input) => `inflation|${input.from}|${input.to}`, async (input, signal) => (await loadInflationBetween(input.from, input.to, signal)).factor).data;
+  const area = sales.data ?? NO_AREA;
+  const areaFailed = area.failed || sales.error != null || thenLoad.error != null;
 
   const context = settled(evidence?.context);
   const history = settled(evidence?.history);
@@ -318,7 +341,7 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
   // The similar sales go to the map and the list below, worded by whether the headline rests on them (a set the estimate
   // does not use still shows what sold nearby). One object per settled estimate, reported once per change; while a new
   // estimate loads the map keeps the previous one. An estimate from before this field simply shows no list.
-  const shownComparables = market?.comparables?.length ? market.comparables : null;
+  const shownComparables = market?.comparables.length ? market.comparables : null;
   const trusted = reference?.kind === "market";
   const subjectLon = market?.subjectLongitude, subjectLat = market?.subjectLatitude, radiusMeters = market?.maximumRadiusMeters;
   useEffect(() => {
@@ -334,13 +357,12 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
   const allComparables = expandedFor === market;
   const condition = CONDITION[purchase.group];
   const where = useDistrict && district ? inDistrict(district.name) : municipalWhere;
-  const year = purchase.date.slice(0, 4);
   // The row today's estimate rests on: it carries the "osnova ocene" chip and, for a worse condition, where the value moved to.
   const basisKey = reference?.kind === "market" ? "market" : reference ? "local" : anchored != null ? "updated" : null;
-  const worseNote = worse ? t("slabše stanje: ocena na spodnji četrtini ({low}) namesto na mediani ({mid})", { low: euro(round(reference!.low)), mid: euro(round(reference!.mid)) }) : null;
+  const worseNote = worse && reference ? t("slabše stanje: ocena na spodnji četrtini ({low}) namesto na mediani ({mid})", { low: euro(round(reference.low)), mid: euro(round(reference.mid)) }) : null;
 
   // How the purchase compared with the market at the time: the same benchmark and words as the sale page (narrowest publishable area, never a sample of one).
-  const benchmark = context ? chooseBenchmark(context.benchmarks ?? []) : undefined;
+  const benchmark = context ? chooseBenchmark(context.benchmarks) : undefined;
   const benchmarkPercent = benchmark ? Math.round(Math.abs(benchmark.differencePercent)) : 0;
   const paidThen: ReactNode = !benchmark ? null : (() => {
     const vars = { similar: (benchmark.comparisonProfile === "unadjusted" ? ALL_SOLD : SIMILAR)[purchase.group], where: benchmarkPlace(benchmark) };
@@ -355,48 +377,15 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
     : null;
 
   // What the estimate rests on, as labelled rows: the purchase, the purchase updated with the municipality, similar sales today, the local band.
-  // Each row is a value with one muted note; a row without a value ("—") says why. Notes are fragments, parts separated by " · ".
-  type Row = { key: string; title: ReactNode; value: string | null; note: ReactNode };
-  const sold = (sales: number) => count(sales, NOUN_FORMS.prodaja);
-  const unit = garage ? t("€ na enoto") : "€/m²";
-  const rows: Row[] = [{ key: "purchase", title: t("Vaš nakup ({year})", { year }), value: euro(purchase.price),
-    note: join([!garage && `${integer(purchase.price / purchase.area)}\u00a0€/m²`, paidThen], ", ") }];
-  const updatedTitle = tx("Posodobljen s cenami {where}", { where: municipalWhere });
-  if (anchored != null) rows.push({ key: "updated", title: updatedTitle, value: euro(round(anchored)),
-    note: join([t("mediana {then} → {now} {unit} ({change})", { then: integer(localThen!), now: integer(localNow!), unit, change: signed(localFactor! - 1) }),
-      national != null && t("v vsej Sloveniji {national}", { national: signed(national - 1) })], ", ") });
-  else if (garageMismatch) rows.push({ key: "updated", title: updatedTitle, value: null, note: t("Vaše nakupne cene ne posodabljamo z gibanjem cen garaž: mediana na enoto meša nova parkirna mesta in starejše garaže.") });
-  // While the municipality's medians are still loading the row must not claim there were too few sales.
-  else if (reference) rows.push({ key: "updated", title: updatedTitle, value: null,
-    note: thenLoad.loading || sales.loading ? t("Nalagam …") : t("premalo prodaj te vrste v občini ob nakupu ali danes") });
-  if (market) {
-    const confidence = market.confidence === "moderate" ? t("zanesljivost srednja") : market.confidence === "low" ? t("zanesljivost nizka") : t("zanesljivost zelo nizka");
-    // Comparables from a wide area are said to be so; untrusted ones (very low reliability, under 10 sales) are shown but never lead.
-    const caveat = !trustedMarket ? t("premalo ali preveč različne, zato ocena ne temelji na njih")
-      : wideRadius == null ? null
-      : reference?.kind === "local" && districtBand ? tx("iz širše okolice, zato ocena temelji na cenah {where}", { where })
-      : t("iz širše okolice, zato lahko odstopajo od cen v vaši soseski");
-    // Only sales concluded after the owner's purchase, when there were enough of them: the row says since when.
-    const since = market.comparablesAfter ? t("prodaje po {date}", { date: date(market.comparablesAfter) }) : null;
-    rows.push({ key: "market", title: SIMILAR_TODAY[purchase.group], value: span(market.lowerTotal, market.upperTotal),
-      note: join([`${t("{sales} do {distance} km", { sales: sold(market.comparableCount), distance: km(market.maximumRadiusMeters) })}, ${confidence}`, since, caveat, basisKey === "market" && worseNote], " · ") });
-  } else if (!purchase.transactionId) rows.push({ key: "market", title: SIMILAR_TODAY[purchase.group], value: null, note: t("za ročno vnesen nakup podobnih prodaj ne iščemo") });
-  else if (context) rows.push({ key: "market", title: SIMILAR_TODAY[purchase.group], value: null, note: t("v okolici ni dovolj podobnih prodaj {type} za primerjavo", { type: OF_TYPE[purchase.group] }) });
-  if (local) rows.push(garage
-    ? { key: "local", title: tx("Tipična garaža {where}", { where }), value: euro(Math.round(local.mid / 500) * 500),
-      note: garageSource?.pooled ? t("mediana, {sales} v zadnjih 3 letih", { sales: sold(localSales) }) : t("mediana, {sales} v zadnjih 12 mesecih", { sales: sold(localSales) }) }
-    : { key: "local", title: tx("Cene {where} za {area} m²", { where, area: upTo1(purchase.area) }), value: span(local.low, local.high),
-      note: join([t("srednja polovica, {sales} v zadnjih 12 mesecih", { sales: sold(localSales) }), basisKey === "local" && worseNote], " · ") });
-  // The national index never makes the headline: with nothing local it is only a rough note (never for garages, whose index mixes kinds of parking).
-  const hasEvidence = !!(market || local || anchored != null);
-  if (!hasEvidence && indexed != null && !garage) rows.push({ key: "index", title: t("Vaš nakup × indeks cen za vso Slovenijo (samo za orientacijo)"), value: euro(round(indexed)),
-    note: t("Za oceno vaše nepremičnine ni dovolj lokalnih podatkov; indeks za vso Slovenijo je le groba orientacija.") });
+  const rows = buildValueRows({ purchase, paidThen, anchored, localThen, localNow, localFactor, national, reference, garageMismatch,
+    waiting: thenLoad.loading || sales.loading, failed: areaFailed, market, trustedMarket: trustedMarket != null, wideRadius, districtBand: districtBand != null,
+    where, municipalWhere, hasContext: !!context, local, localSales, garageSource, basisKey, worseNote, indexed }, ENGLISH);
   const shownAnswer = rows.length > 1;
 
   // One scale for everything: today's band (the headline) with the purchase and the updated purchase as markers (rounded like the rows).
   // The other evidence's median is already a row above; a third identical dot only cluttered the bar.
   const markers = [{ value: purchase.price, name: t("vaš nakup") }, ...(anchored != null ? [{ value: round(anchored), name: t("posodobljen nakup") }] : [])];
-  const scaleMax = Math.max(...markers.map((marker) => marker.value), answer?.high ?? 0) * 1.08;
+  const scaleMax = Math.max(...markers.map((marker) => marker.value), answer?.high ?? 0) * SCALE_HEADROOM;
   const events = (history?.assets ?? []).flatMap((asset) => asset.events).filter((event) => event.transactionId !== purchase.transactionId)
     .sort((a, b) => (a.contractDate ?? "").localeCompare(b.contractDate ?? ""));
 
@@ -409,19 +398,20 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
     handled.current = focusRequest;
     heading.focus();
   }, [focusRequest, shownAnswer]);
-  if (!shownAnswer) return <p className="muted" role="status">{items && (sales.data || sales.error || !areaKey) ? t("Za to nepremičnino ni dovolj podatkov za oceno.") : t("Računam ocene …")}</p>;
+  if (!shownAnswer) return <p className="muted" role="status">{items && (sales.data || sales.error || !areaInput) ? t("Za to nepremičnino ni dovolj podatkov za oceno.") : t("Računam ocene …")}</p>;
   // The one value of the page: rent yield and the sale scenario use it too.
   const value = answer?.mid ?? null;
-  const change = value != null ? value / purchase.price - 1 : null;
+  const change = value != null && purchase.price > 0 ? value / purchase.price - 1 : null;
   const real = change != null && inflation ? (1 + change) / inflation - 1 : null;
   return <>
     <section className="module open value-answer" aria-labelledby="value-answer">
       <h2 id="value-answer" tabIndex={-1} ref={answerHeading}>
-        {value == null ? t("Za zanesljivo oceno ni dovolj lokalnih podatkov") : <>{tx("Ocena danes: okoli {value}", { value: <span className="money">{euro(round(value))}</span> })}
-          {round(answer!.high) > round(answer!.low) && <span className="value-likely"> {tx("(verjetno {range})", { range: <span className="money">{span(answer!.low, answer!.high)}</span> })}</span>}</>}</h2>
+        {value == null || !answer ? t("Za zanesljivo oceno ni dovolj lokalnih podatkov") : <>{tx("Ocena danes: okoli {value}", { value: <span className="money">{euro(round(value))}</span> })}
+          {round(answer.high) > round(answer.low) && <span className="value-likely"> {tx("(verjetno {range})", { range: <span className="money">{span(answer.low, answer.high)}</span> })}</span>}</>}</h2>
       {change != null && <p className="area-lede">{real != null
         ? tx("{change} od nakupa ({price}, {date}), po upoštevanju inflacije {real}.", { change: signed(change), price: moneyNode(purchase.price), date: whenNode(purchase.date), real: signed(real) })
         : tx("{change} od nakupa ({price}, {date}).", { change: signed(change), price: moneyNode(purchase.price), date: whenNode(purchase.date) })}</p>}
+      {areaFailed && <LoadFailed retry={() => { sales.retry(); thenLoad.retry(); }}>{t("Cen v občini trenutno ni bilo mogoče naložiti; ocena je brez njih.")}</LoadFailed>}
       <dl className="value-rows">{rows.map((row) => <div key={row.key} className={row.key === basisKey ? "value-row is-basis" : "value-row"}>
         <dt>{row.title}{row.key === basisKey && <span className="chip">{t("osnova ocene")}</span>}</dt>
         <dd className="value-amount money">{row.value ?? "—"}</dd>
@@ -433,7 +423,7 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
         <p className="muted">{trusted ? t("Pike na zemljevidu so prodaje, na katerih temelji ocena; obroč je vaša nepremičnina. Povezava odpre prodajo.")
           : t("Ocena ne temelji na njih (premalo ali preveč različne), a kažejo, kaj se je v okolici prodajalo; obroč je vaša nepremičnina. Povezava odpre prodajo.")}
           {" "}<a href="#explorer-map" className="value-map-jump" onClick={(event) => { event.preventDefault(); document.querySelector(".explorer-map-wrap")?.scrollIntoView({ block: "start" }); }}>{t("Zemljevid je na dnu strani ↓")}</a></p>
-        <ol className="rows value-comparable-rows">{(allComparables ? shownComparables : shownComparables.slice(0, 8)).map((item) => <li key={item.transactionId}
+        <ol className="rows value-comparable-rows">{(allComparables ? shownComparables : shownComparables.slice(0, COMPARABLES_SHOWN)).map((item) => <li key={item.transactionId}
           onMouseEnter={() => onHighlight?.(item.transactionId)} onMouseLeave={() => onHighlight?.(null)}>
           <a href={transactionHref({ kind: "sale", id: item.transactionId })} onFocus={() => onHighlight?.(item.transactionId)} onBlur={() => onHighlight?.(null)}
             onClick={(event) => { if (!onComparable || event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return; event.preventDefault(); onComparable(item); }}>
@@ -441,7 +431,7 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
           <span>{[date(item.contractDate), `${integer(item.amountPerSqm)}\u00a0€/m²`, sqm(item.area),
             item.distanceMeters < 1000 ? t("{distance} m", { distance: integer(item.distanceMeters) }) : t("{distance} km", { distance: km(item.distanceMeters) })].join(" · ")}</span>
         </li>)}</ol>
-        {!allComparables && shownComparables.length > 8 && <button type="button" className="ghost" onClick={() => setExpandedFor(market)}>{t("Prikaži vse ({count})", { count: shownComparables.length })}</button>}
+        {!allComparables && shownComparables.length > COMPARABLES_SHOWN && <button type="button" className="ghost" onClick={() => setExpandedFor(market)}>{t("Prikaži vse ({count})", { count: shownComparables.length })}</button>}
       </details>}
       {answer && answer.high > answer.low && <RangeBar p25={answer.low} p50={answer.mid} p75={answer.high} min={0} max={scaleMax} unit="€" markers={markers}
         label={t("Vaš nakup in današnja ocena na isti lestvici")} caption={t("Ocena danes {range}", { range: span(answer.low, answer.high) })}/>}
@@ -462,7 +452,8 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
         <span>{event.area ? sqm(event.area) : ""}{event.share && event.share !== "1/1" ? `, ${t("delež {share}", { share: event.share })}` : ""}</span></li>)}</ol>
     </section>}
 
-    <RentEstimate purchase={purchase} area={rents.data} done={!!(rents.data || rents.error)} district={district} municipalWhere={municipalWhere} value={value} year={cutoff ? marketWindows(cutoff).rents.year : undefined}/>
+    <RentEstimate purchase={purchase} area={rents.data} done={!!(rents.data || rents.error)} failed={!!rents.data?.failed || rents.error != null} retry={rents.retry}
+      district={district} municipalWhere={municipalWhere} value={value} year={cutoff ? marketWindows(cutoff).rents.year : undefined}/>
 
     <SaleNow key={`${purchase.transactionId ?? "manual"}-${purchase.group}-${purchase.date}-${purchase.price}`} purchase={purchase} suggested={value ?? purchase.price} band={answer}/>
   </>;
@@ -472,7 +463,7 @@ function SaleNow({ purchase, suggested, band }: { purchase: Purchase; suggested:
   const home = purchase.group === "apartment" || purchase.group === "house";
   const [ownHome, setOwnHome] = useState<boolean | null>(home ? null : false);
   const [sale, setSale] = useState<string>();
-  const [disposed, setDisposed] = useState(new Date().toISOString().slice(0, 10));
+  const [disposed, setDisposed] = useState(() => todayIso());
   const [investments, setInvestments] = useState("0");
   const [agent, setAgent] = useState(true);
   const [notary, setNotary] = useState("500");
@@ -485,8 +476,7 @@ function SaleNow({ purchase, suggested, band }: { purchase: Purchase; suggested:
     { key: "mid", label: t("Ocena"), value: round(band.mid) },
     { key: "high", label: t("Zgornja meja"), value: round(band.high) },
   ].filter((item, _position, list) => item.key === "mid" || item.value !== list[1].value);
-  // Agents in Slovenia may charge at most 4 % + DDV (22 %).
-  const agentFee = agent ? Math.round(price * 0.04 * 1.22) : 0;
+  const agentFee = agent ? Math.round(price * AGENT_FEE_RATE) : 0;
   const result = price > 0 ? saleScenario({ acquired: purchase.date, disposed, purchase: purchase.price, sale: price,
     investments: Math.max(0, Number(investments) || 0), sellingCosts: agentFee + Math.max(0, Number(notary) || 0), loan: Math.max(0, Number(loan) || 0),
     ownHome: !!ownHome, sellerPaysTransferTax: sellerTax }) : undefined;
@@ -539,30 +529,34 @@ function SaleNow({ purchase, suggested, band }: { purchase: Purchase; suggested:
 }
 
 /** What renting it out would bring: the district's rents when it has at least 30 contracts, else the municipality's, scaled to the floor area. */
-function RentEstimate({ purchase, area = {}, done, district, municipalWhere, value, year }: {
-  purchase: Purchase; area?: RentData; done: boolean; district?: District; municipalWhere: ReactNode; value: number | null; year?: number;
+function RentEstimate({ purchase, area, done, failed, retry, district, municipalWhere, value, year }: {
+  purchase: Purchase; area?: RentData; done: boolean; failed: boolean; retry: () => void; district?: District; municipalWhere: ReactNode; value: number | null; year?: number;
 }) {
   if (purchase.group === "land") return null;
-  const fromDistrict = !!district && !!area.districtRent?.isPublishable && (area.districtRent.rentPerSqmSampleSize ?? 0) >= DISTRICT_MIN_SAMPLE;
-  const rent = fromDistrict ? area.districtRent : area.rent;
-  const spread = fromDistrict ? area.districtRentSpread : area.rentSpread;
+  const data: RentData = area ?? { failed: false };
+  const fromDistrict = !!district && !!data.districtRent?.isPublishable && (data.districtRent.rentPerSqmSampleSize ?? 0) >= DISTRICT_MIN_SAMPLE;
+  const rent = fromDistrict ? data.districtRent : data.rent;
+  const spread = fromDistrict ? data.districtRentSpread : data.rentSpread;
   const where = fromDistrict && district ? inDistrict(district.name) : municipalWhere;
   const percentiles = spread?.isPublishable ? spread.percentiles : undefined;
-  const median = rent?.isPublishable ? rent.medianMonthlyRentPerSqm ?? percentiles?.p50 ?? null : percentiles?.p50 ?? null;
-  if (median == null) return <section className="module open"><h2>{t("Najemnina")}</h2>
-    <p className="muted">{done ? t("V občini je bilo v letu {year} premalo najemov te vrste za oceno.", { year: year ?? "" }) : t("Nalagam najemnine …")}</p></section>;
+  const medianRent = rent?.isPublishable ? rent.medianMonthlyRentPerSqm ?? percentiles?.p50 ?? null : percentiles?.p50 ?? null;
+  if (medianRent == null) return <section className="module open"><h2>{t("Najemnina")}</h2>
+    {failed ? <LoadFailed retry={retry}>{t("Najemnin ni bilo mogoče naložiti.")}</LoadFailed>
+      : <p className="muted">{done ? t("V občini je bilo v letu {year} premalo najemov te vrste za oceno.", { year: year ?? "" }) : t("Nalagam najemnine …")}</p>}</section>;
   const round10 = (amount: number) => Math.round(amount / 10) * 10;
-  const low = (percentiles?.p25 ?? median) * purchase.area;
-  const high = (percentiles?.p75 ?? median) * purchase.area;
-  const mid = median * purchase.area;
+  const low = (percentiles?.p25 ?? medianRent) * purchase.area;
+  const high = (percentiles?.p75 ?? medianRent) * purchase.area;
+  const mid = medianRent * purchase.area;
   const gross = value ? (mid * 12) / value : null;
   return <section className="module open" aria-labelledby="rent-title">
     <h2 id="rent-title">{tx("Če bi jo oddali: okoli {rent} na mesec", { rent: <span className="money">{euro(round10(mid))}</span> })}</h2>
-    <p className="area-lede">{tx("Srednja polovica najemnin {where} za {area} m²: {range} na mesec (mediana {median} €/m², leto {year}, iz {rentals}).", {
-      where, area: decimal1(purchase.area), range: <span className="money">{range(round10(low), round10(high))}</span>, median: decimal1(median), year: year ?? "—",
+    <p className="area-lede">{tx("Srednja polovica najemnin {where} za {area}\u00a0m²: {range} na mesec (mediana {median}\u00a0€/m², leto {year}, iz {rentals}).", {
+      where, area: decimal1(purchase.area), range: <span className="money">{range(round10(low), round10(high))}</span>, median: decimal1(medianRent), year: year ?? "—",
       rentals: count(rent?.rentPerSqmSampleSize ?? spread?.sampleSize ?? 0, NOUN_FORMS.najem) })}</p>
     <p className="value-caveat">{t("To so evidentirane najemne pogodbe (brez obratovalnih stroškov), ne oglasi: oglasne najemnine so običajno višje.")}</p>
-    <p className="muted">{gross != null && <>{t("Bruto donos glede na oceno vrednosti ({value}): {yield} % na leto, pred stroški, vzdrževanjem, praznimi meseci in davkom na najemnino (25 % od najemnine po odbitku 10 % stroškov, ki jih zakon prizna brez računov).", {
-      value: euro(round(value!)), yield: decimal1(gross * 100) })} </>}{t("Najemne pogodbe GURS evidentira z zamikom, zato uporabljamo zadnje celo leto.")}</p>
+    <p className="muted">{gross != null && value != null && <>{t("Bruto donos glede na oceno vrednosti ({value}): {yield} % na leto, pred stroški, vzdrževanjem, praznimi meseci in davkom na najemnino (25 % od najemnine po odbitku 10 % stroškov, ki jih zakon prizna brez računov).", {
+      value: euro(round(value)), yield: decimal1(gross * 100) })} </>}{t("Najemne pogodbe GURS evidentira z zamikom, zato uporabljamo zadnje celo leto.")}</p>
   </section>;
 }
+
+export { join };

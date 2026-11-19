@@ -1,6 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import { areaLabel, loadInflationBetween, type PropertyHistory, type RentalTransaction, type SaleTransaction, type TransactionContext, type Valuation } from "../api";
-import { capitalise, date, distance as distanceText, euro, integer, landArea, month, percent, perSqm, sqm, titleCase, upTo1 } from "../format";
+import { capitalise, date, distance as distanceText, euro, integer, landArea, month, percentPoints, perSqm, sqm, titleCase, upTo1 } from "../format";
 import { useLoad } from "../hooks/useLoad";
 import { proper, t, tx } from "../i18n";
 import { ALL_RENTED, ALL_SOLD, SIMILAR, TITLE_NOUN, TYPE_NAME } from "../nouns";
@@ -18,8 +18,6 @@ import "./transaction-details.css";
 
 /** €/m²: whole euros, one decimal below 10 €/m² (farmland, rents). */
 export const perSqmText = perSqm;
-/** A percent value (45.6 → "+45,6 %"). */
-const signed = (value: number) => percent(value / 100, { signed: true, digits: "upTo1" });
 const finite = (value: number | null | undefined): value is number => typeof value === "number" && Number.isFinite(value);
 /** Source text fields sometimes hold placeholders instead of being empty. */
 const text = (value: string | null | undefined) => {
@@ -100,10 +98,10 @@ const position = (value?: string | null) => {
 const isSale = (detail: Detail): detail is SaleTransaction => "buildingParts" in detail;
 
 function address(street?: string | null, house?: string | null, settlement?: string | null) {
-  const place = text(settlement) && titleCase(text(settlement)!);
+  const place = text(settlement) && titleCase(text(settlement));
   // Rural addresses have no street: the settlement carries the house number ("Krivčevo 4").
   if (!text(street)) return [place, text(house)].filter(Boolean).join(" ") || undefined;
-  const line = [titleCase(text(street)!), text(house)].filter(Boolean).join(" ");
+  const line = [titleCase(text(street)), text(house)].filter(Boolean).join(" ");
   return [line, place].filter(Boolean).join(", ") || undefined;
 }
 const partLabel = (code?: number | null, building?: string | null, part?: string | null) =>
@@ -646,17 +644,17 @@ type Pair = PropertyHistory["assets"][number]["pairs"][number];
 
 /** Nominal and CPI-adjusted change between two recorded sales of the same unit. */
 function InflationChange({ pair }: { pair: Pair }) {
-  const load = useLoad(pair.from && pair.to ? `inflation|${pair.from}|${pair.to}` : null, (signal) => loadInflationBetween(pair.from!, pair.to!, signal));
+  const load = useLoad(pair.from && pair.to ? { from: pair.from, to: pair.to } : null, (input) => `inflation|${input.from}|${input.to}`, (input, signal) => loadInflationBetween(input.from, input.to, signal));
   const factor = load.error ? null : load.data ? (finite(load.data.factor) ? load.data.factor : null) : undefined;
   if (!finite(pair.previousPrice) || !finite(pair.price)) return null;
   const adjusted = finite(factor) ? pair.previousPrice * factor : undefined;
   return <>
     <span>{t("Nominalno: {amount} ({percent})", { amount: euro(pair.price - pair.previousPrice),
-      percent: signed(pair.changePercent ?? 100 * (pair.price / pair.previousPrice - 1)) })}</span>
+      percent: percentPoints(pair.changePercent ?? 100 * (pair.price / pair.previousPrice - 1)) })}</span>
     {factor === undefined && <span role="status">{t("Nalagam podatke o inflaciji …")}</span>}
     {factor === null && <span>{t("Sprememba po inflaciji ni na voljo.")}</span>}
     {adjusted != null && <span>{t("Po upoštevanju inflacije: {amount} ({percent}); prejšnja cena v današnjem denarju {previous}.", {
-      amount: euro(pair.price - adjusted), percent: signed(100 * (pair.price / adjusted - 1)), previous: euro(adjusted) })}</span>}
+      amount: euro(pair.price - adjusted), percent: percentPoints(100 * (pair.price / adjusted - 1)), previous: euro(adjusted) })}</span>}
   </>;
 }
 
@@ -722,8 +720,8 @@ export function BuildingComparables({ context, kind, onChoose }: {
         <div className="td-comparable-head">
           <button type="button" className="link" onClick={() => onChoose({ kind, id: item.transactionId })}>{item.contractDate ? date(item.contractDate) : "—"}</button>
           {finite(item.amountPerSqmDifferencePercent) && <strong className="td-diff"
-            aria-label={isRent ? t("{difference} na m² glede na ta najem", { difference: signed(item.amountPerSqmDifferencePercent) })
-              : t("{difference} na m² glede na to prodajo", { difference: signed(item.amountPerSqmDifferencePercent) })}>{signed(item.amountPerSqmDifferencePercent)}</strong>}
+            aria-label={isRent ? t("{difference} na m² glede na ta najem", { difference: percentPoints(item.amountPerSqmDifferencePercent) })
+              : t("{difference} na m² glede na to prodajo", { difference: percentPoints(item.amountPerSqmDifferencePercent) })}>{percentPoints(item.amountPerSqmDifferencePercent)}</strong>}
         </div>
         <span>{isRent ? t("{amount} na mesec", { amount: euro(item.amount) }) : euro(item.amount)} · {perSqmValue.format(item.amountPerSqm)} €/m² · {sqm(item.area)}
           {!item.isRepresentative ? ` · ${t("ni v statistiki")}` : ""}</span></li>)}</ol></>}

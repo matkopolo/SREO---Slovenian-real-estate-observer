@@ -2,10 +2,11 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { emptyLists, stubApi } from "../test/api-stub";
+import { followLegacyHash } from "../url-state";
 
 // jsdom has no WebGL: the map is replaced by buttons that fire the same callbacks.
 vi.mock("./ExplorerMap", () => ({
-  default: ({ onArea, onBuilding }: { onArea: (id: number) => void; onBuilding: (key: string) => void }) => <div>
+  ExplorerMap: ({ onArea, onBuilding }: { onArea: (id: number) => void; onBuilding: (key: string) => void }) => <div>
     <button type="button" onClick={() => onArea(137)}>zemljevid: Maribor</button>
     <button type="button" onClick={() => onBuilding("1734-1710")}>zemljevid: stavba</button>
   </div>,
@@ -82,6 +83,18 @@ afterEach(() => {
 
 const fetched = (part: string) => api.fetched(part);
 
+it("says so with a retry when the data status cannot be loaded, and loads the page once it can", async () => {
+  api.prepend([{ path: "/api/v1/data-status", status: 503, body: {} }]);
+  render(<App/>);
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("Stanja podatkov trenutno ni bilo mogoče naložiti");
+  // Nothing else was asked for: every figure hangs on the cutoff.
+  expect(fetched("/api/v1/statistics/overview")).toBe(false);
+  api.prepend([{ path: "/api/v1/data-status", body: { activeRelease: { analyticsSaleThrough: "2026-10-01T00:00:00Z" } } }]);
+  fireEvent.click(within(alert).getByRole("button", { name: "Poskusi znova" }));
+  expect(await screen.findByRole("heading", { level: 1, name: "Slovenija" })).toBeInTheDocument();
+});
+
 it("opens on Slovenija: median, change, real change and a flats/houses pair on lag-aware periods", async () => {
   render(<App/>);
   expect(await screen.findByRole("heading", { level: 1, name: "Slovenija" })).toBeInTheDocument();
@@ -125,12 +138,15 @@ it("has a market overview page that carries the explorer's area", async () => {
 });
 
 it("translates earlier links (#pregled, #kakovost)", async () => {
+  // main.tsx rewrites an old address before the app renders; the test takes the same step.
   window.location.hash = "#pregled?g=133";
+  followLegacyHash();
   render(<App/>);
   expect(await screen.findByRole("heading", { level: 1, name: "Ljubljana" })).toBeInTheDocument();
   expect(window.location.hash).toBe("#?g=133");
   cleanup();
   window.location.hash = "#kakovost";
+  followLegacyHash();
   render(<App/>);
   expect(await screen.findByRole("heading", { level: 1, name: "O podatkih" })).toBeInTheDocument();
 });

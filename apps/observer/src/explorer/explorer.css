@@ -1,0 +1,97 @@
+/* Styles of the explorer page (ExplorerView, ExplorerBar, MapLegend): the two columns and the map strip. Global tokens and layout: styles.css. */
+.explorer { display: grid; gap: 10px; }
+.explorer-bar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: end; }
+.explorer-bar .area-search { flex: 1 1 280px; max-width: 520px; }
+/* The main field speaks for itself (the placeholder gives examples): its label is for assistive technology. */
+.explorer-bar .area-search > label { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+/* Period: the segmented control, the custom year range and the exact windows as a muted note beside it. */
+.period-choice { display: flex; flex: 1 1 320px; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
+.period-note { margin: 0; color: var(--muted); font-size: 0.7812rem; white-space: nowrap; }
+/* Phones: the lede already names the period's end; the exact windows stay in the button's tooltip. */
+@media (max-width: 640px) { .period-note { display: none; } }
+.year-range { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; font-size: 0.9rem; }
+.year-range select { margin-left: 0.35rem; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: inherit; font: inherit; }
+/* The one filled call to action, sized like the search field beside it. */
+.value-button { min-height: 48px; padding: 8px 18px; border: 2px solid var(--accent); border-radius: 999px; background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 650; cursor: pointer; }
+.value-button:hover { filter: brightness(1.06); }
+.value-button[aria-pressed="true"] { background: var(--surface); color: var(--accent); }
+.explorer-body { display: grid; grid-template-columns: minmax(360px, 460px) minmax(0, 1fr); gap: 14px; height: calc(100dvh - 190px); min-height: 560px; }
+.explorer-body > * { min-width: 0; }
+/* The panel always reserves its scrollbar (classic bars) and keeps text clear of overlay bars (macOS);
+   position: relative clips screen-reader-only text to this column, not to the whole page. */
+.explorer-panel { position: relative; min-width: 0; overflow-y: auto; padding-left: 3px; padding-right: 14px; display: grid; align-content: start; gap: 14px;
+  overscroll-behavior: contain; scrollbar-gutter: stable; }
+.phone-head { display: none; }
+.new-building { padding: 12px; border-radius: 10px; background: var(--surface); }
+.search-empty { margin: 4px 0 0; }
+
+/* Map column. */
+.explorer-map-wrap { position: relative; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; container-type: inline-size; container-name: map; }
+.explorer-map, .explorer-map.maplibregl-map { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* Legend strip docked to the bottom of the map (MapLegend): layer picker · colour ramp(s) · "?" explanation, one row of 56px.
+   The map keeps its full height; its own controls (credit, zoom) sit above the strip (--strip is set from its height). */
+.map-strip { position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-height: 56px;
+  padding: 6px 10px; background: var(--surface); border-top: 1px solid var(--line); font-size: 0.6875rem; color: var(--muted); }
+.strip-layer { display: block; flex: 1 1 110px; max-width: 220px; min-width: 110px; }
+.strip-layer select { width: 100%; min-height: 36px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 0.8125rem; }
+.ramp { display: grid; grid-template-columns: auto auto; gap: 1px 10px; align-items: end; flex: 0 0 auto; }
+.ramp-caption { grid-column: 1 / -1; line-height: 1.2; white-space: nowrap; }
+.ramp-classes { display: flex; margin: 0; padding: 0; list-style: none; }
+.ramp-classes li { display: grid; gap: 2px; min-width: 44px; }
+.ramp-classes i { display: block; height: 10px; border: 1px solid var(--line); border-right: 0; }
+.ramp-classes li:first-child i { border-radius: 3px 0 0 3px; }
+.ramp-classes li:last-child i { border-right: 1px solid color-mix(in srgb, var(--line) 60%, transparent); border-radius: 0 3px 3px 0; }
+.ramp-classes span { white-space: nowrap; padding-right: 6px; line-height: 1.2; }
+.ramp-keys { display: grid; gap: 2px; margin: 0; padding: 0 0 1px; list-style: none; }
+.ramp-keys li { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; line-height: 1.2; }
+.ramp-keys i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid var(--line); }
+.ramp-keys .pooled-key { opacity: .55; }
+.strip-note { margin: 0; flex: 1 1 240px; min-width: 0; font-size: 0.75rem; }
+/* The flood overlay switch and its keys share one row of the strip. */
+.strip-floods { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 0.75rem; }
+.strip-floods > label { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; white-space: nowrap; cursor: pointer; }
+.strip-floods input { margin: 0; accent-color: var(--accent); }
+.strip-floods .flood-keys { display: flex; flex-wrap: wrap; gap: 2px 10px; margin: 0; }
+.strip-floods .strip-note { flex: 0 1 auto; }
+/* The swatches at the map's fill opacity, so the legend shows the blues as they are drawn. */
+.strip-floods .flood-swatch { opacity: 0.55; border-color: rgba(28, 31, 36, 0.35); }
+/* The value check's map legend: the comparables, the property's ring and the search circle. */
+.comparables-strip .ramp-keys { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.comparables-strip .key-dot { border-radius: 50%; background: var(--c-price); border-color: #ffffff; }
+.comparables-strip .key-ring { border-radius: 50%; background: #ffffff; border: 2px solid var(--subject); }
+.comparables-strip .key-dash { flex: none; color: var(--subject); }
+.strip-help-toggle { flex: none; margin-left: auto; width: 32px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
+.strip-help-toggle:hover, .strip-help-toggle[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+/* The explanation opens as a bubble above the strip, so the strip keeps its height. */
+.strip-help { position: absolute; right: 10px; bottom: calc(100% + 6px); z-index: 3; max-width: min(420px, calc(100% - 20px)); margin: 0; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); color: var(--text); font-size: 0.8125rem; line-height: 1.4; box-shadow: 0 6px 18px rgba(0, 0, 0, .18); }
+.map-chip { position: absolute; z-index: 3; top: 10px; right: 10px; max-width: min(360px, calc(100% - 20px)); min-height: 40px; padding: 8px 12px;
+  border: 1px solid var(--accent); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 0.8125rem; cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .18); text-align: left; }
+.map-chip strong { color: var(--accent); }
+.map-tip .maplibregl-popup-content { padding: 6px 9px; border-radius: 8px; font: 13px/1.35 var(--font-body); color: #15232c; }
+/* Map credit (OpenFreeMap, OpenMapTiles, OpenStreetMap): compact control bottom-left, zoom buttons bottom-right, both above the strip.
+   The control column leaves 64px for the zoom buttons, so the expanded credit wraps instead of running into them. */
+.explorer-map .maplibregl-ctrl-bottom-left { max-width: calc(100% - 64px); }
+@media (min-width: 901px) { .explorer-map .maplibregl-ctrl-bottom-left, .explorer-map .maplibregl-ctrl-bottom-right { bottom: var(--strip, 0px); } }
+/* A narrower map column: the second (district) ramp goes, the strip stays one row. */
+@container map (max-width: 760px) { .ramp.secondary { display: none; } }
+@media (max-width: 900px) {
+  .explorer-body { grid-template-columns: 1fr; height: auto; }
+  .explorer-panel { overflow: visible; padding-right: 0; scrollbar-gutter: auto; }
+  .phone-head { display: flex; order: -2; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 4px 2px 2px; }
+  .phone-head strong { font-size: 1.25rem; font-family: var(--font-display); }
+  .phone-head a { margin-left: auto; color: var(--accent); min-height: 44px; display: inline-flex; align-items: center; }
+  /* Phone: the map first (two fingers move it), controls and legend below the canvas. */
+  .explorer-map-wrap { order: -1; height: auto; min-height: 0; border: 0; overflow: visible; display: grid; gap: 6px; }
+  .explorer.value-mode .explorer-map-wrap { order: 1; }
+  .explorer-map-wrap .explorer-map, .explorer-map-wrap .explorer-map.maplibregl-map { position: relative; height: 52vh; min-height: 280px; border: 1px solid var(--line); border-radius: 12px; }
+  .map-chip { position: static; margin: 0; justify-self: stretch; max-width: none; }
+  /* The strip sits under the map canvas (two rows are fine) and the explanation opens in place. */
+  .map-strip { position: static; min-height: 0; padding: 4px 2px; border-top: 0; background: transparent; }
+  /* On a phone the flood switch and its keys take the first row under the map, so the blue is explained at once. */
+  .strip-floods { flex: 1 0 100%; order: -1; }
+  .strip-layer { flex: 1 1 200px; }
+  .strip-help { position: static; max-width: none; flex: 1 0 100%; }
+}
+

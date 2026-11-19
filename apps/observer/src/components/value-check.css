@@ -101,3 +101,26 @@
 /* On one column the map is at the bottom of the page: the list says so. */
 .value-map-jump { display: none; }
 @media (max-width: 900px) { .value-map-jump { display: inline; } }
+
+/* The value page's steps, answer and sale scenario. */
+.steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+.steps > li { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); display: grid; gap: 6px; }
+.steps > li.current { border-color: var(--accent); }
+.steps p { margin: 0; }
+.pick { display: grid; gap: 8px; }
+.question { margin: 0; padding: 0; border: 0; display: grid; gap: 6px; }
+.question legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
+.value-answer h2 { font-size: 1.5rem; }
+.estimates { margin: 0; padding: 0; list-style: none; display: grid; gap: 14px; }
+.estimates li { display: grid; gap: 4px; }
+.estimates small { color: var(--muted); font-size: 0.75rem; }
+.estimate-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.estimate-head span { font-weight: 650; white-space: nowrap; }
+.estimate-track { position: relative; height: 12px; border-radius: 6px; background: color-mix(in srgb, var(--muted) 20%, transparent); }
+.estimate-band { position: absolute; top: 0; bottom: 0; border-radius: 6px; background: color-mix(in srgb, var(--accent) 60%, transparent); }
+.estimate-mid { position: absolute; top: -3px; width: 2px; height: 18px; margin-left: -1px; background: var(--text); }
+.estimate-paid { position: absolute; top: -2px; width: 10px; height: 16px; margin-left: -5px; border-radius: 3px; background: var(--muted); opacity: .8; }
+.waterfall { margin: 0; padding: 0; list-style: none; display: grid; }
+.waterfall li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 0.9062rem; }
+.waterfall li.total { font-weight: 650; border-bottom: 2px solid var(--text); }
+

@@ -28,7 +28,7 @@ export function familyOf(metric: MetricId): Family {
     case "grossYield": case "affordableSqm": return "money";
     case "share65": case "netMigration": case "releases": return "people";
     case "newBuildings": return "build";
-    default: return "price";
+    case "salePrice": case "saleVolume": return "price";
   }
 }
 /** The DRSV flood hazard classes in the rent (water) ramp: Pv velika, Ps srednja, Pm majhna, Pp preostala. */

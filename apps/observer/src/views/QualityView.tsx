@@ -20,9 +20,9 @@ const bounds = (lower: number | null | undefined, upper: number | null | undefin
   lower != null && lower <= 0 ? t("meja do {upper}", { upper: formatted(upper, digits) }) : t("meja {lower}–{upper}", { lower: formatted(lower, digits), upper: formatted(upper, digits) });
 
 /** What the numbers are, what they exclude and why; the review queue sits behind an analyst disclosure. */
-export function QualityView({ cutoff }: { cutoff?: string }) {
+export function QualityView({ cutoff }: { cutoff: string }) {
   // The last complete year of the data, not of the clock.
-  const year = cutoff ? lastCompleteYear(cutoff) : new Date().getFullYear() - 1;
+  const year = lastCompleteYear(cutoff);
   const quality = useLoad(`quality|${year}`, (signal) => loadQuality(year, signal));
   const data = quality.data;
   const [, , outliers, rentalOutliers] = data ?? [];

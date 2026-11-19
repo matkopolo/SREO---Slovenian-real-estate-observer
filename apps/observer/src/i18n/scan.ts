@@ -57,13 +57,13 @@ export function leftovers(path: string, slovenianWords: Set<string>): Leftover[]
       if (!/\S/.test(text) || NEUTRAL.test(text.trim())) continue;
       if (/=>|\b(?:const|return|if|let)\b|&&|\?\?/.test(text)) continue; // generics / code, not JSX text
       if (!/\p{L}{2,}/u.test(text) && !visibleSlovenian(text)) continue;
-      push(match.index! + 1, text, "jsx-text");
+      push(match.index + 1, text, "jsx-text");
     }
     // User-facing attributes with literal text.
     for (const match of code.matchAll(/\b(aria-label|aria-description|title|placeholder|label|alt|summary)=("([^"]*\p{L}[^"]*)"|\{`([^`]*\p{L}[^`]*)`\})/gu)) {
       const text = match[3] ?? match[4];
       if (NEUTRAL.test(text.trim())) continue;
-      push(match.index!, text, `attribute ${match[1]}`);
+      push(match.index, text, `attribute ${match[1]}`);
     }
   }
   // String and template literals that read as Slovenian.
@@ -73,7 +73,7 @@ export function leftovers(path: string, slovenianWords: Set<string>): Leftover[]
     if (/^(?:#|\/api\/|[a-z][\w-]*(?:\s+[a-z][\w-]*)*$)/.test(text.trim()) && !looksSlovenian(text)) continue; // ids, classes, paths
     // Sentence-like literals (spaces or inserted values) also count with short Slovenian words: `do ${value}`.
     const sentence = /\s/.test(text.trim()) || /\$\{/.test(match[2] ?? "");
-    if (looksSlovenian(text) || (sentence && visibleSlovenian(text))) push(match.index!, text, "string");
+    if (looksSlovenian(text) || (sentence && visibleSlovenian(text))) push(match.index, text, "string");
   }
   return out;
 }

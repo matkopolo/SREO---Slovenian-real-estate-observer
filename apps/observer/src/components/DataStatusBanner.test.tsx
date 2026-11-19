@@ -39,14 +39,15 @@ it("is prominent only when there is no release at all", () => {
   expect(screen.getByRole("status")).toHaveTextContent("Podatki še niso objavljeni");
 });
 
-it("renders a failed update as a muted line with the detail as its tooltip, never as an outage box", () => {
+it("renders a failed update as a muted line that opens to its explanation, never as an outage box", () => {
   render(<DataStatusBanner status={{ status: "failed", activeRelease: release(), lastFailedRelease: release({ id: "f", status: "failed" }) }}/>);
   const region = screen.getByRole("status");
-  expect(region).toHaveTextContent("Podatki do 1. 10. 2026 · posodobitev bomo ponovili");
-  const line = region.firstElementChild!;
+  const line = region.firstElementChild;
   expect(line).toHaveClass("note");
   expect(line).not.toHaveClass("missing");
-  expect(line).toHaveAttribute("title", expect.stringContaining("ni uspela"));
+  // The one-line summary is the notice; the explanation sits under it (a disclosure, reachable by touch and keyboard).
+  expect(line?.querySelector("summary")).toHaveTextContent("Podatki do 1. 10. 2026 · posodobitev bomo ponovili");
+  expect(line).toHaveTextContent("ni uspela");
   expect(region.querySelector("button")).toBeNull();
 });
 

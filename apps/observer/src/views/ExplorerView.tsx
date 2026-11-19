@@ -1,65 +1,53 @@
 import { lazy, Suspense, useMemo, useRef, useState } from "react";
-import { bboxOf, loadBuilding, loadFloodZones, loadNewBuilding, type Bbox, type MarketComparable, type Segment } from "../api";
+import { loadBuilding, loadNewBuilding, type MarketComparable, type Segment } from "../api";
 import { AreaPanel } from "../components/AreaPanel";
 import { SLOVENIA, type Scope } from "../components/AreaModules";
 import { addressLabel } from "../components/AreaSearch";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { LoadFailed } from "../components/LoadState";
 import { ValueCheck, type ShownComparables } from "../components/ValueCheck";
-import { radiusBbox } from "../components/map-geometry";
 import type { MapComparablePoint, MapRadius, MapView } from "../components/ExplorerMap";
-import { BUILDING_ZOOM, FLOOD_ZOOM } from "../components/map-zoom";
+import { BUILDING_ZOOM } from "../components/map-zoom";
 import { dateCompact, sqm } from "../format";
 import { ExplorerBar } from "../explorer/ExplorerBar";
-import { ComparablesLegend, MapLegend, type MapLevel, type Scale } from "../explorer/MapLegend";
-import { agreementPoints, areaPaint, buildingPoints, containsPoint, finePaint, typedLabel } from "../explorer/paint";
+import { ComparablesLegend, MapLegend, type MapLevel } from "../explorer/MapLegend";
+import { containsPoint } from "../explorer/paint";
 import { useAreaChain, useGeographyLists, useShapes, type GeographyLists } from "../explorer/useAreas";
+import { useExplorerRankings, useExplorerScales, useFloodOverlay, useMapFocus } from "../explorer/useExplorerView";
 import { FINE_LAYERS, FINE_ZOOM, REGION_ZOOM, useChoropleth, usePeriodWindows, useSubAreas, useViewLayers } from "../explorer/useMapLayers";
 import { useUrlState } from "../explorer/useUrlState";
 import { useLoad } from "../hooks/useLoad";
 import { Name, proper, t, tx } from "../i18n";
-import { classBreaks, colorScale, divergingBreaks, divergingScale, layersFor, METRICS } from "../metrics";
-import { familyOf, type Family } from "../palette";
+import { isPhone } from "../layout";
+import { layersFor, METRICS } from "../metrics";
 import { sizeBand } from "../nouns";
-import { count, form, forms, NOUN_FORMS, type Forms } from "../plural";
-import { hasBadArea } from "../url-state";
+import { count, form, NOUN_FORMS } from "../plural";
+import { buildingKey, hasBadArea, parseBuildingKey, type BuildingRef } from "../url-state";
 import { BuildingView } from "./BuildingView";
+import "../explorer/explorer.css";
 
-const ExplorerMap = lazy(() => import("../components/ExplorerMap"));
+const ExplorerMap = lazy(() => import("../components/ExplorerMap").then((module) => ({ default: module.ExplorerMap })));
 
-const REGION_FORMS = forms(["regija", "regiji", "regije", "regij"], ["region", "regions"]); // i18n-ignore (plural forms, both languages)
-const DISTRICT_FORMS = forms(["četrtna skupnost", "četrtni skupnosti", "četrtne skupnosti", "četrtnih skupnosti"], ["city district", "city districts"]); // i18n-ignore (plural forms, both languages)
 const NO_LISTS: GeographyLists = { regions: [], municipalities: [], districts: [] };
-/** The widest view (degrees) the flood endpoint serves (0.26 after snapping); a wider view is cut to its centre. */
-const FLOOD_VIEW = 0.24;
-/** The box grown to the enclosing cells of a grid (degrees), so nearby views share one answer. */
-const snapBbox = ([west, south, east, north]: Bbox, cell: number): Bbox =>
-  [Math.floor(west / cell) * cell, Math.floor(south / cell) * cell, Math.ceil(east / cell) * cell, Math.ceil(north / cell) * cell];
-const clampBbox = ([west, south, east, north]: Bbox, size: number): Bbox => {
-  const midX = (west + east) / 2, midY = (south + north) / 2;
-  const halfX = Math.min(east - west, size) / 2, halfY = Math.min(north - south, size) / 2;
-  return [midX - halfX, midY - halfY, midX + halfX, midY + halfY];
-};
-
-interface RankItem { id: number; name: string; value: number | null; sample: number; format: (value: number) => string; label: string; pooled?: number; populationSample?: boolean; unit?: Forms }
-
-const scaleOf = (values: Array<number | null>, family: Family = "price"): Scale => ({ breaks: classBreaks(values), ramp: colorScale(values, family) });
+const NO_SHAPES: never[] = [];
+/** The default zoom before the map has reported its view: Slovenia as a whole. */
+const COUNTRY_ZOOM = 7;
 
 /** The market by area: map navigator, area panel, building and sale evidence, and the value check, all in the address. */
-export function ExplorerView({ cutoff }: { cutoff?: string }) {
+export function ExplorerView({ cutoff }: { cutoff: string }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const { state, navigate } = useUrlState(panelRef);
   const [badArea] = useState(() => hasBadArea());
   const lists = useGeographyLists();
   const { regions, municipalities, districts } = lists.data ?? NO_LISTS;
   const shapes = useShapes();
-  const municipalShapes = useMemo(() => shapes.municipalities.data ?? [], [shapes.municipalities.data]);
-  const regionShapes = useMemo(() => shapes.regions.data ?? [], [shapes.regions.data]);
+  const municipalShapes = shapes.municipalities.data ?? NO_SHAPES;
+  const regionShapes = shapes.regions.data ?? NO_SHAPES;
 
   // The selected area and its parents; a deep link shows a loading state (never Slovenija) until they are known.
   const area = useAreaChain(state.g, lists);
   const unit = area.status === "ok" ? area.unit : undefined;
-  const chain = useMemo(() => area.status === "ok" ? area.chain : [], [area]);
+  const chain = area.status === "ok" ? area.chain : NO_SHAPES;
   const scope = useMemo<Scope>(() => unit ? { id: unit.id, name: unit.name, level: unit.level as Scope["level"] } : SLOVENIA, [unit]);
   const municipalityId = unit?.level === "municipality" ? unit.id : chain.find((item) => item.level === "municipality")?.id;
   const parents = useMemo<Scope[]>(() => [...chain.filter((item) => item.level === "municipality" || item.level === "statistical_region")
@@ -97,102 +85,25 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
   const { fine, buildings, agreements, newBuildings } = useViewLayers({ view: comparablesShown ? undefined : view, cutoff, years: state.years, layer, group: state.group, segment, windows, buildingWindows: period?.buildings });
   const subAreas = useSubAreas(municipalityId, municipalShapes, cutoff, state.years, segment, windows);
   const sub = subAreas.sub?.owner === municipalityId ? subAreas.sub : undefined;
-  const building = useLoad(state.building ? `building-${state.building.ko}-${state.building.st}` : null, (signal) => loadBuilding(state.building!.ko, state.building!.st, signal));
+  const building = useLoad(state.building ?? null, (ref: BuildingRef) => `building-${buildingKey(ref)}`, (ref, signal) => loadBuilding(ref.ko, ref.st, signal));
   const [newBuildingId, setNewBuildingId] = useState<string>();
-  const newBuilding = useLoad(newBuildingId ? `new-building-${newBuildingId}` : null, (signal) => loadNewBuilding(newBuildingId!, signal));
+  const newBuilding = useLoad(newBuildingId ?? null, (eid) => `new-building-${eid}`, (eid, signal) => loadNewBuilding(eid, signal));
 
-  // ------------------------------------------------------------ scales and paint
+  // ------------------------------------------------------------ scales, paint, lists
   const { shown, regionShown } = choropleth;
-  const municipalScale = useMemo<Scale>(() => {
-    const numbers = shown.map((item) => item.value);
-    return definition.signed ? { breaks: divergingBreaks(numbers), ramp: divergingScale(numbers) } : scaleOf(numbers, familyOf(layer));
-  }, [definition.signed, layer, shown]);
-  const regionScale = useMemo<Scale>(() => {
-    const numbers = regionShown.map((item) => item.value);
-    return { breaks: classBreaks(numbers), ramp: definition.signed ? divergingScale(numbers) : colorScale(numbers, familyOf(layer)) };
-  }, [definition.signed, layer, regionShown]);
-  const paint = useMemo(() => areaPaint(municipalShapes, shown, { metric: layer, ramp: municipalScale.ramp, period: periodShort, countWithheld: true }),
-    [layer, municipalScale, municipalShapes, periodShort, shown]);
-  const regionPaint = useMemo(() => areaPaint(regionShapes, regionShown, { metric: layer, ramp: regionScale.ramp, period: periodShort }), [layer, periodShort, regionScale, regionShapes, regionShown]);
-  // Districts/settlements get their own scale (they would all share the top municipal class) and their own legend.
-  const subScale = useMemo(() => scaleOf(subAreas.values.map((item) => item.value), familyOf(layer)), [layer, subAreas.values]);
-  const subPaint = useMemo(() => finePaint(sub?.shapes ?? [], subAreas.values, { ramp: subScale.ramp, period: periodShort }), [periodShort, sub, subAreas.values, subScale]);
-  const fineScale = useMemo(() => scaleOf(fine.values.map((item) => item.value), familyOf(layer)), [fine.values, layer]);
-  const fineAreaPaint = useMemo(() => finePaint(fine.shapes, fine.values, { ramp: fineScale.ramp, period: periodShort, metric: layer }), [fine, fineScale, layer, periodShort]);
-  // Buildings get their own scale from the buildings in view (the municipal scale would make every city building the darkest class).
   const landPoints = state.group === "land";
-  const buildingScale = useMemo(() => scaleOf(landPoints ? agreements.map((item) => item.perSqm) : buildings.map((item) => item.medianAmountPerSqm ?? null), rent ? "rent" : "price"), [agreements, buildings, landPoints, rent]);
-  const buildingDots = useMemo(() => buildingPoints(buildings, { ramp: buildingScale.ramp, rent, span: buildingSpan }), [buildingScale, buildingSpan, buildings, rent]);
-  const agreementDots = useMemo(() => agreementPoints(agreements, newBuildings, { ramp: buildingScale.ramp, rent }), [agreements, buildingScale, newBuildings, rent]);
-
-  const zoom = view?.zoom ?? 7;
-  // The flood hazard overlay (DRSV) is drawn on request from town zoom; the API serves views up to about one municipality.
+  const subShapes = sub?.shapes ?? NO_SHAPES;
+  const scales = useExplorerScales({ layer, rent, landPoints, periodShort, buildingSpan, shown, regionShown, municipalShapes, regionShapes,
+    subShapes, subValues: subAreas.values, fine, buildings, agreements, newBuildings });
+  const zoom = view?.zoom ?? COUNTRY_ZOOM;
   const [floodsOn, setFloodsOn] = useState(false);
-  // The view is padded and snapped to a 0.01° grid, so a small pan reuses the answer; the previous answer stays while
-  // the next loads, so the overlay never blinks.
-  const floodBox = useMemo<Bbox | null>(() => view && view.zoom >= FLOOD_ZOOM ? snapBbox(clampBbox(view.bbox, FLOOD_VIEW), 0.01) : null, [view]);
-  const floodClamped = !!view && view.zoom >= FLOOD_ZOOM && (view.bbox[2] - view.bbox[0] > FLOOD_VIEW || view.bbox[3] - view.bbox[1] > FLOOD_VIEW);
-  const floodDetail = zoom >= 15.5 ? "high" : zoom >= 14 ? "medium" : "low";
-  const floods = useLoad(floodsOn && floodBox ? `floods|${floodBox.join(",")}|${floodDetail}` : null,
-    (signal) => loadFloodZones(floodBox!, floodDetail, signal), { keepPrevious: true });
+  const { floods, floodBox, clamped: floodClamped } = useFloodOverlay(view, floodsOn);
   const mapLevel: MapLevel = zoom < REGION_ZOOM && definition.regional ? "statistical_region" : zoom < FINE_ZOOM || !FINE_LAYERS.includes(layer) ? "municipality" : "fine";
   const streetLevel = zoom >= BUILDING_ZOOM;
-
-  // ------------------------------------------------------------ map focus and marker
-  const buildingBox = useMemo<Bbox | null>(() => {
-    const { longitude, latitude } = building.data ?? {};
-    return longitude != null && latitude != null ? [longitude - 0.003, latitude - 0.002, longitude + 0.003, latitude + 0.002] : null;
-  }, [building.data]);
-  const focus = useMemo<Bbox | null>(() => {
-    // The value check: the whole search circle, so the circle is the frame and every similar sale (inside it) is in view.
-    if (comparables) return radiusBbox(comparables.center, comparables.radiusMeters * 1.15); // room for the credit and the strip under the circle
-    if (state.building && buildingBox) return buildingBox;
-    if (!unit) return null;
-    const shape = unit.level === "statistical_region" ? regionShapes.find((item) => item.id === unit.id)
-      : unit.level === "municipality" ? municipalShapes.find((item) => item.id === unit.id) : sub?.shapes.find((item) => item.id === unit.id);
-    return bboxOf(shape?.geometry) ?? (unit.bounds as Bbox | undefined) ?? null;
-  }, [buildingBox, comparables, municipalShapes, regionShapes, state.building, sub, unit]);
-  // The opened sale (its own point) or else the opened building: a ring on the map.
   const selectedId = state.selected?.id;
-  const marker = useMemo<[number, number] | null>(() => {
-    if (comparables) return comparables.center;
-    const point = selectedId != null ? agreements.find((item) => item.id === selectedId) : undefined;
-    if (point) return point.at;
-    if ((state.building || selectedId != null) && buildingBox) return [(buildingBox[0] + buildingBox[2]) / 2, (buildingBox[1] + buildingBox[3]) / 2];
-    return null;
-  }, [agreements, buildingBox, comparables, selectedId, state.building]);
-
-  // ------------------------------------------------------------ lists for the panel
+  const { focus, marker } = useMapFocus({ comparables, building: building.data, buildingOpened: !!state.building, selectedId, unit, regionShapes, municipalShapes, sub, agreements });
   const names = useMemo(() => new Map(municipalShapes.map((shape) => [shape.id, shape.name])), [municipalShapes]);
-  const measure = typedLabel(layer, state.group).toLowerCase();
-  const populationSample = !definition.usesYears || layer === "newBuildings";
-  const ranking = useMemo<RankItem[] | undefined>(() => {
-    if (scope.level !== "country" && scope.level !== "statistical_region" && scope.level !== "municipality") return undefined;
-    const regionId = scope.level === "statistical_region" ? scope.id : scope.level === "municipality" ? municipalities.find((item) => item.id === scope.id)?.parentId : undefined;
-    const regionName = regions.find((item) => item.id === regionId)?.name;
-    const inRegion = regionId ? new Set(municipalities.filter((item) => item.parentId === regionId).map((item) => item.id)) : undefined;
-    const label = regionName ? t("{measure}, občine v regiji {region}", { measure, region: regionName }) : t("{measure}, občine", { measure });
-    return shown.filter((item) => !inRegion || inRegion.has(item.geographyId)).map((item) => ({ id: item.geographyId, name: names.get(item.geographyId) ?? "", value: item.value,
-      sample: item.sample, format: (value: number) => `${definition.format(value)}${item.pooled ? ` (${item.pooled} ${form(item.pooled, NOUN_FORMS.leto)})` : ""}`,
-      label, pooled: item.pooled, populationSample }));
-  }, [definition, measure, municipalities, names, populationSample, regions, scope, shown]);
-  // Districts or settlements of the selected municipality (Slovenija: its regions), so they are reachable without the map.
-  const subRanking = useMemo<RankItem[] | undefined>(() => {
-    if (scope.level === "country" && regionShown.length) {
-      const regionNames = new Map(regions.map((item) => [item.id, item.name]));
-      return regionShown.map((item) => ({ id: item.geographyId, name: regionNames.get(item.geographyId) ?? "", value: item.value, sample: item.sample,
-        format: definition.format, label: t("{measure}, statistične regije", { measure }), unit: REGION_FORMS, populationSample }));
-    }
-    if (!sub || !municipalityId) return undefined;
-    const values = new Map(subAreas.values.map((item) => [item.geographyId, item]));
-    const municipality = names.get(municipalityId) ?? "";
-    const label = sub.level === "city_district" ? t("četrtne skupnosti v občini {municipality}", { municipality }) : t("naselja v občini {municipality}", { municipality });
-    return sub.shapes.map((shape) => {
-      const item = values.get(shape.id);
-      return { id: shape.id, name: shape.name, value: item?.value ?? null, sample: item?.sample ?? 0, pooled: item?.pooled,
-        format: METRICS.salePrice.format, label, unit: sub.level === "city_district" ? DISTRICT_FORMS : NOUN_FORMS.naselje };
-    });
-  }, [definition, measure, municipalityId, names, populationSample, regionShown, regions, scope.level, sub, subAreas.values]);
+  const { ranking, subRanking } = useExplorerRankings({ scope, layer, group: state.group, municipalityId, regions, municipalities, names, shown, regionShown, sub, subValues: subAreas.values });
 
   // The area under the middle of the map, when it is not the one in the panel: one tap opens it (its value is in the hover tooltip, not here).
   const inView = useMemo(() => {
@@ -204,10 +115,11 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
     if (!hit || hit.id === scope.id) return undefined;
     return { id: hit.id, name: hit.name };
   }, [fine.shapes, mapLevel, municipalShapes, regionShapes, scope.id, streetLevel, view]);
-  const scrollToPanel = () => { if (window.matchMedia?.("(max-width: 900px)").matches) requestAnimationFrame(() => document.getElementById("area-title")?.scrollIntoView({ block: "start" })); };
+  const scrollToPanel = () => { if (isPhone()) requestAnimationFrame(() => document.getElementById("area-title")?.scrollIntoView({ block: "start" })); };
   const openArea = (id: number) => { navigate({ g: id, building: undefined, selected: undefined }); scrollToPanel(); };
   const scopeValue = scope.id == null ? undefined
-    : ((mapLevel === "statistical_region" ? regionPaint : paint).get(scope.id) ?? fineAreaPaint.get(scope.id) ?? subPaint.get(scope.id))?.value;
+    : ((mapLevel === "statistical_region" ? scales.regionPaint : scales.paint).get(scope.id) ?? scales.fineAreaPaint.get(scope.id) ?? scales.subPaint.get(scope.id))?.value;
+  const fineShown = mapLevel === "fine" && fine.shapes.length > 0;
 
   // ------------------------------------------------------------ notices
   const notice = area.status === "failed" ? <LoadFailed retry={area.retry}>{t("Območja trenutno ni bilo mogoče naložiti (povezava ali strežnik).")}</LoadFailed> // i18n-ignore (code, not text)
@@ -236,7 +148,7 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
           <button type="button" className="ghost" onClick={() => setNewBuildingId(undefined)}>{t("Zapri")}</button>
         </section>}
         {state.value
-          ? <ErrorBoundary name="value check" resetKey={`value-${state.building?.ko ?? ""}-${state.building?.st ?? ""}-${selectedId ?? ""}`} fallback={() => <div className="module open">
+          ? <ErrorBoundary name="value check" resetKey={`value-${state.building ? buildingKey(state.building) : ""}-${selectedId ?? ""}`} fallback={() => <div className="module open">
               <p className="error" role="alert">{t("Ocene za to nepremičnino ni bilo mogoče prikazati.")}</p>
               <button type="button" className="ghost" onClick={() => navigate({ value: false })}>{t("Nazaj na trg")}</button></div>}>
             <ValueCheck building={state.building} transactionId={state.selected?.kind === "sale" ? state.selected.id : undefined} municipalityId={municipalityId}
@@ -246,7 +158,7 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
               onComparables={setComparables} onHighlight={setHighlight} onComparable={openComparable}/>
           </ErrorBoundary> // i18n-ignore (code, not text)
           : state.building || state.selected
-          ? <ErrorBoundary name="building" resetKey={`building-${state.building?.ko ?? ""}-${state.building?.st ?? ""}-${selectedId ?? ""}`}>
+          ? <ErrorBoundary name="building" resetKey={`building-${state.building ? buildingKey(state.building) : ""}-${selectedId ?? ""}`}>
             <BuildingView state={state} navigate={navigate} cutoff={cutoff} scope={scope} parents={parents} building={building}/>
           </ErrorBoundary> // i18n-ignore (code, not text)
           : areaLoading ? <article className="area-panel" aria-busy="true"><p className="muted" role="status">{t("Nalagam območje …")}</p></article>
@@ -266,19 +178,20 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
         <ErrorBoundary name="map" resetKey="map" fallback={() => <p className="fallback" role="status">{t("Zemljevid v tem brskalniku ni na voljo. Območje izberite z iskalnikom zgoraj.")}</p>}>
           <Suspense fallback={<p className="fallback" role="status">{t("Nalagam zemljevid …")}</p>}><ExplorerMap
             municipalities={mapLevel === "statistical_region" ? regionShapes : municipalShapes} regions={regionShapes}
-            paint={mapLevel === "statistical_region" ? regionPaint : paint}
-            subAreas={comparablesShown ? [] : mapLevel === "fine" && fine.shapes.length ? fine.shapes : sub?.shapes ?? []} subPaint={mapLevel === "fine" && fine.shapes.length ? fineAreaPaint : subPaint}
-            buildings={comparablesShown ? [] : buildingDots} agreements={comparablesShown ? [] : agreementDots} selected={municipalityId ?? null}
+            paint={mapLevel === "statistical_region" ? scales.regionPaint : scales.paint}
+            subAreas={comparablesShown ? NO_SHAPES : fineShown ? fine.shapes : subShapes} subPaint={fineShown ? scales.fineAreaPaint : scales.subPaint}
+            buildings={comparablesShown ? NO_SHAPES : scales.buildingDots} agreements={comparablesShown ? NO_SHAPES : scales.agreementDots} selected={municipalityId ?? null}
             selectedSub={scope.level === "city_district" ? scope.id ?? null : (unit?.level === "settlement" ? unit.id : null)} focus={focus} marker={marker}
             comparables={comparableDots} highlight={highlight} radius={radius} floods={floodsOn && floodBox ? floods.data?.features ?? null : null}
             onComparable={(id) => { const item = comparables?.comparables.find((entry) => entry.transactionId === id); if (item) openComparable(item); }}
             onArea={openArea} onSubArea={openArea}
-            onBuilding={(key) => { const [ko, ...rest] = key.split("-"); navigate({ building: { ko: Number(ko), st: rest.join("-") }, selected: undefined }); }}
+            onBuilding={(key) => { const ref = parseBuildingKey(key); if (ref) navigate({ building: ref, selected: undefined }); }}
             onAgreement={(id) => {
               // A sale opens its own building (from the point), with that sale first.
-              if (id > 0) { const point = agreements.find((item) => item.id === id); navigate({ selected: { kind: rent ? "rent" : "sale", id }, building: point?.building ?? state.building }); return; }
-              setNewBuildingId(newBuildings[-1 - id]?.id);
+              const point = agreements.find((item) => item.id === id);
+              navigate({ selected: { kind: rent ? "rent" : "sale", id }, building: point?.building ?? state.building });
             }}
+            onNewBuilding={setNewBuildingId}
             onView={setView}/></Suspense>
         </ErrorBoundary>
         {inView && <button type="button" className="map-chip" onClick={() => openArea(inView.id)}>
@@ -286,9 +199,9 @@ export function ExplorerView({ cutoff }: { cutoff?: string }) {
         {comparables ? <ComparablesLegend count={comparables.comparables.length} radiusMeters={comparables.radiusMeters} trusted={comparables.trusted}/>
         : !(state.value && !state.building) && <MapLegend layer={layer} layers={layers} group={state.group} band={band} windows={windows} level={mapLevel}
           street={streetLevel} land={landPoints} buildingSpan={buildingSpan}
-          scales={{ municipal: municipalScale, region: regionScale, fine: fineScale, buildings: buildingScale }}
+          scales={{ municipal: scales.municipalScale, region: scales.regionScale, fine: scales.fineScale, buildings: scales.buildingScale }}
           pooled={{ municipal: shown.some((item) => item.pooled), fine: fine.values.some((item) => item.pooled) }} fineShown={fine.shapes.length > 0}
-          sub={sub && municipalityId ? { level: sub.level, municipality: names.get(municipalityId) ?? "", scale: subScale } : undefined}
+          sub={sub && municipalityId ? { level: sub.level, municipality: names.get(municipalityId) ?? "", scale: scales.subScale } : undefined}
           floods={{ on: floodsOn, available: floodBox != null, loading: floods.loading, failed: !!floods.error && !floods.data, truncated: !!floods.data?.truncated || floodClamped, onToggle: () => setFloodsOn(!floodsOn) }}
           onLayer={(next) => navigate({ layer: next }, true)}/>}
       </div>

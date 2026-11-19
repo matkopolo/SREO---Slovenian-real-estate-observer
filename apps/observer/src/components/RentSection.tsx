@@ -42,7 +42,7 @@ export function RentSection({ scope, parent, group, band, cutoff, years, salePer
 }) {
   // The panel remounts this section for another type (key), so the rental type starts from the panel's type.
   const [kind, setKind] = useState<RentGroup>(group === "house" || group === "commercial" || group === "garage" ? group : "apartment");
-  const type = RENT_TYPES.find((item) => item.id === kind)!;
+  const type = RENT_TYPES.find((item) => item.id === kind) ?? RENT_TYPES[0];
   // The size band only applies when the rental type is the type chosen above.
   // Flats: sizes renters think in ("dvosobno"); otherwise the panel's size band when the type matches.
   const [rentSize, setRentSize] = useState<string>();
@@ -50,12 +50,17 @@ export function RentSection({ scope, parent, group, band, cutoff, years, salePer
   const segment = useMemo(() => ({ propertyGroup: kind, ...(ownBand ? { minArea: ownBand.min, maxArea: ownBand.max } : kind === group && band ? { minArea: band.min, maxArea: band.max } : {}) }),
     [band, group, kind, ownBand]);
   const windows = useMemo(() => cutoff ? periodWindows(cutoff, years) : undefined, [cutoff, years]);
-  const base = windows ? `${scope.id ?? 0}|${JSON.stringify(segment)}|${windows.rents.current.from}|${windows.rents.current.to}` : null;
-  const overview = useLoad(base && `rent-overview|${base}`, (signal) => loadRentOverview(scope.id, segment, windows!.rents.current, signal));
-  const previousLoad = useLoad(base && `rent-previous|${base}`, (signal) => windows!.rents.previous ? loadRentOverview(scope.id, segment, windows!.rents.previous, signal) : Promise.resolve(null));
-  const ownTrend = useLoad(base && `rent-trend|${scope.id ?? 0}|${JSON.stringify(segment)}`, async (signal) => (await loadRentTrend(scope.id, segment, signal)).items);
-  const parentTrend = useLoad(base && parent ? `rent-trend|${parent.id ?? 0}|${JSON.stringify(segment)}` : null, async (signal) => (await loadRentTrend(parent!.id, segment, signal)).items);
-  const spread = useLoad(base && `rent-spread|${base}|${type.perUnit}`, (signal) => loadRentSpread(scope.id, segment, windows!.rents.current, type.perUnit ? "monthlyRent" : "rentPerSqm", signal));
+  const base = windows ? { id: scope.id, segment, windows, key: `${scope.id ?? 0}|${JSON.stringify(segment)}|${windows.rents.current.from}|${windows.rents.current.to}` } : null;
+  const overview = useLoad(base, (input) => `rent-overview|${input.key}`, (input, signal) => loadRentOverview(input.id, input.segment, input.windows.rents.current, signal));
+  const previousLoad = useLoad(base, (input) => `rent-previous|${input.key}`, (input, signal) => {
+    const previous = input.windows.rents.previous;
+    return previous ? loadRentOverview(input.id, input.segment, previous, signal) : Promise.resolve(null);
+  });
+  const ownTrend = useLoad(base, (input) => `rent-trend|${input.id ?? 0}|${JSON.stringify(input.segment)}`, async (input, signal) => (await loadRentTrend(input.id, input.segment, signal)).items);
+  const parentTrend = useLoad(base && parent ? { ...base, id: parent.id } : null, (input) => `rent-trend|${input.id ?? 0}|${JSON.stringify(input.segment)}`,
+    async (input, signal) => (await loadRentTrend(input.id, input.segment, signal)).items);
+  const spread = useLoad(base && { ...base, metric: type.perUnit ? "monthlyRent" as const : "rentPerSqm" as const }, (input) => `rent-spread|${input.key}|${input.metric}`,
+    (input, signal) => loadRentSpread(input.id, input.segment, input.windows.rents.current, input.metric, signal));
   const current = overview.data;
   const previous = previousLoad.data;
   const trend: { own?: RentalTimePoint[]; parent?: RentalTimePoint[] } = { own: ownTrend.data, parent: parentTrend.data };
@@ -64,7 +69,8 @@ export function RentSection({ scope, parent, group, band, cutoff, years, salePer
   const now = published(current);
   const before = published(previous);
   const value = (overview?: RentalOverview) => type.perUnit ? overview?.medianMonthlyRent : overview?.medianMonthlyRentPerSqm;
-  const change = value(now) != null && value(before) ? value(now)! / value(before)! - 1 : null;
+  const nowValue = value(now), beforeValue = value(before);
+  const change = nowValue != null && beforeValue ? nowValue / beforeValue - 1 : null;
   const yieldPercent = !type.perUnit && kind === group && now?.medianMonthlyRentPerSqm != null && salePerSqm ? now.medianMonthlyRentPerSqm * 12 / salePerSqm * 100 : null;
   const unit = type.perUnit ? t("€ na mesec") : t("€/m² na mesec");
   const points = (items?: RentalTimePoint[]) => (items ?? []).filter((point) => !point.incomplete)
@@ -86,9 +92,9 @@ export function RentSection({ scope, parent, group, band, cutoff, years, salePer
     </div>}
     <p className="area-lede">
       {overview.error ? <LoadFailed retry={overview.retry}/> : current === undefined ? t("Nalagam najeme …")
-        : now && value(now) != null ? <>{tx("Mediana najemnine {noun}{band}: {rent} na mesec{typical}, n = {n}{change}.", {
+        : now && nowValue != null ? <>{tx("Mediana najemnine {noun}{band}: {rent} na mesec{typical}, n = {n}{change}.", {
           noun: type.genitive, band: kind === group && band ? ` (${band.label})` : "",
-          rent: <strong>{type.perUnit ? euro(value(now)!) : `${decimal1(value(now)!)}${NBSP}€/m²`}</strong>,
+          rent: <strong>{type.perUnit ? euro(nowValue) : `${decimal1(nowValue)}${NBSP}€/m²`}</strong>,
           typical: typical ? ` ${typical}` : "", n: integer(type.perUnit ? now.monthlyRentSampleSize : now.rentPerSqmSampleSize),
           change: change != null ? `, ${percent(change, { signed: true })} ${t("glede na enako dolgo obdobje prej")}` : "" })}
           {yieldPercent != null && <> {tx("{term} {value} %.", { term: <Term text={GLOSSARY.donos}>{t("Bruto donos")}</Term>, value: decimal1(yieldPercent) })}</>}</>

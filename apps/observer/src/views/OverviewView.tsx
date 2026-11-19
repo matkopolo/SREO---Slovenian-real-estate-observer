@@ -22,7 +22,7 @@ const yearOf = (period: string) => Number(period.slice(0, 4));
  * "Pregled trga": the market in four numbers and five charts, for Slovenia or one area, flats or houses.
  * Every figure is from concluded sales (GURS ETN) over the lag-aware periods the explorer uses, so the two pages agree.
  */
-export function OverviewView({ cutoff }: { cutoff?: string }) {
+export function OverviewView({ cutoff }: { cutoff: string }) {
   const [initial] = useState(() => overviewState());
   const [areaId, setAreaId] = useState<number | undefined>(initial.g);
   const [group, setGroup] = useState<Group>(initial.group);
@@ -37,13 +37,13 @@ export function OverviewView({ cutoff }: { cutoff?: string }) {
   const regions = lists.data?.regions ?? [], municipalities = lists.data?.municipalities ?? [];
   const byId = useMemo(() => new Map([...(lists.data?.regions ?? []), ...(lists.data?.municipalities ?? [])].map((item) => [item.id, item])), [lists.data]);
   // A district or settlement (the explorer's area carried over) is not in the picker's lists: its name is looked up.
-  const other = useLoad(areaId && lists.data && !byId.has(areaId) ? `geography-${areaId}` : null, (signal) => loadGeography(areaId!, signal));
+  const other = useLoad(areaId && lists.data && !byId.has(areaId) ? areaId : null, (id) => `geography-${id}`, (id, signal) => loadGeography(id, signal));
   const area = areaId ? byId.get(areaId) ?? (other.data?.id === areaId ? other.data : undefined) : undefined;
   const areaName = area ? <Name>{area.name}</Name> : areaId ? "…" : t("Slovenija");
   const nouns = NOUNS[group];
   const segment = { propertyGroup: group };
-  // The lag-aware periods the explorer uses, once per cutoff; without a data status the clock stands in.
-  const base = cutoff ?? new Date().toISOString().slice(0, 10);
+  // The lag-aware periods the explorer uses, once per cutoff (the page waits for the data status, so these never move).
+  const base = cutoff;
   const periods = useMemo(() => ({ ...marketWindows(base), wide: periodWindows(base, 5).sales.current, lastYear: lastCompleteYear(base), label: periodWindows(base, 1).label }), [base]);
   const sales = periods.sales.current, previousSales = periods.sales.previous;
   const rents = periods.rents.current, previousRents = periods.rents.previous, rentYear = periods.rents.year;
@@ -105,23 +105,23 @@ export function OverviewView({ cutoff }: { cutoff?: string }) {
   const yearsOfWage = wage && price ? (TYPICAL_AREA[group] * price) / wage / 12 : null;
   const delta = (value: number | null) => value == null ? t("brez primerjave z letom prej") : t("{change} proti letu prej", { change: percent(value, { signed: true }) });
 
-  const ranked = [...(ranking.data ?? [])].sort((a, b) => a.value! - b.value!); // cheapest first
+  const ranked = (ranking.data ?? []).filter((item): item is AreaValue & { value: number } => item.value != null).sort((a, b) => a.value - b.value); // cheapest first
   // The two ends never share a municipality: with few published ones the list is simply split in half.
   const half = Math.min(SHOWN, Math.ceil(ranked.length / 2));
   const cheapest = ranked.slice(0, half), dearest = ranked.slice(Math.max(half, ranked.length - SHOWN)).reverse();
-  const rankMax = Math.max(1, ...ranked.map((item) => item.value!));
+  const rankMax = Math.max(1, ...ranked.map((item) => item.value));
   const ownRank = areaId ? ranked.findIndex((item) => item.geographyId === areaId) : -1;
   // The rank is said from the nearer end: "3. najcenejša" in the cheaper half, "2. najdražja" in the dearer half.
   const rankText = ownRank < 0 ? null : ownRank < ranked.length / 2
     ? tx("{area} je {rank}. najcenejša od {total} občin z objavljeno mediano.", { area: areaName, rank: ownRank + 1, total: ranked.length })
     : tx("{area} je {rank}. najdražja od {total} občin z objavljeno mediano.", { area: areaName, rank: ranked.length - ownRank, total: ranked.length });
-  const bar = (item: AreaValue) => ({
-    key: item.geographyId, name: <Name>{byId.get(item.geographyId)?.name ?? ""}</Name>, value: item.value!, href: areaHref(item.geographyId),
+  const bar = (item: AreaValue & { value: number }) => ({
+    key: item.geographyId, name: <Name>{byId.get(item.geographyId)?.name ?? ""}</Name>, value: item.value, href: areaHref(item.geographyId),
     current: item.geographyId === areaId, pooled: !!item.pooled, note: item.pooled ? t("({years} let)", { years: item.pooled }) : undefined,
-    title: `${byId.get(item.geographyId)?.name ?? ""}: ${integer(item.value!)} €/m², ${t("{count} prodaj", { count: integer(item.sample) })}`,
+    title: `${byId.get(item.geographyId)?.name ?? ""}: ${integer(item.value)} €/m², ${t("{count} prodaj", { count: integer(item.sample) })}`,
   });
-  const yields = [...(regional.data ?? [])].sort((a, b) => b.value! - a.value!).map((item) => ({
-    key: item.geographyId, name: <Name>{byId.get(item.geographyId)?.name ?? ""}</Name>, value: item.value!, current: item.geographyId === area?.parentId || item.geographyId === areaId,
+  const yields = (regional.data ?? []).filter((item): item is AreaValue & { value: number } => item.value != null).sort((a, b) => b.value - a.value).map((item) => ({
+    key: item.geographyId, name: <Name>{byId.get(item.geographyId)?.name ?? ""}</Name>, value: item.value, current: item.geographyId === area?.parentId || item.geographyId === areaId,
     note: item.rent != null ? t("najem {rent} €/m²", { rent: decimal1(item.rent) }) : undefined,
     title: item.rent != null && item.price != null ? `${byId.get(item.geographyId)?.name ?? ""}: ${t("najemnina {rent} €/m² na mesec, cena {price} €/m²", { rent: decimal1(item.rent), price: integer(item.price) })}` : undefined,
   }));

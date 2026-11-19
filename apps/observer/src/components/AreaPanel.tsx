@@ -1,7 +1,7 @@
-import { useEffect, useEffectEvent, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import {
   FIRST_SALE_YEAR, isDwelling, loadAreaConstruction, loadInflationBetween, loadRecent, loadSaleOverview, loadSpread, periodWindows, shiftWindow,
-  type Geography, type LandScope, type Period, type PropertyGroup, type Segment, type TimePoint,
+  type DateWindow, type Distribution, type Geography, type LandScope, type Period, type PropertyGroup, type Segment, type TimePoint,
 } from "../api";
 import { areaName, Calculator, Cite, CompareTable, Construction, Housing, loadPooledSale, Population, publishedPrice, publishedRent, useArea, type PooledSale, type Scope } from "./AreaModules";
 import { AreaSearch } from "./AreaSearch";
@@ -11,24 +11,29 @@ import { Histogram, LineChart, RangeBar, ScaleStrip } from "./charts";
 import { LoadFailed, LoadState } from "./LoadState";
 import { GLOSSARY, Term } from "./Term";
 import { retryFailed, useLoad, type Load } from "../hooks/useLoad";
-import { capitalise, change, date, decimal1, euro, instalment, integer, NBSP, percent, perSqm, titleCase } from "../format";
-
-const percentSigned = (fraction: number) => percent(fraction, { signed: true });
+import { capitalise, change, date, decimal1, euro, instalment, integer, NBSP, percentSigned, perSqm, titleCase } from "../format";
 import { MIN_SAMPLE } from "../metrics";
 import { ALL_SIZES, LAND_GENITIVE, LAND_SCOPES, NOUNS, SIZE_BANDS, sizeBand, type Band } from "../nouns";
 import { count, NOUN_FORMS, type Forms } from "../plural";
 import { Name, t, tx } from "../i18n";
+import { hasCoarsePointer, prefersReducedMotion } from "../layout";
 import { ABOUT, areaHref } from "../url-state";
+import "./area-panel.css";
 
 /** Below this many sales a median is not shown at all; the individual sales are listed instead. */
 const LIST_INSTEAD = 10;
+/** The pooled window thin areas borrow, and the span the individual sales are counted over. */
+const POOLED_YEARS = 5;
+/** How long "Povezava kopirana" stays. */
+const TOAST_MS = 2000;
 
 /** Too few sales for a median (rural areas): still say how many and for how much, from the last five years. */
 function FewSales({ scopeId, segment, cutoff }: { scopeId?: number; segment: Segment; cutoff?: string }) {
-  const summary = useLoad(cutoff ? `few-sales|${scopeId ?? 0}|${JSON.stringify(segment)}|${cutoff}` : null, async (signal) => {
-    const response = await loadRecent(scopeId, segment, "sale", periodWindows(cutoff!, 5).sales.current, signal, { limit: 100 });
-    const prices = response.items.filter((item) => item.representative && item.amount != null).map((item) => item.amount!);
-    const perSqmValues = response.items.filter((item) => item.representative && item.amountPerSqm != null).map((item) => item.amountPerSqm!);
+  const summary = useLoad(cutoff ? { cutoff, scopeId, segment } : null, (input) => `few-sales|${input.scopeId ?? 0}|${JSON.stringify(input.segment)}|${input.cutoff}`, async (input, signal) => {
+    const response = await loadRecent(input.scopeId, input.segment, "sale", periodWindows(input.cutoff, POOLED_YEARS).sales.current, signal, { limit: 100 });
+    const representative = response.items.filter((item) => item.representative);
+    const prices = representative.flatMap((item) => item.amount == null ? [] : [item.amount]);
+    const perSqmValues = representative.flatMap((item) => item.amountPerSqm == null ? [] : [item.amountPerSqm]);
     if (response.total < 3 || prices.length < 2) return null;
     return { total: response.total, low: Math.min(...prices), high: Math.max(...prices),
       lowSqm: perSqmValues.length ? Math.min(...perSqmValues) : undefined, highSqm: perSqmValues.length ? Math.max(...perSqmValues) : undefined };
@@ -40,18 +45,21 @@ function FewSales({ scopeId, segment, cutoff }: { scopeId?: number; segment: Seg
 
 interface RankItem { id: number; name: string; value: number | null; sample: number; format: (value: number) => string; label: string; pooled?: number; populationSample?: boolean; unit?: Forms }
 
-interface TypeFigures { sale?: PooledSale["sale"]; previous?: PooledSale["sale"]; spread?: import("../api").Distribution; pooled?: { years: number; sale: PooledSale["sale"] } | null; wide?: PooledSale["sale"]; failed: boolean }
+interface TypeFigures { sale?: PooledSale["sale"]; previous?: PooledSale["sale"]; spread?: Distribution; pooled?: { years: number; sale: PooledSale["sale"] } | null; wide?: PooledSale["sale"]; failed: boolean }
 
 /** Sales median, change and spread for one property type, pooling 3 or 5 years when the period is too thin. */
 function useTypeFigures(scope: Scope, group: PropertyGroup, cutoff: string | undefined, years: Period, landScope: LandScope = "strict", band?: Band): { figures: TypeFigures; loads: Array<Load<unknown>> } {
   const segment: Segment = { propertyGroup: group, landScope, minArea: band?.min, maxArea: band?.max };
-  const base = cutoff ? `${scope.id ?? 0}|${JSON.stringify(segment)}|${cutoff}|${years}` : null;
   const windows = cutoff ? periodWindows(cutoff, years) : undefined;
-  const sale = useLoad(base && `area-sale|${base}`, (signal) => loadPooledSale(scope.id, segment, cutoff!, years, signal));
-  const previous = useLoad(base && windows?.sales.previous ? `area-sale-previous|${base}` : null, (signal) => loadSaleOverview(scope.id, segment, windows!.sales.previous!, signal));
+  const base = cutoff ? { id: scope.id, segment, cutoff, years, key: `${scope.id ?? 0}|${JSON.stringify(segment)}|${cutoff}|${years}` } : null;
+  const sale = useLoad(base, (input) => `area-sale|${input.key}`, (input, signal) => loadPooledSale(input.id, input.segment, input.cutoff, input.years, signal));
+  const previousWindow = windows?.sales.previous;
+  const previous = useLoad(base && previousWindow ? { ...base, window: previousWindow } : null, (input) => `area-sale-previous|${input.key}`,
+    (input, signal) => loadSaleOverview(input.id, input.segment, input.window, signal));
   // The spread of the window the median comes from (the period's own, or the pooled one).
   const spreadWindow = sale.data?.sale.isPublishable ? windows?.sales.current : sale.data?.fallback?.window;
-  const spread = useLoad(base && spreadWindow ? `spread|${base}|${spreadWindow.from}` : null, (signal) => loadSpread(scope.id, spreadWindow!, segment, "sale", signal));
+  const spread = useLoad(base && spreadWindow ? { ...base, window: spreadWindow } : null, (input) => `spread|${input.key}|${input.window.from}`,
+    (input, signal) => loadSpread(input.id, input.window, input.segment, "sale", signal));
   const fallback = sale.data?.fallback;
   return {
     figures: { sale: sale.data?.sale, previous: previous.data, spread: spread.data, pooled: fallback ? { years: fallback.years, sale: fallback.sale } : sale.data ? null : undefined,
@@ -94,10 +102,10 @@ export function AreaPanel({ scope, parents: path, group, years, cutoff, onGroup,
 
   // Land: unless the user picked a use, show the one with most sales here (rural areas sell farmland, not building plots).
   // Counted over five years: in rural areas a single year often has no sales of any use.
-  const landAuto = useLoad(group === "land" && !landChosen && cutoff ? `land-auto|${scope.id ?? 0}|${cutoff}` : null, async (signal) => {
+  const landAuto = useLoad(group === "land" && !landChosen && cutoff ? { cutoff, id: scope.id } : null, (input) => `land-auto|${input.id ?? 0}|${input.cutoff}`, async (input, signal) => {
     const uses = ["strict", "agricultural", "forest"] as const;
-    const span = periodWindows(cutoff!, 5).sales.current;
-    const counts = await Promise.all(uses.map(async (use) => (await loadSaleOverview(scope.id, { propertyGroup: "land", landScope: use }, span, signal)).transactionCount ?? 0));
+    const span = periodWindows(input.cutoff, POOLED_YEARS).sales.current;
+    const counts = await Promise.all(uses.map(async (use) => (await loadSaleOverview(input.id, { propertyGroup: "land", landScope: use }, span, signal)).transactionCount ?? 0));
     return { best: uses[counts.indexOf(Math.max(...counts))], any: Math.max(...counts) > 0 };
   });
   const pickLand = useEffectEvent((found: { best: LandScope; any: boolean }) => { if (found.best !== landScope && found.any) onLandScope?.(found.best, true); });
@@ -111,9 +119,9 @@ export function AreaPanel({ scope, parents: path, group, years, cutoff, onGroup,
   const versus = windows?.custom ? t("glede na enako dolgo obdobje prej") : years === 1 ? t("v letu dni")
     : (windows?.years ?? 1) < 5 ? t("glede na prejšnja {years}", { years: count(windows?.years ?? 1, NOUN_FORMS.leto) }) : t("glede na prejšnjih {years}", { years: count(windows?.years ?? 1, NOUN_FORMS.leto) });
   // CPI between the middles of the two 12-month windows, so the real change matches the nominal comparison.
-  const inflation = useLoad(cutoff ? `inflation-year|${cutoff}` : null, async (signal) => {
-    const { sales } = periodWindows(cutoff!, 1);
-    const middle = (window: { from: string; to: string }) => `${shiftWindow(window, 6).to.slice(0, 7)}-01`;
+  const inflation = useLoad(cutoff ?? null, (value) => `inflation-year|${value}`, async (value, signal) => {
+    const { sales } = periodWindows(value, 1);
+    const middle = (span: DateWindow) => `${shiftWindow(span, 6).to.slice(0, 7)}-01`;
     return sales.previous ? (await loadInflationBetween(middle(sales.previous), middle(sales.current), signal)).factor : null;
   }).data;
   // One notice for the whole panel when some figures could not be loaded; each part then shows "—".
@@ -122,6 +130,8 @@ export function AreaPanel({ scope, parents: path, group, years, cutoff, onGroup,
   const retryAll = () => { retryFailed(panelLoads)(); for (const data of [area, ...parentData]) if (data.failed) data.retry(); };
   const real = yoy != null && inflation ? (1 + yoy) / inflation - 1 : null;
   const periodText = windows?.label ?? "";
+  const town = path.find((item) => item.level === "municipality");
+  const bands = SIZE_BANDS[group];
 
   return <article className="area-panel" aria-labelledby="area-title">
     <nav className="breadcrumb" aria-label={t("Pot do območja")}>
@@ -129,7 +139,7 @@ export function AreaPanel({ scope, parents: path, group, years, cutoff, onGroup,
         <li aria-current="page">{areaName(scope)}</li></ol>
     </nav>
     <div className="title-row">
-      {street ? <h1 id="area-title" className="area-title"><Name>{titleCase(street)}</Name><span className="title-town">, {areaName(scope)}</span></h1> : <h1 id="area-title" className="area-title">{scope.level === "city_district" ? <><Name>{scope.name}</Name>{path.find((item) => item.level === "municipality") && <span className="title-town">, <Name>{path.find((item) => item.level === "municipality")!.name}</Name></span>}</> : areaName(scope)}</h1>}
+      {street ? <h1 id="area-title" className="area-title"><Name>{titleCase(street)}</Name><span className="title-town">, {areaName(scope)}</span></h1> : <h1 id="area-title" className="area-title">{scope.level === "city_district" ? <><Name>{scope.name}</Name>{town && <span className="title-town">, <Name>{town.name}</Name></span>}</> : areaName(scope)}</h1>}
       <ShareLink/>
     </div>
     {failed && <LoadFailed retry={retryAll}>{t("Nekaterih podatkov za to območje ni bilo mogoče naložiti.")}</LoadFailed>}
@@ -150,7 +160,7 @@ export function AreaPanel({ scope, parents: path, group, years, cutoff, onGroup,
 
     <nav className="jump" aria-label={t("Na tej strani")}>
       {[["sales-sale", t("Prodaje")], ...(group === "land" ? [] : [["rent-title", t("Najemi")]]), ["trend-title", t("Gibanje cen")], ...(isDwelling(group) ? [["afford-title", t("Dostopnost")]] : [])].map(([id, label]) =>
-        <button key={id} type="button" onClick={() => { const target = document.getElementById(id); target?.scrollIntoView({ block: "start", behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); (target as HTMLElement | null)?.focus?.({ preventScroll: true }); }}>{label}</button>)}
+        <button key={id} type="button" onClick={() => { const target = document.getElementById(id); target?.scrollIntoView({ block: "start", behavior: prefersReducedMotion() ? "auto" : "smooth" }); target?.focus({ preventScroll: true }); }}>{label}</button>)}
     </nav>
     <div className="type-pair" role="group" aria-label={t("Vrsta nepremičnine (izbira velja tudi za zemljevid)")}>
       {(["apartment", "house"] as const).map((item) => <TypeCard key={item} group={item} figures={figuresOf[item]}
@@ -166,13 +176,13 @@ export function AreaPanel({ scope, parents: path, group, years, cutoff, onGroup,
     </div>}
     {group === "land" && !landChosen && landAuto.data?.best === landScope && <p className="muted">{t("Prikazana {use} zemljišča, ker je v tem območju največ teh prodaj.", { use: LAND_SCOPES.find((item) => item.id === landScope)?.label.toLowerCase() })}</p>}
 
-    {SIZE_BANDS[group] && <div className="segmented small wrap" role="group" aria-label={t("Velikost (velja tudi za zemljevid)")}>
+    {bands && <div className="segmented small wrap" role="group" aria-label={t("Velikost (velja tudi za zemljevid)")}>
       <span className="segmented-label">{t("Velikost:")}</span>
       <button type="button" aria-pressed={!band} onClick={() => onSize?.(undefined)}>{ALL_SIZES.label}</button>
-      {SIZE_BANDS[group]!.map((item) => <button key={item.id} type="button" aria-pressed={band?.id === item.id} onClick={() => onSize?.(item.id)}>{item.label}</button>)}
+      {bands.map((item) => <button key={item.id} type="button" aria-pressed={band?.id === item.id} onClick={() => onSize?.(item.id)}>{item.label}</button>)}
     </div>}
     {!street && <SalesList scopeId={scope.id} scopeName={scope.name} segment={segment} window={windows?.sales.current} noun={noun.genitive} linkArea={scope.id}
-      fallback={cutoff && !windows?.custom ? periodWindows(cutoff, 5).sales.current : undefined}/>}
+      fallback={cutoff && !windows?.custom ? periodWindows(cutoff, POOLED_YEARS).sales.current : undefined}/>}
 
     {isDwelling(group) && <Affordability scope={scope} parents={parents} area={area} parentData={parentData} group={group}/>}
 
@@ -250,7 +260,7 @@ function TypeCard({ group, figures, active, onClick, years, compact = false, lab
       <span className="type-meta">{thinCounts(sale.transactionCount, figures.wide?.transactionCount)}{sale.transactionCount > 0 && sale.transactionCount < LIST_INSTEAD ? `; ${t("posamezne spodaj")}` : ""}</span>
     </> : <>
       <span className="type-value">{integer(price)}{NBSP}€/m²</span>
-      <span className="type-meta">{t("n = {n} reprezentativnih od {sales}", { n: integer(shown!.pricePerSqmSampleSize), sales: count(shown!.transactionCount, NOUN_FORMS.prodaja) })}
+      <span className="type-meta">{t("n = {n} reprezentativnih od {sales}", { n: integer(shown?.pricePerSqmSampleSize ?? 0), sales: count(shown?.transactionCount ?? 0, NOUN_FORMS.prodaja) })}
         {figures.pooled ? `, ${t("združeno {years}", { years: count(figures.pooled.years, NOUN_FORMS.leto) })}` : typeof years === "string" ? `, ${years.replace("-", "–")}` : years > 1 ? `, ${count(years, NOUN_FORMS.leto)}` : ""}{yoy != null && <>, {percentSigned(yoy)}</>}</span>
       {percentiles?.p25 != null && percentiles.p50 != null && percentiles.p75 != null && <RangeBar p25={percentiles.p25} p50={percentiles.p50} p75={percentiles.p75}
         min={percentiles.p05 ?? percentiles.p25 * 0.7} max={percentiles.p95 ?? percentiles.p75 * 1.3} unit="€/m²" label={t("Razpon cen {noun}", { noun: noun.genitive })}/>}
@@ -274,8 +284,9 @@ function Trend({ scope, parents, parentData, area, group, compared = 0 }: {
     .map((point) => ({ x: Number(point.period.slice(0, 4)), y: point.isPublishable ? point.medianPricePerSqm ?? null : null }));
   const last = Math.max(0, ...series.flatMap((item) => points(item.prices).map((point) => point.x)));
   const visible = series.map((item) => ({ name: item.scope.name, className: item.className, points: points(item.prices).filter((point) => point.x > last - span) }));
-  const own = visible[0].points.filter((point) => point.y != null);
-  const finding = own.length > 1 ? tx("{area}: {change} od leta {year}", { area: areaName(scope), change: percentSigned(own.at(-1)!.y! / own[0].y! - 1), year: own[0].x })
+  const own = visible[0].points.flatMap((point) => point.y == null ? [] : [{ x: point.x, y: point.y }]);
+  const firstOwn = own[0], lastOwn = own.at(-1);
+  const finding = firstOwn && lastOwn && own.length > 1 ? tx("{area}: {change} od leta {year}", { area: areaName(scope), change: percentSigned(lastOwn.y / firstOwn.y - 1), year: firstOwn.x })
     : t("Mediana cene {noun} po letih", { noun: NOUNS[group].genitive });
   return <section className="module open" aria-labelledby="trend-title">
     <div className="module-head">
@@ -335,8 +346,9 @@ function Affordability({ scope, parents, area, parentData, group }: {
 function Ranking({ items, onSelect, current }: { items: RankItem[]; onSelect?: (id: number) => void; current?: number }) {
   const [descending, setDescending] = useState(true);
   // Values of the selected period first; pooled (3/5-year) values are a separate, labelled group.
-  const order = (a: RankItem, b: RankItem) => (a.pooled ? 1 : 0) - (b.pooled ? 1 : 0) || (descending ? b.value! - a.value! : a.value! - b.value!);
-  const published = items.filter((item) => item.value != null).sort(order);
+  type Published = RankItem & { value: number };
+  const order = (a: Published, b: Published) => (a.pooled ? 1 : 0) - (b.pooled ? 1 : 0) || (descending ? b.value - a.value : a.value - b.value);
+  const published = items.filter((item): item is Published => item.value != null).sort(order);
   const withheld = items.length - published.length;
   return <>
     <div className="segmented small" role="group" aria-label={t("Razvrsti")}>
@@ -346,7 +358,7 @@ function Ranking({ items, onSelect, current }: { items: RankItem[]; onSelect?: (
     <ol className="ranking-list">{published.slice(0, current ? published.length : 15).map((item, index) => <li key={item.id} aria-current={item.id === current ? "true" : undefined}>
       <span className="rank">{index + 1}.</span>
       <button type="button" className="link" onClick={() => onSelect?.(item.id)}><Name>{item.name}</Name></button>
-      <span className="rank-value">{item.format(item.value!)}</span><span className="cell-note">{item.populationSample ? "" : `n = ${integer(item.sample)}`}{item.pooled ? `, ${t("združeno {years}", { years: count(item.pooled, NOUN_FORMS.leto) })}` : ""}</span></li>)}</ol>
+      <span className="rank-value">{item.format(item.value)}</span><span className="cell-note">{item.populationSample ? "" : `n = ${integer(item.sample)}`}{item.pooled ? `, ${t("združeno {years}", { years: count(item.pooled, NOUN_FORMS.leto) })}` : ""}</span></li>)}</ol>
     {withheld > 0 && <details className="withheld">
       <summary>{t("{areas} z manj kot {min} posli (brez mediane)", { areas: count(withheld, items[0]?.unit ?? NOUN_FORMS.občina), min: MIN_SAMPLE })}</summary>
       <ul className="withheld-list">{items.filter((item) => item.value == null).sort((a, b) => b.sample - a.sample || a.name.localeCompare(b.name, "sl")).map((item) => // i18n-ignore (Slovenian collation of register names)
@@ -359,8 +371,8 @@ function Ranking({ items, onSelect, current }: { items: RankItem[]; onSelect?: (
 
 function SpreadModule({ scope, segment, cutoff, years, noun }: { scope: Scope; segment: Segment; cutoff?: string; years: Period; noun: string }) {
   const [open, setOpen] = useState(false);
-  const spread = useLoad(open && cutoff ? `spread|${scope.id ?? 0}|${JSON.stringify(segment)}|${cutoff}|${years}|module` : null,
-    (signal) => loadSpread(scope.id, periodWindows(cutoff!, years).sales.current, segment, "sale", signal));
+  const spread = useLoad(open && cutoff ? { cutoff, id: scope.id, segment, years } : null, (input) => `spread|${input.id ?? 0}|${JSON.stringify(input.segment)}|${input.cutoff}|${input.years}|module`,
+    (input, signal) => loadSpread(input.id, periodWindows(input.cutoff, input.years).sales.current, input.segment, "sale", signal));
   return <details className="module" onToggle={(event) => setOpen((event.target as HTMLDetailsElement).open)}>
     <summary>{t("Porazdelitev cen {noun}", { noun })}</summary>
     {open && <LoadState load={spread}>{(data) => !data.isPublishable ? <p className="muted">{t("Premalo poslov za porazdelitev.")}</p> // i18n-ignore (code, not text)
@@ -370,7 +382,8 @@ function SpreadModule({ scope, segment, cutoff, years, noun }: { scope: Scope; s
 
 function NewSupply({ scope, cutoff }: { scope: Scope; cutoff?: string }) {
   const [open, setOpen] = useState(false);
-  const summary = useLoad(open && cutoff ? `construction|${scope.id ?? 0}|${cutoff}` : null, (signal) => loadAreaConstruction(scope.id, Number(cutoff!.slice(0, 4)) - 1, signal));
+  const summary = useLoad(open && cutoff ? { cutoff, id: scope.id } : null, (input) => `construction|${input.id ?? 0}|${input.cutoff}`,
+    (input, signal) => loadAreaConstruction(input.id, Number(input.cutoff.slice(0, 4)) - 1, signal));
   return <details className="module" onToggle={(event) => setOpen((event.target as HTMLDetailsElement).open)}>
     <summary>{t("Nova gradnja")}</summary>
     {summary.error ? <LoadFailed retry={summary.retry}/> : <Construction summary={summary.data} name={scope.level === "municipality" ? t("za občino {name}", { name: scope.name }) : scope.level === "country" ? t("za Slovenijo") : scope.level === "statistical_region" ? t("za občine regije {name}", { name: scope.name }) : t("za občino, v kateri leži {name}", { name: scope.name })} cutoff={cutoff}/>}
@@ -380,13 +393,16 @@ function NewSupply({ scope, cutoff }: { scope: Scope; cutoff?: string }) {
 /** Copy the link of exactly this view (area, type, size, period, layer) to share or bookmark: an icon button by the title. */
 function ShareLink() {
   const [done, setDone] = useState(false);
+  // The toast's timer: cleared on the next click and on unmount, so it never sets state on a gone component.
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
   const label = t("Kopiraj povezavo");
   return <span className="share">
     <button type="button" className="share-link" aria-label={label} title={label} onClick={() => {
       const url = window.location.href;
-      const finish = () => { setDone(true); setTimeout(() => setDone(false), 2000); };
-      if (navigator.share && window.matchMedia?.("(pointer: coarse)").matches) navigator.share({ url, title: document.title }).catch(() => undefined);
-      else navigator.clipboard?.writeText(url).then(finish).catch(() => undefined);
+      const finish = () => { setDone(true); clearTimeout(timer.current); timer.current = setTimeout(() => setDone(false), TOAST_MS); };
+      if (typeof navigator.share === "function" && hasCoarsePointer()) navigator.share({ url, title: document.title }).catch(() => undefined);
+      else void navigator.clipboard.writeText(url).then(finish).catch(() => undefined);
     }}>
       <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/>
