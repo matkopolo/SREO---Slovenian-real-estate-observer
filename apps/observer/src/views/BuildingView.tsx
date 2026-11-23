@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent } from "react";
 import { ApiError, loadSaleAreas, loadSpread, periodWindows, type BuildingStatistics } from "../api";
-import { addressLabel } from "../components/AreaSearch";
+import { addressLabel } from "../address";
 import type { Scope } from "../components/AreaModules";
 import { BuildingStack, TransactionEvidence } from "../components/BuildingEvidence";
 import { LoadFailed } from "../components/LoadState";
@@ -9,6 +9,7 @@ import { useLoad, type Load } from "../hooks/useLoad";
 import { Name, t, tx } from "../i18n";
 import { sizeBand } from "../nouns";
 import { areaHref, type ExplorerState } from "../url-state";
+import { TITLE, useDocumentTitle, viewTitle } from "../title";
 
 const buildingTitle = (building: BuildingStatistics) => addressLabel(building) // i18n-ignore (code, not text)
   ? <Name>{addressLabel(building)}</Name> : t("Stavba {id}", { id: `${building.cadastralMunicipalityCode}-${building.buildingNumber}` });
@@ -41,8 +42,13 @@ export function BuildingView({ state, navigate, cutoff, scope, parents, building
   const scopeName = scope.id == null ? scope.name : <Name>{scope.name}</Name>;
   const leave = { building: undefined, selected: undefined };
 
-  return <article className="area-panel" aria-label={t("Stavba in posli")}>
-    <button type="button" className="back-link" onClick={() => navigate(leave)}>{tx("← Nazaj: {area}", { area: scopeName })}</button>
+  const plainTitle = building ? addressLabel(building) || t("Stavba {id}", { id: `${building.cadastralMunicipalityCode}-${building.buildingNumber}` }) : null;
+  useDocumentTitle(plainTitle ? viewTitle(plainTitle) : null, TITLE.building);
+
+  // The transaction keeps one place in the tree whether or not the building has arrived, so it is never re-mounted
+  // (its content does not blink and focus on its heading survives).
+  return <article className="area-panel" aria-label={t("Stavba in posli")} aria-busy={load.loading && !state.selected ? true : undefined}>
+    <button type="button" className="back-link" onClick={() => navigate(leave)}><span aria-hidden="true">←</span> {tx("Nazaj: {area}", { area: scopeName })}</button>
     <nav className="breadcrumb" aria-label={t("Pot do stavbe")}>
       <ol>{[...parents].reverse().map((item) => <li key={item.id ?? item.level}><a href={areaHref(item.id)} onClick={(event) => { event.preventDefault(); navigate({ g: item.id, ...leave }); }}>{item.id == null ? item.name : <Name>{item.name}</Name>}</a></li>)}
         {scope.id && <li><a href={areaHref(scope.id)} onClick={(event) => { event.preventDefault(); navigate(leave); }}><Name>{scope.name}</Name></a></li>}
@@ -50,11 +56,12 @@ export function BuildingView({ state, navigate, cutoff, scope, parents, building
     </nav>
     {missing && <p className="error" role="alert">{t("Stavbe k. o. {ko} / {number} nismo našli. Poiščite naslov zgoraj.", { ko: state.building?.ko, number: state.building?.st })}</p>}
     {load.error != null && !missing && <LoadFailed retry={load.retry}/>}
-    {load.loading && <p className="muted" role="status">{t("Nalagam stavbo …")}</p>}
+    {load.loading && !state.selected && <p className="note muted" role="status">{t("Nalagam stavbo\u00a0…")}</p>}
+    {building && !state.selected && <h1 className="area-title" tabIndex={-1}>{buildingTitle(building)}</h1>}
+    {state.selected && <TransactionEvidence key={`${state.selected.kind}${state.selected.id}`} selected={state.selected} building={building} primary
+      group={state.group} band={band} onChoose={(selected) => navigate({ selected })}
+      onBuilding={(ko, st) => { if (!state.building) navigate({ building: { ko, st } }, true); }}/>}
     {building && <>
-      {!state.selected && <h1 className="area-title">{buildingTitle(building)}</h1>}
-      {state.selected && <TransactionEvidence key={`first${state.selected.kind}${state.selected.id}`} selected={state.selected} building={building} primary
-        group={state.group} band={band} onChoose={(selected) => navigate({ selected })}/>}
       {state.selected && <h2 className="section-title">{tx("Stavba: {address}", { address: addressLabel(building) ? <Name>{addressLabel(building)}</Name> : `${building.cadastralMunicipalityCode}-${building.buildingNumber}` })}</h2>}
       <button type="button" className="value-button" onClick={() => navigate({ value: true })}>{t("Imate nepremičnino v tej stavbi? Ocenite, koliko je vredna danes")}</button>
       {/* One list, one count and one median: the building bar is drawn by BuildingStack from the same sales as its table. */}
@@ -63,8 +70,5 @@ export function BuildingView({ state, navigate, cutoff, scope, parents, building
           ? { name: scopeName, p25: percentiles.p25, p50: percentiles.p50, p75: percentiles.p75, p05: percentiles.p05 ?? undefined, p95: percentiles.p95 ?? undefined } : undefined}
         onChoose={(selected) => navigate({ selected })}/>
     </>}
-    {state.selected && !building && <TransactionEvidence key={`${state.selected.kind}${state.selected.id}`} selected={state.selected} primary
-      group={state.group} band={band} onChoose={(selected) => navigate({ selected })}
-      onBuilding={(ko, st) => { if (!state.building) navigate({ building: { ko, st } }, true); }}/>}
   </article>;
 }

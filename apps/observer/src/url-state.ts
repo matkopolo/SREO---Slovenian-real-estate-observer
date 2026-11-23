@@ -110,7 +110,7 @@ export function overviewState(hash: string = window.location.hash): { g?: number
 /** The area of the trends page ("#trendi?g=133"). */
 export const trendsArea = (hash: string = window.location.hash): number | undefined => positiveId(hashQuery(hash).get("g"));
 /** Rewrites the address without a history entry (choices on a page that Back should leave as a whole). */
-export const replaceHash = (hash: string): void => window.history.replaceState(null, "", hash);
+export const replaceHash = (hash: string): void => window.history.replaceState(window.history.state, "", hash);
 /** The market overview of an area (Slovenija without `g`), flats unless `houses`. */
 export function overviewHref(g?: number, houses = false): string {
   const query = new URLSearchParams();

@@ -61,7 +61,8 @@ it("shows the market of Slovenia in four tiles and five charts from the lag-awar
   const sold = screen.getByText("Prodaje v 12 mesecih").closest("div")!;
   expect(sold).toHaveTextContent(/5\.?685/);
   expect(sold).toHaveTextContent(/\+13,7\s%/);
-  const wage = screen.getByText("Leta neto plače za 60 m²").closest("div")!;
+  // The label's unit sits in its own element (.unit keeps its case inside the small-capital label).
+  const wage = screen.getByText((_, element) => element?.tagName === "DT" && element.textContent === "Leta neto plače za 60 m²").closest("div")!;
   expect(wage).toHaveTextContent(/9,9\slet/);                                // 60 × 2.965,78 / 1.500 / 12
   expect(api.fetched("from=2025-07-01&to=2026-06-30")).toBe(true);
   expect(api.fetched("from=2024-07-01&to=2025-06-30")).toBe(true);
@@ -78,7 +79,7 @@ it("shows the market of Slovenia in four tiles and five charts from the lag-awar
 
   // Rent against purchase: 9 × 12 / 2200 = 4,9 % beats 12 × 12 / 4000 = 3,6 %.
   const yields = within(screen.getByRole("list", { name: "Bruto donos po regijah" })).getAllByRole("listitem");
-  expect(yields[0]).toHaveTextContent(/Podravska.*4,9\s%.*najem 9,0\s€\/m²/);
+  expect(yields[0]).toHaveTextContent(/Podravska.*4,9\s%.*najem 9,0 · cena 2\.?200\s€\/m²/);
   expect(yields[1]).toHaveTextContent(/Osrednjeslovenska.*3,6\s%/);
 
   // The histogram names the median; the activity chart lists 36 months with the last two still incomplete.
@@ -94,6 +95,6 @@ it("switches to houses and an area, keeps the address, and prices 120 m² for a 
   await screen.findByRole("heading", { level: 1, name: "Pregled trga: Slovenija" });
   fireEvent.click(screen.getByRole("button", { name: "Hiše" }));
   expect(window.location.hash).toBe("#pregled-trga?vrsta=hise");
-  expect(await screen.findByText("Leta neto plače za 120 m²")).toBeInTheDocument();
+  expect(await screen.findByText((_, element) => element?.tagName === "DT" && element.textContent === "Leta neto plače za 120 m²")).toBeInTheDocument();
   expect(api.fetched("propertyGroup=house")).toBe(true);
 });

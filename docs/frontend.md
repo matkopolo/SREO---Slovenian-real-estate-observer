@@ -22,7 +22,9 @@ kept so earlier links work), bound to loopback only.
 | `#o-podatkih` | **O podatkih** (About the data): sources, methodology and data quality | `views/QualityView.tsx` (lazy-loaded) |
 
 `components/App.tsx` owns the masthead, page switch, language switch, data-status
-banner (`DataStatusBanner.tsx`, from `/api/v1/data-status`) and the source footer.
+banner (`DataStatusBanner.tsx`, from `/api/v1/data-status`), the Trends h1 with
+its part tabs (handed to the shown part's control row) and the one-line source
+footer.
 `ErrorBoundary.tsx` and `LoadState.tsx` give every view the same loading, empty
 and failure states.
 
@@ -181,9 +183,13 @@ their loading, failure and empty states.
 
 ## Provenance and attribution in the interface
 
-The footer of every page names the source (GURS ETN, CC BY 4.0, processed) and links to
-**O podatkih**. The footer on the Trends and About pages lists every source:
-GURS (ETN, RPE, Kataster nepremičnin), SURS, Banka Slovenije, ECB, OpenFreeMap and
-OpenStreetMap contributors, and states that the figures are informative and are
-not an official valuation or a loan offer. These disclosures must stay visible in
-any public deployment; see [data licensing and privacy](data-licensing-privacy.md).
+The sources are named once per page. The footer of every page is one line
+("Vir: GURS ETN, SURS, Banka Slovenije, DRSV, MOPE (CC BY 4.0) · podatki do …")
+that links to **O podatkih**, whose "Viri in pogoji uporabe" section lists every
+source with what it is used for and its terms (GURS ETN, RPE, Kataster
+nepremičnin and Evidenca vrednotenja, the energy certificate register, DRSV,
+SURS, Banka Slovenije, ECB, OpenStreetMap contributors, OpenMapTiles and
+OpenFreeMap) and states that the figures are informative and are not an official
+valuation or a loan offer. The register facts on a sale or value page keep their
+own per-register attribution line. These disclosures must stay visible in any
+public deployment; see [data licensing and privacy](data-licensing-privacy.md).

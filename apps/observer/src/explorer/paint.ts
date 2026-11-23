@@ -1,8 +1,9 @@
 import { marks } from "../palette";
 import type { AgreementPoint, MapBuilding, MunicipalityShape, PropertyGroup } from "../api";
-import { addressLabel } from "../components/AreaSearch";
+import { addressLabel } from "../address";
+import { tooFew, withheld } from "../components/Missing";
 import type { AreaPaint, MapAgreementPoint, MapBuildingPoint } from "../components/ExplorerMap";
-import { date, euro, integer, landArea } from "../format";
+import { date, euro, integer, landArea, withUnit } from "../format";
 import { t } from "../i18n";
 import { METRICS, type MetricId } from "../metrics";
 import { NOUNS } from "../nouns";
@@ -31,7 +32,7 @@ const byId = (values: AreaValue[]) => new Map(values.map((item) => [item.geograp
 /** Municipalities (or regions) coloured by the layer; labels name the period and sample, pooled values say so. */
 export function areaPaint(shapes: MunicipalityShape[], values: AreaValue[], { metric, ramp, period, countWithheld = false }: {
   metric: MetricId; ramp: (value: number | null) => string; period: string;
-  /** Name the count of a withheld area ("premalo poslov (12)"). */
+  /** Name the count of a withheld area ("premalo prodaj (12)"). */
   countWithheld?: boolean;
 }): Map<number, AreaPaint> {
   const definition = METRICS[metric];
@@ -39,7 +40,8 @@ export function areaPaint(shapes: MunicipalityShape[], values: AreaValue[], { me
   return new Map(shapes.map((shape) => {
     const item = lookup.get(shape.id);
     const value = item?.value ?? null;
-    const text = item == null || value == null ? (countWithheld ? t("premalo poslov ({count})", { count: integer(item?.sample ?? 0) }) : t("premalo poslov"))
+    const kind = metric === "rentPrice" ? "rent" as const : "sale" as const;
+    const text = item == null || value == null ? (countWithheld ? withheld(kind, item?.sample ?? 0) : tooFew(kind))
       : [definition.format(value), item.pooled ? t("združeno {years}", { years: count(item.pooled, NOUN_FORMS.leto) }) : "",
         definition.usesYears ? `n = ${integer(item.sample)}, ${period}` : ""].filter(Boolean).join(", ");
     return [shape.id, paintOf(shape.name, text, { color: ramp(value), pooled: !!item?.pooled })];
@@ -54,7 +56,7 @@ export function finePaint(shapes: MunicipalityShape[], values: AreaValue[], { ra
   const lookup = byId(values);
   return new Map(shapes.map((shape) => {
     const item = lookup.get(shape.id);
-    const text = !item || item.value == null ? t("premalo poslov ({count})", { count: integer(item?.sample ?? 0) })
+    const text = !item || item.value == null ? withheld(metric === "rentPrice" ? "rent" : "sale", item?.sample ?? 0)
       : `${METRICS[metric === "rentPrice" ? "rentPrice" : "salePrice"].format(item.value)}, n = ${integer(item.sample)}, ${item.pooled ? t("združeno 5 let") : period}`;
     return [shape.id, paintOf(shape.name, text, { color: ramp(item?.value ?? null), pooled: !!item?.pooled })];
   }));
@@ -65,7 +67,7 @@ export function buildingPoints(buildings: MapBuilding[], { ramp, rent, span }: {
   return buildings.map((item) => {
     const key = buildingKey({ ko: item.cadastralMunicipalityCode, st: item.buildingNumber });
     const median = item.medianAmountPerSqm;
-    const value = median == null ? t("premalo za mediano") : item.transactionCount === 1 ? `${integer(median)} €/m²` : t("mediana {value}", { value: `${integer(median)} €/m²` });
+    const value = median == null ? tooFew(rent ? "rent" : "sale") : item.transactionCount === 1 ? withUnit(integer(median), "€/m²") : t("mediana {value}", { value: withUnit(integer(median), "€/m²") });
     const latest = item.latestContractDate ? t("zadnja {date}", { date: `${Number(item.latestContractDate.slice(5, 7))}/${item.latestContractDate.slice(0, 4)}` }) : "";
     const label = [`${addressLabel(item) || t("Stavba {id}", { id: key })}: ${count(item.transactionCount, rent ? NOUN_FORMS.najem : NOUN_FORMS.prodaja)} (${span})`, value, latest].filter(Boolean).join(", ");
     return { key, lon: item.longitude, lat: item.latitude, color: median == null ? NO_MEDIAN_COLOR : ramp(median),

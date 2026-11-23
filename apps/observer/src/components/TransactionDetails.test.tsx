@@ -269,6 +269,6 @@ it("warns that a share or a package price is not comparable", async () => {
   ]);
   render(<TransactionEvidence selected={{ kind: "sale", id: 674223 }} onChoose={() => {}}/>);
   const verdict = await screen.findByRole("region", { name: "Primerjava cene" });
-  expect(await within(verdict).findByText(/Verjetno delež ali del paketa — cena ni primerljiva/)).toBeInTheDocument();
+  expect(await within(verdict).findByText(/Verjetno delež ali del paketa – cena ni primerljiva/)).toBeInTheDocument();
   expect(verdict).toHaveTextContent(/Prodan je le delež 1\/14; cena na m² je le 4 % mediane primerjave/);
 });

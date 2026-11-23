@@ -1,6 +1,8 @@
 import { useEffect, useEffectEvent, useState, type ReactNode } from "react";
 import { loadBuilding, loadRentalEvidence, loadSaleEvidence, type BuildingStatistics, type PropertyGroup } from "../api";
-import { date, euro, integer, median as medianOf, percentPoints, titleCase, upTo1 } from "../format";
+import { date, euro, integer, median as medianOf, percentPoints, titleCase, upTo1, withUnit } from "../format";
+import { SectionHeading, SectionLevel } from "./heading";
+import { TITLE, useDocumentTitle, viewTitle } from "../title";
 import { failed, settled } from "../promise";
 import { useLoad } from "../hooks/useLoad";
 import { LANG, Name, t, tx } from "../i18n";
@@ -13,6 +15,7 @@ import {
 } from "./TransactionDetails";
 import { BuildingFacts } from "./BuildingFacts";
 import { LoadFailed } from "./LoadState";
+import { Missing } from "./Missing";
 import { RangeBar } from "./charts";
 import "./building-evidence.css"; // i18n-ignore (code)
 
@@ -123,7 +126,7 @@ export function BuildingStack({ building, onChoose, band: givenBand, group: pref
   const compare = area && !isRent && !everything && priced.length >= 3 && median != null ? median : null;
   return <section className="be-stack" aria-labelledby="be-title">
     <h2 className="section-title" id="be-title">{t("V tej stavbi")}</h2>
-    <p className="muted be-meta">{facts || (LANG === "sl" ? place : <Name>{place}</Name>)}</p>{/* i18n-ignore (class names, code) */}
+    <p className="note muted be-meta">{facts || (LANG === "sl" ? place : <Name>{place}</Name>)}</p>{/* i18n-ignore (class names, code) */}
     <div className="controls be-controls">
       <div className="segmented small" role="group" aria-label={t("Vrsta poslov")}>
         <button type="button" aria-pressed={tab === "sale"} onClick={() => setTab("sale")}>{t("Prodaje")}</button>
@@ -138,9 +141,9 @@ export function BuildingStack({ building, onChoose, band: givenBand, group: pref
     {area && !isRent && !everything && (compare != null ? <div className="be-area">
       <RangeBar p25={area.p25} p50={area.p50} p75={area.p75} min={Math.min(area.p05 ?? area.p25 * 0.7, compare * 0.95)} max={Math.max(area.p95 ?? 0, area.p75 * 1.2, compare * 1.05)}
         unit="€/m²" label={t("Cena v stavbi glede na razpon območja")} markers={[{ value: compare, name: t("Ta stavba") }]}/>
-      <p className="muted">{tx("Mediana stavbe je iz istih {count} kot zgoraj, srednja polovica iz prodaj v območju {area}.",
+      <p className="note muted">{tx("Mediana stavbe je iz istih {count} kot zgoraj, srednja polovica iz prodaj v območju {area}.",
         { count: count(priced.length, SALES_OF), area: area.name })}</p>
-    </div> : <p className="muted">{tx("Za primerjavo z območjem {area} je v tem izboru premalo prodaj v statistiki ({count}).", { area: area.name, count: integer(priced.length) })}</p>)}
+    </div> : <p className="note muted">{tx("Za primerjavo z območjem {area} je v tem izboru premalo prodaj v statistiki ({count}).", { area: area.name, count: integer(priced.length) })}</p>)}
     <p className="be-toggles">
       {(older > 0 || everything) && <button type="button" className="link" onClick={() => setEverything(!everything)}>
         {everything ? t("Samo {period}", { period: yearsText(window_(lastYear).first, last) }) : t("Pokaži vse, tudi starejše ({count} več)", { count: count(older, nouns) })}</button>}
@@ -149,25 +152,25 @@ export function BuildingStack({ building, onChoose, band: givenBand, group: pref
     </p>
     {list.length > 0 && span.length > 0 && <figure className="be-years">
       <figcaption className="sr-only">{isRent ? t("Najemi po letih") : t("Prodaje po letih")} ({first}–{last})</figcaption>
-      <ol style={{ gridTemplateColumns: `repeat(${span.length}, minmax(0, 1fr))` }}>{span.map((year) => <li key={year} title={`${year}: ${years.get(year) ?? 0}`}>{/* i18n-ignore (class names, code) */}
+      <ol style={{ gridTemplateColumns: `repeat(${span.length}, minmax(0, 1fr))` }}>{span.map((year) => <li key={year}>{/* i18n-ignore (class names, code) */}
         <span className="be-count-label" aria-hidden="true">{years.get(year) || ""}</span>
         <span className="be-bar-slot" aria-hidden="true"><span className="be-bar" style={{ height: `${years.get(year) ? Math.max(6, ((years.get(year) ?? 0) / max) * 100) : 0}%` }}/></span>
         <span className="be-year" aria-hidden="true">{label(year) ? (span.length > 8 ? `’${String(year).slice(2)}` : year) : ""}</span>
         <span className="sr-only">{year}: {years.get(year) ?? 0}</span></li>)}</ol>
     </figure>}
-    {list.length === 0 ? <p className="muted">{isRent ? t("Ni najemov s tem izborom.") : t("Ni prodaj s tem izborom.")}</p> : <div className="table-scroll be-table"><table className="evidence-table">{/* i18n-ignore (class names, code) */}
+    {list.length === 0 ? <p className="note muted">{isRent ? t("Ni najemov s tem izborom.") : t("Ni prodaj s tem izborom.")}</p> : <div className="table-scroll be-table"><table className="evidence-table">{/* i18n-ignore (class names, code) */}
       <caption className="sr-only">{isRent ? t("Najemi v stavbi") : t("Prodaje v stavbi")}</caption>
       <thead><tr><th scope="col">{t("Datum")}</th><th scope="col">{t("Površina")}</th><th scope="col">{isRent ? t("Na mesec") : t("Cena")}</th>
         <th scope="col">{unit}</th></tr></thead>
       <tbody>{list.slice(0, 60).map((item) => <tr key={`${item.kind}${item.transactionId}`}>
         <th scope="row"><button type="button" className="link" onClick={() => onChoose({ kind: item.kind, id: item.transactionId })}>{item.contractDate ? date(item.contractDate) : "—"}</button>
           {!item.representative && <span className="chip">{t("ni v statistiki")}</span>}</th>
-        <td>{item.area == null ? "—" : `${upTo1(item.area)} m²`}</td>
+        <td>{item.area == null ? "—" : withUnit(upTo1(item.area), "m²")}</td>
         <td>{item.amount == null ? "—" : euro(item.amount)}</td><td>{item.amountPerSqm == null ? "—" : perSqmText(item.amountPerSqm)}</td></tr>)}</tbody>
     </table></div>}
-    {list.length > 60 && <p className="muted">{t("Prikazanih je 60 najnovejših od {total}.", { total: integer(list.length) })}</p>}
+    {list.length > 60 && <p className="note muted">{t("Prikazanih je 60 najnovejših od {total}.", { total: integer(list.length) })}</p>}
     <details className="td-register be-register"><summary>{t("Podatki iz registra")}</summary>{/* i18n-ignore (class names, code) */}
-      <p className="muted">{t("Katastrska občina {code}, stavba {number}.", { code: building.cadastralMunicipalityCode, number: building.buildingNumber })} {t("Vir: GURS, evidenca trga nepremičnin.")}</p>
+      <p className="note muted">{t("Katastrska občina {code}, stavba {number}.", { code: building.cadastralMunicipalityCode, number: building.buildingNumber })} {t("Vir: GURS, evidenca trga nepremičnin.")}</p>
     </details>
   </section>;
 }
@@ -185,9 +188,9 @@ function OtherSales({ building, transactionId, group, perSqm, band, kind, onChoo
   const others = selection.list.filter((item) => item.transactionId !== transactionId);
   const nouns = isRent ? NOUN_FORMS.najem : NOUN_FORMS.prodaja;
   const scope = `${yearsText(selection.first, selection.last)}${band ? ` ${t("(velikost {size})", { size: band.label })}` : ""}`;
-  return <section aria-labelledby="td-comparables"><h3 id="td-comparables">{isRent ? t("Drugi najemi v isti stavbi") : t("Druge prodaje v isti stavbi")}</h3>
-    {others.length === 0 ? <p className="muted">{isRent ? t("V stavbi ni drugih najemov {scope}.", { scope }) : t("V stavbi ni drugih prodaj {scope}.", { scope })}</p> : <>
-      <p className="muted">{salesOf(group, others.length, nouns)} {scope}. {isRent ? t("Razlika v ceni na m² glede na ta najem, brez prilagoditve za čas.")
+  return <section aria-labelledby="td-comparables"><SectionHeading id="td-comparables">{isRent ? t("Drugi najemi v isti stavbi") : t("Druge prodaje v isti stavbi")}</SectionHeading>
+    {others.length === 0 ? <p className="note muted">{isRent ? t("V stavbi ni drugih najemov {scope}.", { scope }) : t("V stavbi ni drugih prodaj {scope}.", { scope })}</p> : <>
+      <p className="note muted">{salesOf(group, others.length, nouns)} {scope}. {isRent ? t("Razlika v ceni na m² glede na ta najem, brez prilagoditve za čas.")
         : t("Razlika v ceni na m² glede na to prodajo, brez prilagoditve za čas.")}</p>
       <ol className="rows td-comparables">{others.slice(0, 6).map((item) => {
         const difference = perSqm && item.amountPerSqm != null ? 100 * (item.amountPerSqm / perSqm - 1) : undefined;
@@ -198,11 +201,11 @@ function OtherSales({ building, transactionId, group, perSqm, band, kind, onChoo
               : t("{difference} na m² glede na to prodajo", { difference: percentPoints(difference) })}>{percentPoints(difference)}</strong>}
           </div>
           <span>{[item.amount == null ? undefined : isRent ? t("{amount} na mesec", { amount: euro(item.amount) }) : euro(item.amount),
-            item.amountPerSqm == null ? undefined : `${perSqmText(item.amountPerSqm)} ${isRent ? t("€/m² na mesec") : "€/m²"}`,
-            item.area == null ? undefined : `${upTo1(item.area)} m²`, !item.representative ? t("ni v statistiki") : undefined].filter(Boolean).join(" · ")}</span>
+            item.amountPerSqm == null ? undefined : withUnit(perSqmText(item.amountPerSqm), isRent ? t("€/m² na mesec") : "€/m²"),
+            item.area == null ? undefined : withUnit(upTo1(item.area), "m²"), !item.representative ? t("ni v statistiki") : undefined].filter(Boolean).join(" · ")}</span>
         </li>;
       })}</ol>
-      {others.length > 6 && <p className="muted">{t("Vseh {count} je v seznamu stavbe.", { count: integer(others.length) })}</p>}</>}
+      {others.length > 6 && <p className="note muted">{t("Vseh {count} je v seznamu stavbe.", { count: integer(others.length) })}</p>}</>}
   </section>;
 }
 
@@ -252,29 +255,31 @@ export function TransactionEvidence({ selected, onChoose, onBuilding, building, 
   // The map's size band only filters the other sales when it was chosen for this sale's type.
   const sameBand = detail && (group ?? "apartment") === detail.propertyGroup ? band : undefined;
 
-  return <aside className="panel td-panel" aria-live="polite" aria-label={title}>
+  // The page's subject names the tab; the h1 waits (aria-busy) until the transaction is loaded, so focus lands on its real title.
+  useDocumentTitle(primary && detail ? viewTitle(title) : null, TITLE.detail);
+  return <SectionLevel.Provider value={primary ? 2 : 3}><article className="panel td-panel" aria-label={title} aria-busy={!evidence && load.error == null ? true : undefined}>
     <header><div><p className="eyebrow">{isRent ? t("Najem") : t("Prodaja")}</p>
-      {primary ? <h1 className="td-title">{title}</h1> : <h2>{title}</h2>}
+      {primary ? <h1 className="td-title" tabIndex={-1}>{title}</h1> : <h2>{title}</h2>}
       {subtitle && <p className="td-address">{subtitle}</p>}</div></header>
     {load.error != null ? <LoadFailed retry={load.retry}>{isRent ? t("Najema ni bilo mogoče naložiti.") : t("Prodaje ni bilo mogoče naložiti.")}</LoadFailed>
-      : !evidence && <p className="muted" role="status">{isRent ? t("Nalagam najem …") : t("Nalagam prodajo …")}</p>}
+      : !evidence && <p className="note muted" role="status">{isRent ? t("Nalagam najem\u00a0…") : t("Nalagam prodajo\u00a0…")}</p>}
     {evidence && failed(evidence.detail) && <LoadFailed retry={load.retry}>{isRent ? t("Najema ni bilo mogoče naložiti.") : t("Prodaje ni bilo mogoče naložiti.")}</LoadFailed>}
     {partFailed && <LoadFailed retry={load.retry}>{t("Dela podatkov o tem poslu (primerjava, model ali zgodovina) ni bilo mogoče naložiti; prikazano je, kar je na voljo.")}</LoadFailed>}
     {detail && <dl className="facts td-key-facts">
-      <div><dt>{isRent ? t("Najemnina na m²") : t("Cena na m²")}</dt><dd>{perSqm == null ? "—" : `${perSqmText(perSqm)} ${unitLabel}`}</dd></div>
-      <div><dt>{t("Datum pogodbe")}</dt><dd>{detail.contractDate ? date(detail.contractDate) : "—"}</dd></div>
+      <div><dt>{isRent ? tx("Najemnina na {unit}", { unit: <span className="unit">m²</span> }) : tx("Cena na {unit}", { unit: <span className="unit">m²</span> })}</dt><dd>{perSqm == null ? <Missing/> : withUnit(perSqmText(perSqm), unitLabel)}</dd></div>
+      <div><dt>{t("Datum pogodbe")}</dt><dd>{detail.contractDate ? date(detail.contractDate) : <Missing/>}</dd></div>
     </dl>}
     {detail && <PriceVerdict context={context} detail={detail} kind={selected.kind} partial={partial}/>}
     {detail && <HowCalculated context={context} valuation={valuation} detail={detail} kind={selected.kind}/>}
     {saleDetail && ko && st && VALUE_GROUPS.has(saleDetail.propertyGroup) && <p className="td-value-link">
-      <a href={hrefWith({ value: true, building: { ko, st }, selected: { kind: "sale", id: selected.id } })}>{t("Je to vaša nepremičnina? Ocena današnje vrednosti →")}</a></p>}
+      <a href={hrefWith({ value: true, building: { ko, st }, selected: { kind: "sale", id: selected.id } })}>{t("Je to vaša nepremičnina? Ocena današnje vrednosti")} <span aria-hidden="true">→</span></a></p>}
     {detail && <MapsLink detail={detail} building={own}/>}
     {detail && <TransactionFacts sale={saleDetail} rent={rentDetail}/>}
-    {saleDetail?.building && <BuildingFacts facts={saleDetail.building} compact/>}
+    {saleDetail?.building && <BuildingFacts facts={saleDetail.building} heading={primary ? "h2" : "h3"} compact/>}
     {detail && <TransactionQuality detail={detail}/>}
     {detail && own ? <OtherSales building={own} transactionId={selected.id} group={detail.propertyGroup} perSqm={perSqm} band={sameBand} kind={selected.kind} onChoose={onChoose}/>
       : context && (!ko || !st || loaded === null) && <BuildingComparables context={context} kind={selected.kind} onChoose={onChoose}/>}
     {history && <TransactionHistory history={history} transactionId={selected.id} onChoose={onChoose}/>}
     {detail && <RegisterDetails detail={detail} buildingYear={buildingYear} building={own}/>}
-  </aside>;
+  </article></SectionLevel.Provider>;
 }

@@ -9,6 +9,11 @@ export const GLOSSARY = {
   donos: t("12 × mediana mesečne najemnine na m², deljeno z mediano cene na m². Pred stroški, davki, vzdrževanjem in praznimi meseci."),
 } as const;
 
+/** Explanations used outside the statistics glossary. */
+export const GLOSSARY_EXTRA = {
+  notInStatistics: t("Posel ni v statistiki (npr. med sorodniki, delež, skupni paket ali neobičajna cena)."),
+} as const;
+
 /**
  * A statistical term with its plain-language explanation in a native popover (keyboard and Esc handled by the browser).
  * The explanation is opened by a click, so it is a note the button controls, not a hover tooltip.

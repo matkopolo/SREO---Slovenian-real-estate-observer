@@ -1,12 +1,13 @@
 import { useState, type ReactNode } from "react";
 import { loadRecent, type DateWindow, type RecentTransaction, type RentSegment, type SalesSort, type Segment } from "../api";
-import { addressLabel } from "./AreaSearch";
+import { addressLabel } from "../address";
 import { LoadFailed } from "./LoadState";
 import { useLoad } from "../hooks/useLoad";
 import { dateCompact, decimal1, euro, integer, landArea, NBSP, titleCase } from "../format";
 import { count, NOUN_FORMS } from "../plural";
 import { Name, t, tx } from "../i18n";
 import { hrefWith } from "../url-state";
+import { GLOSSARY_EXTRA, Term } from "./Term";
 import "./sales-list.css";
 
 const COLUMNS: Array<{ id: SalesSort; label: string; className?: string }> = [
@@ -84,11 +85,11 @@ export function SalesList({ scopeId, scopeName, segment, window, fallback, kind 
   return <section className="module open sales-list" aria-labelledby={`sales-${kind}`}>
     <h2 id={`sales-${kind}`}>{title} {where}{result ? `: ${integer(total)}` : ""}</h2>
     {street && onClearStreet && <button type="button" className="ghost" onClick={onClearStreet}>{tx("× Vse prodaje v območju {area}", { area: <Name>{scopeName}</Name> })}</button>}
-    {result?.wide && <p className="muted">{kind === "sale" ? t("V izbranem obdobju je premalo prodaj; prikazanih je {count} iz zadnjih 5 let.", { count: count(total, forms) })
+    {result?.wide && <p className="note muted">{kind === "sale" ? t("V izbranem obdobju je premalo prodaj; prikazanih je {count} iz zadnjih 5 let.", { count: count(total, forms) })
       : t("V izbranem obdobju je premalo najemov; prikazanih je {count} iz zadnjih 5 let.", { count: count(total, forms) })}</p>}
     {load.error ? <LoadFailed retry={load.retry}>{t("Seznama ni bilo mogoče naložiti.")}</LoadFailed> // i18n-ignore (code, not text)
-      : !result ? <p className="muted" role="status">{kind === "sale" ? t("Nalagam prodaje …") : t("Nalagam najeme …")}</p> // i18n-ignore (code, not text)
-      : !rows.length ? <p className="muted">{kind === "sale" ? t("V tem obdobju ni evidentiranih prodaj.") : t("V tem obdobju ni evidentiranih najemov.")} {t("Poskusite daljše obdobje ali vse velikosti.")}</p>
+      : !result ? <p className="note muted" role="status">{kind === "sale" ? t("Nalagam prodaje\u00a0…") : t("Nalagam najeme\u00a0…")}</p> // i18n-ignore (code, not text)
+      : !rows.length ? <p className="note muted">{kind === "sale" ? t("V tem obdobju ni evidentiranih prodaj.") : t("V tem obdobju ni evidentiranih najemov.")} {t("Poskusite daljše obdobje ali vse velikosti.")}</p>
       : <>
         {total > 1 && <label className="sales-sort">{t("Razvrsti")}
           <select value={`${sort}-${descending ? "desc" : "asc"}`} onChange={(event) => {
@@ -102,22 +103,23 @@ export function SalesList({ scopeId, scopeName, segment, window, fallback, kind 
           <thead><tr>
             <th scope="col">{t("Naslov")}</th>
             {COLUMNS.map((column) => <th key={column.id} scope="col" className={column.className} aria-sort={sort === column.id ? (descending ? "descending" : "ascending") : "none"}>
-              <button type="button" onClick={() => choose(column.id)}>{column.label}{sort === column.id ? (descending ? " ↓" : " ↑") : ""}</button></th>)}
+              <button type="button" onClick={() => choose(column.id)}>{column.label}{sort === column.id && <span aria-hidden="true">{descending ? " ↓" : " ↑"}</span>}</button></th>)}
           </tr></thead>
           <tbody>{rows.map((row) => <tr key={row.transactionId}>
             <th scope="row"><a href={href(row)}>{place(row)}</a>
-              {!row.representative && <span className="chip" title={t("Posel ni v statistiki (npr. med sorodniki, delež, skupni paket ali neobičajna cena).")}>{t("ni v statistiki")}</span>}</th>
+              {!row.representative && <span className="chip"><Term text={GLOSSARY_EXTRA.notInStatistics}>{t("ni v statistiki")}</Term></span>}</th>
             <td data-label={t("Datum")}>{row.contractDate ? dateCompact(row.contractDate) : "—"}</td>
             <td data-label={t("Površina")} className="num">{row.area == null ? "—" : row.area >= 10000 ? landArea(row.area) : `${decimal1(row.area)}${NBSP}m²`}</td>
             <td data-label={kind === "sale" ? t("Cena") : t("Na mesec")} className="num">{row.amount != null ? euro(row.amount) : "—"}</td>
             <td data-label="€/m²" className="num">{row.amountPerSqm != null ? (row.amountPerSqm < 100 ? decimal1 : integer)(row.amountPerSqm) : "—"}</td>
           </tr>)}</tbody>
         </table>
-        {!all ? total > rows.length && <button type="button" className="primary-link" onClick={() => setAll(true)}>{kind === "sale" ? t("Prikaži vse prodaje ({count}) →", { count: integer(total) }) : t("Prikaži vse najeme ({count}) →", { count: integer(total) })}</button>
+        {!all ? total > rows.length && <button type="button" className="primary-link" onClick={() => setAll(true)}>{kind === "sale" ? t("Prikaži vse prodaje ({count})", { count: integer(total) }) : t("Prikaži vse najeme ({count})", { count: integer(total) })} <span aria-hidden="true">→</span></button>
           : total > PAGE && <nav className="pager" aria-label={t("Strani seznama")}>
-            <button type="button" className="ghost" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>{t("← Prejšnjih {count}", { count: PAGE })}</button>
-            <span>{t("{from}–{to} od {total}", { from: integer(offset + 1), to: integer(Math.min(total, offset + PAGE)), total: integer(total) })}</span>
-            <button type="button" className="ghost" disabled={offset + PAGE >= total} onClick={() => setOffset(offset + PAGE)}>{t("Naslednjih {count} →", { count: PAGE })}</button>
+            {/* aria-disabled, not disabled: the focused button stays focused at the first or last page. */}
+            <button type="button" className="ghost" aria-disabled={offset === 0 || undefined} onClick={() => { if (offset > 0) setOffset(Math.max(0, offset - PAGE)); }}><span aria-hidden="true">←</span> {t("Prejšnjih {count}", { count: PAGE })}</button>
+            <span role="status">{t("{from}–{to} od {total}", { from: integer(offset + 1), to: integer(Math.min(total, offset + PAGE)), total: integer(total) })}</span>
+            <button type="button" className="ghost" aria-disabled={offset + PAGE >= total || undefined} onClick={() => { if (offset + PAGE < total) setOffset(offset + PAGE); }}>{t("Naslednjih {count}", { count: PAGE })} <span aria-hidden="true">→</span></button>
           </nav>}
       </>}
   </section>;

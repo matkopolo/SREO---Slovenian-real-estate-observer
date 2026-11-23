@@ -74,7 +74,7 @@ export function buildValueRows(input: ValueRowsInput, english: boolean): ValueRo
   } else if (reference) {
     // While the municipality's medians are still loading (or failed) the row must not claim there were too few sales.
     rows.push({ key: "updated", title: updatedTitle, value: null,
-      note: input.waiting ? t("Nalagam …") : input.failed ? t("cen v občini trenutno ni bilo mogoče naložiti") : t("premalo prodaj te vrste v občini ob nakupu ali danes") });
+      note: input.waiting ? t("Nalagam\u00a0…") : input.failed ? t("cen v občini trenutno ni bilo mogoče naložiti") : t("premalo prodaj te vrste v občini ob nakupu ali danes") });
   }
   if (market) {
     const confidence = market.confidence === "moderate" ? t("zanesljivost srednja") : market.confidence === "low" ? t("zanesljivost nizka") : t("zanesljivost zelo nizka");

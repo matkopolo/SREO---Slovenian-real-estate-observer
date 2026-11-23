@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { emptyLists, stubApi } from "../test/api-stub";
@@ -92,7 +92,8 @@ it("says so with a retry when the data status cannot be loaded, and loads the pa
   expect(fetched("/api/v1/statistics/overview")).toBe(false);
   api.prepend([{ path: "/api/v1/data-status", body: { activeRelease: { analyticsSaleThrough: "2026-10-01T00:00:00Z" } } }]);
   fireEvent.click(within(alert).getByRole("button", { name: "Poskusi znova" }));
-  expect(await screen.findByRole("heading", { level: 1, name: "Slovenija" })).toBeInTheDocument();
+  // The retry refetches the status and then the lazy explorer; under a loaded test run that takes longer than the default second.
+  expect(await screen.findByRole("heading", { level: 1, name: "Slovenija" }, { timeout: 4000 })).toBeInTheDocument();
 });
 
 it("opens on Slovenija: median, change, real change and a flats/houses pair on lag-aware periods", async () => {
@@ -228,4 +229,45 @@ it("a deep link shows a loading state, never Slovenija, and needs no geography r
   // Identical requests are shared: the national overview is asked once, however many panels show it.
   const national = api.calls.filter((url) => url === "/api/v1/statistics/overview?from=2025-07-01&to=2026-06-30&propertyGroup=apartment");
   expect(national.length).toBeLessThanOrEqual(1);
+});
+
+it("names every view in the document title", async () => {
+  render(<App/>);
+  await screen.findByRole("heading", { level: 1, name: "Slovenija" });
+  await waitFor(() => expect(document.title).toBe("Slovenija · Trg po območjih · SREO"));
+  fireEvent.click(await screen.findByRole("button", { name: "zemljevid: Maribor" }));
+  await screen.findByRole("heading", { level: 1, name: "Maribor" });
+  await waitFor(() => expect(document.title).toBe("Maribor · Trg po območjih · SREO"));
+  fireEvent.click(await screen.findByRole("button", { name: "zemljevid: stavba" }));
+  await screen.findByRole("heading", { level: 1, name: "Dunajska cesta 221, Ljubljana" });
+  await waitFor(() => expect(document.title).toBe("Dunajska cesta 221, Ljubljana · SREO"));
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Strani" })).getByRole("link", { name: "O podatkih" }));
+  await screen.findByRole("heading", { level: 1, name: "O podatkih" });
+  await waitFor(() => expect(document.title).toBe("O podatkih · SREO"));
+  fireEvent.click(screen.getByRole("link", { name: "Trendi" }));
+  await waitFor(() => expect(document.title).toBe("Trendi · SREO"));
+});
+
+it("moves focus to the new view's heading after a navigation, never on the first load", async () => {
+  render(<App/>);
+  await screen.findByRole("heading", { level: 1, name: "Slovenija" });
+  expect(document.body).toHaveFocus();
+  fireEvent.click(await screen.findByRole("button", { name: "zemljevid: Maribor" }));
+  const heading = await screen.findByRole("heading", { level: 1, name: "Maribor" });
+  await waitFor(() => expect(heading).toHaveFocus());
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Strani" })).getByRole("link", { name: "O podatkih" }));
+  const about = await screen.findByRole("heading", { level: 1, name: "O podatkih" });
+  await waitFor(() => expect(about).toHaveFocus());
+});
+
+it("returns focus to the control that opened a view after Back", async () => {
+  render(<App/>);
+  await screen.findByRole("heading", { level: 1, name: "Slovenija" });
+  const opener = await screen.findByRole("button", { name: "zemljevid: Maribor" });
+  opener.focus();
+  fireEvent.click(opener);
+  await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Maribor" })).toHaveFocus());
+  window.history.back();
+  await screen.findByRole("heading", { level: 1, name: "Slovenija" });
+  await waitFor(() => expect(screen.getByRole("button", { name: "zemljevid: Maribor" })).toHaveFocus());
 });

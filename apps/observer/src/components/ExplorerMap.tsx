@@ -39,10 +39,25 @@ export interface MapView { bbox: Bbox; zoom: number; /** Moved by the user (drag
 type Collection = FeatureCollection<Geometry, Record<string, unknown>>;
 const collection = (features: Collection["features"]): Collection => ({ type: "FeatureCollection", features });
 
-/** Municipal fill with no sub-areas drawn: the layer's colour, lighter when pooled, fading into the streets. */
+/** Municipal fill with no sub-areas drawn: the layer's colour, fading into the streets; pooled values carry a hatch on top. */
 const AREA_COLOR: maplibregl.ExpressionSpecification = ["get", "color"];
-// "zoom" may only drive a top-level interpolate, so the pooled case sits inside each stop.
-const AREA_OPACITY: maplibregl.ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], 7, ["case", ["get", "pooled"], 0.55, 0.88], 11, ["case", ["get", "pooled"], 0.32, 0.55], 13, 0.14];
+const AREA_OPACITY: maplibregl.ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], 7, 0.88, 11, 0.55, 13, 0.14];
+/** The hatch over pooled (3 or 5 years) areas: thin white diagonals, the same in the legend's "združeno" key. */
+const HATCH = "pooled-hatch";
+const HATCH_OPACITY: maplibregl.ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], 7, 0.9, 11, 0.6, 13, 0];
+
+/** A small tile of 45° white lines on transparent ground, as RGBA pixels (MapLibre repeats it as a fill pattern). */
+function hatchImage(size = 8) {
+  const data = new Uint8Array(size * size * 4);
+  for (let row = 0; row < size; row += 1) for (let column = 0; column < size; column += 1) {
+    // Distance from the diagonal through the tile (wrapping), so the lines join across tiles.
+    const distance = Math.min((row + column) % size, size - ((row + column) % size));
+    const alpha = distance === 0 ? 235 : distance === 1 ? 110 : 0;
+    const offset = (row * size + column) * 4;
+    data[offset] = 255; data[offset + 1] = 255; data[offset + 2] = 255; data[offset + 3] = alpha;
+  }
+  return { width: size, height: size, data };
+}
 /**
  * One colour scale per map: while districts or settlements are drawn, every municipality underneath is a neutral
  * grey (the colour of a withheld value, lighter), so only the sub-areas carry the ramp.
@@ -63,6 +78,8 @@ export interface ExplorerMapProps {
   marker?: [number, number] | null;
   /** The sales a value estimate rests on, as dots; one is highlighted from the panel's list. */
   comparables?: MapComparablePoint[]; highlight?: number | null;
+  /** The value check's comparables are shown: the municipal fill turns neutral so the dots stand out. */
+  muted?: boolean;
   /** The circle those sales were searched in. */
   radius?: MapRadius | null;
   /** The DRSV flood hazard overlay for the view, when the visitor switched it on. */
@@ -83,7 +100,7 @@ const pointOf = (feature: MapGeoJSONFeature): [number, number] | undefined =>
  * measure, buildings from street zoom and single agreements at the closest zoom. Clicks drill down.
  */
 export function ExplorerMap({ municipalities, regions, paint, subAreas, subPaint, buildings, agreements, selected, selectedSub = null, focus, marker = null,
-  comparables = NO_COMPARABLES, highlight = null, radius = null, floods = null, onArea, onSubArea, onBuilding, onAgreement, onNewBuilding, onComparable, onView }: ExplorerMapProps) {
+  comparables = NO_COMPARABLES, highlight = null, muted: comparablesMode = false, radius = null, floods = null, onArea, onSubArea, onBuilding, onAgreement, onNewBuilding, onComparable, onView }: ExplorerMapProps) {
   const host = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const popup = useRef<maplibregl.Popup | null>(null);
@@ -134,8 +151,10 @@ export function ExplorerMap({ municipalities, regions, paint, subAreas, subPaint
       }
       const empty = collection([]);
       for (const id of ["areas", "regions", "sub", "floods", "buildings", "agreements", "radius", "comparables", "marker"]) instance.addSource(id, { type: "geojson", data: empty, promoteId: "id" });
-      // Area fills fade as the user zooms into streets, so the basemap takes over; pooled (3 or 5 years) values are drawn lighter.
+      // Area fills fade as the user zooms into streets, so the basemap takes over; pooled (3 or 5 years) values carry a hatch.
+      if (!instance.hasImage(HATCH)) instance.addImage(HATCH, hatchImage());
       instance.addLayer({ id: "areas-fill", type: "fill", source: "areas", paint: { "fill-color": AREA_COLOR, "fill-opacity": AREA_OPACITY } });
+      instance.addLayer({ id: "areas-hatch", type: "fill", source: "areas", filter: ["==", ["get", "pooled"], true], paint: { "fill-pattern": HATCH, "fill-opacity": HATCH_OPACITY } });
       instance.addLayer({ id: "areas-line", type: "line", source: "areas", paint: {
         "line-color": ["case", ["boolean", ["feature-state", "selected"], false], "#1c1f24", "#ffffff"],
         "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 2.6, ["boolean", ["feature-state", "hover"], false], 1.8, 0.6] } });
@@ -144,7 +163,9 @@ export function ExplorerMap({ municipalities, regions, paint, subAreas, subPaint
         paint: { "text-color": "#1c1f24", "text-halo-color": "#ffffff", "text-halo-width": 1.4 } });
       instance.addLayer({ id: "regions-line", type: "line", source: "regions", paint: { "line-color": "#3a3f44", "line-width": 1.4, "line-opacity": 0.8 } });
       instance.addLayer({ id: "sub-fill", type: "fill", source: "sub", paint: {
-        "fill-color": ["get", "color"], "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10, ["case", ["get", "pooled"], 0.55, 0.88], 14, ["case", ["get", "pooled"], 0.12, 0.2]] } });
+        "fill-color": ["get", "color"], "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.88, 14, 0.2] } });
+      instance.addLayer({ id: "sub-hatch", type: "fill", source: "sub", filter: ["==", ["get", "pooled"], true], paint: {
+        "fill-pattern": HATCH, "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.9, 14, 0.15] } });
       instance.addLayer({ id: "sub-line", type: "line", source: "sub", paint: {
         "line-color": ["case", ["boolean", ["feature-state", "selected"], false], "#1c1f24", "#ffffff"],
         "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 3, ["boolean", ["feature-state", "hover"], false], 2, 0.8] } });
@@ -167,7 +188,7 @@ export function ExplorerMap({ municipalities, regions, paint, subAreas, subPaint
       // A value estimate's evidence: the search circle and the comparables, one highlighted from the panel's list.
       instance.addLayer({ id: "radius-line", type: "line", source: "radius", paint: { "line-color": marks().subject, "line-width": 2.2, "line-dasharray": [2, 1.5], "line-opacity": 0.95 } });
       instance.addLayer({ id: "comparables", type: "circle", source: "comparables", paint: {
-        "circle-color": marks().comparable, "circle-radius": 6, "circle-stroke-color": "#ffffff", "circle-stroke-width": 1.5, "circle-opacity": 0.92 } });
+        "circle-color": marks().comparable, "circle-radius": 6, "circle-stroke-color": "#ffffff", "circle-stroke-width": 2, "circle-opacity": 1 } });
       // The highlighted comparable is drawn again on top, so a neighbouring dot never covers it.
       instance.addLayer({ id: "comparables-highlight", type: "circle", source: "comparables", filter: ["==", ["get", "id"], -1], paint: {
         "circle-color": marks().comparable, "circle-radius": 9, "circle-stroke-color": "#ffffff", "circle-stroke-width": 4 } });
@@ -256,13 +277,15 @@ export function ExplorerMap({ municipalities, regions, paint, subAreas, subPaint
     for (const shape of municipalities) instance.setFeatureState({ source: "areas", id: shape.id }, { selected: shape.id === selected });
   }, [municipalities, paint, ready, selected]);
 
-  // While sub-areas are drawn (a selected municipality's, or every district in view), the municipalities go neutral.
-  const muted = subAreas.length > 0;
+  // While sub-areas are drawn (a selected municipality's, or every district in view), or the value check's comparables,
+  // the municipalities go neutral: one colour scale per map, and the comparable dots never sink into the price ramp.
+  const muted = subAreas.length > 0 || comparablesMode;
   useEffect(() => {
     const instance = map.current;
     if (!ready || !instance) return;
     instance.setPaintProperty("areas-fill", "fill-color", muted ? WITHHELD : AREA_COLOR);
     instance.setPaintProperty("areas-fill", "fill-opacity", muted ? MUTED_OPACITY : AREA_OPACITY);
+    instance.setLayoutProperty("areas-hatch", "visibility", muted ? "none" : "visible");
   }, [muted, ready]);
 
   useEffect(() => {

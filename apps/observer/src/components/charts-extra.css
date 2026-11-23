@@ -1,0 +1,64 @@
+/* Chart additions (charts.tsx): series by family of measure, reference lines, direct labels, the hover/keyboard readout,
+   histogram ticks, the scale strip's axis, months still being reported and pooled values. Imported by charts.tsx after
+   styles.css; selectors carry one extra class where they restyle an existing rule. */
+
+/* A lighter step of each family's ramp (palette.ts) for "still being reported" and "pooled": a fixed colour, not an
+   opacity, so "lighter" is true on the dark ground too. */
+:root { --c-price-soft: #c8d6ad; --c-rent-soft: #b9cbdc; --hatch-ink: rgba(20, 24, 26, 0.55); }
+@media (prefers-color-scheme: light) {
+  :root { --c-price-soft: #b7c99b; --c-rent-soft: #b7c9da; --hatch-ink: rgba(255, 255, 255, 0.75); }
+}
+
+/* ---------- series by family ---------- */
+.chart .c-price .series { stroke: var(--c-price); } .chart .c-price .series-end { fill: var(--c-price); }
+.chart .c-price-alt .series { stroke: var(--c-price); stroke-dasharray: 6 4; } .chart .c-price-alt .series-end { fill: var(--surface); stroke: var(--c-price); }
+.chart .c-rent .series { stroke: var(--c-rent); } .chart .c-rent .series-end { fill: var(--c-rent); }
+.chart .c-money .series { stroke: var(--c-money); } .chart .c-money .series-end { fill: var(--c-money); }
+.chart .ref-region .series { stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 8 4; }
+.chart .ref-country .series { stroke: var(--muted); stroke-width: 1.75; stroke-dasharray: 1.5 3.5; stroke-linecap: round; }
+.chart .ref-region .series-end, .chart .ref-country .series-end { display: none; }
+/* Legend swatches are short lines with the same dash as their series. */
+.chart-legend i.c-price, .chart-legend i.c-price-alt, .chart-legend i.c-rent, .chart-legend i.c-money, .chart-legend i.ref-region, .chart-legend i.ref-country,
+.chart-tip i.c-price, .chart-tip i.c-price-alt, .chart-tip i.c-rent, .chart-tip i.c-money, .chart-tip i.ref-region, .chart-tip i.ref-country, .chart-tip i.ref, .chart-tip i.accent,
+.chart-tip i.s1, .chart-tip i.s2, .chart-tip i.s3 {
+  width: 16px; height: 0; border-radius: 0; background: transparent; border-top: 2px solid var(--c-price); display: inline-block; flex: none; }
+.chart-legend i.c-price-alt, .chart-tip i.c-price-alt { border-top-style: dashed; }
+.chart-legend i.c-rent, .chart-tip i.c-rent { border-top-color: var(--c-rent); }
+.chart-legend i.c-money, .chart-tip i.c-money { border-top-color: var(--c-money); }
+.chart-legend i.ref-region, .chart-tip i.ref-region { border-top: 2px dashed var(--muted); }
+.chart-legend i.ref-country, .chart-tip i.ref-country { border-top: 2px dotted var(--muted); }
+.chart-tip i.ref { border-top: 2px dashed var(--muted); }
+.chart-tip i.s1 { border-top-color: var(--s1); } .chart-tip i.s2 { border-top-color: var(--s2); } .chart-tip i.s3 { border-top-color: var(--s3); }
+
+/* Direct labels at the line ends wear text ink, never the series colour. */
+.chart .direct-label { fill: var(--text); font-size: var(--fs-caption); stroke: var(--surface); stroke-width: 3px; paint-order: stroke; }
+
+/* ---------- readout ---------- */
+.chart.has-readout { position: relative; }
+.chart.has-readout svg { touch-action: pan-y; }
+.chart.has-readout svg:focus { outline: none; }
+.chart.has-readout svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius); }
+.chart .hit { fill: transparent; pointer-events: all; cursor: crosshair; }
+.chart .crosshair line { stroke: var(--muted); stroke-width: 1; }
+.chart .bar.is-active, .chart .column.is-active { stroke: var(--text); stroke-width: 1.5; }
+.chart-tip { position: absolute; top: 4px; z-index: 2; transform: translateX(10px); display: grid; gap: 2px; min-width: 120px; max-width: 240px; padding: 6px 9px;
+  border: 1px solid var(--field-line); border-radius: var(--radius); background: var(--surface-raised); color: var(--text); font-size: var(--fs-caption); line-height: 1.35;
+  pointer-events: none; font-variant-numeric: tabular-nums; }
+.chart-tip.flip { transform: translateX(calc(-100% - 10px)); }
+.chart-tip strong { font-weight: 650; }
+.chart-tip-row { display: flex; align-items: center; gap: 6px; }
+.chart-tip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.chart-tip-value { margin-left: auto; white-space: nowrap; }
+
+/* ---------- months still being reported, pooled values ---------- */
+.chart .column.incomplete { opacity: 1; fill: var(--c-price-soft); }
+.bars li.pooled .bar-track i { opacity: 1; background-image: repeating-linear-gradient(135deg, var(--hatch-ink) 0 1.5px, transparent 1.5px 5px); }
+
+/* ---------- scale strip and range bar ---------- */
+.scale-strip .scale-axis { display: flex; justify-content: space-between; margin-top: 6px; color: var(--muted); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.scale-names .scale-key.current { background: var(--c-price); }
+.range-track .range-marker.subject-marker { background: var(--subject); }
+.range-track .range-marker.subject-marker.alt { background: var(--surface); border-color: var(--subject); }
+.range-marker-name { white-space: nowrap; }
+.range-marker-name .subject-key { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 50%; background: var(--subject); vertical-align: 0; }
+.range-marker-name .subject-key.alt { background: transparent; box-shadow: inset 0 0 0 2px var(--subject); }

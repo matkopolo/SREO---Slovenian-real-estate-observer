@@ -6,7 +6,7 @@ import { Histogram, LineChart } from "./charts";
 import { LoadFailed, LoadState } from "./LoadState";
 import { GLOSSARY, Term } from "./Term";
 import { useLoad } from "../hooks/useLoad";
-import { decimal1, euro, integer, NBSP, percent } from "../format";
+import { decimal1, euro, integer, NBSP, percent, withUnit } from "../format";
 import { NOUNS, ROOMS_GENITIVE, type Band } from "../nouns";
 import { count, NOUN_FORMS } from "../plural";
 import { t, tx } from "../i18n";
@@ -75,11 +75,12 @@ export function RentSection({ scope, parent, group, band, cutoff, years, salePer
   const unit = type.perUnit ? t("€ na mesec") : t("€/m² na mesec");
   const points = (items?: RentalTimePoint[]) => (items ?? []).filter((point) => !point.incomplete)
     .map((point) => ({ x: Number(point.period.slice(0, 4)), y: point.isPublishable ? (type.perUnit ? point.medianMonthlyRent : point.medianMonthlyRentPerSqm) ?? null : null }));
-  const series = [{ name: scope.name, className: "s1", points: points(trend.own) }, ...(parent ? [{ name: parent.name, className: "ref", points: points(trend.parent) }] : [])];
+  const series = [{ name: scope.name, className: "c-rent", points: points(trend.own) },
+    ...(parent ? [{ name: parent.name, className: parent.level === "country" ? "ref-country" : "ref-region", points: points(trend.parent) }] : [])];
   const period = windows ? (windows.rentYears.includes("–") ? t("v letih {years}", { years: windows.rentYears }) : t("v letu {year}", { year: windows.rentYears })) : "";
   const typical = !type.perUnit && now?.medianMonthlyRent != null
-    ? now.medianArea != null ? t("(tipično {rent} za {area} m²)", { rent: euro(now.medianMonthlyRent), area: decimal1(now.medianArea) }) : t("(tipično {rent})", { rent: euro(now.medianMonthlyRent) })
-    : type.perUnit && now?.medianArea != null ? t("(tipično {area} m²)", { area: decimal1(now.medianArea) }) : null;
+    ? now.medianArea != null ? t("(tipično {rent} za {area})", { rent: euro(now.medianMonthlyRent), area: withUnit(decimal1(now.medianArea), "m²") }) : t("(tipično {rent})", { rent: euro(now.medianMonthlyRent) })
+    : type.perUnit && now?.medianArea != null ? t("(tipično {area})", { area: withUnit(decimal1(now.medianArea), "m²") }) : null;
 
   return <section className="module open rent-section" aria-labelledby="rent-title">
     <h2 id="rent-title">{t("Najemi {period}", { period })}</h2>
@@ -91,7 +92,7 @@ export function RentSection({ scope, parent, group, band, cutoff, years, salePer
       {RENT_SIZES.map((item) => <button key={item.id} type="button" aria-pressed={ownBand?.id === item.id} onClick={() => setRentSize(item.id)}>{item.label}</button>)}
     </div>}
     <p className="area-lede">
-      {overview.error ? <LoadFailed retry={overview.retry}/> : current === undefined ? t("Nalagam najeme …")
+      {overview.error ? <LoadFailed retry={overview.retry}/> : current === undefined ? t("Nalagam najeme\u00a0…")
         : now && nowValue != null ? <>{tx("Mediana najemnine {noun}{band}: {rent} na mesec{typical}, n = {n}{change}.", {
           noun: type.genitive, band: kind === group && band ? ` (${band.label})` : "",
           rent: <strong>{type.perUnit ? euro(nowValue) : `${decimal1(nowValue)}${NBSP}€/m²`}</strong>,
@@ -99,18 +100,19 @@ export function RentSection({ scope, parent, group, band, cutoff, years, salePer
           change: change != null ? `, ${percent(change, { signed: true })} ${t("glede na enako dolgo obdobje prej")}` : "" })}
           {yieldPercent != null && <> {tx("{term} {value} %.", { term: <Term text={GLOSSARY.donos}>{t("Bruto donos")}</Term>, value: decimal1(yieldPercent) })}</>}</>
         : <>{t("{rentals} {noun}{note}.", { rentals: count(current?.transactionCount ?? 0, NOUN_FORMS.najem), noun: type.genitive,
-          note: current?.transactionCount ? `, ${t("premalo za mediano; posamezni najemi so spodaj")}` : "" })}</>}
+          note: current?.transactionCount ? ` – ${t("premalo najemov za mediano; posamezni najemi so spodaj")}` : "" })}</>}
     </p>
-    {series[0].points.some((point) => point.y != null) && <LineChart unit={type.perUnit ? "€" : "€/m²"} height={180}
+    {ownTrend.data === undefined && !ownTrend.error ? <div className="chart-placeholder" style={{ height: 210 }} aria-hidden="true"/>
+      : series[0].points.some((point) => point.y != null) && <LineChart unit={type.perUnit ? "€" : "€/m²"} height={180} kind="rent"
       label={t("Mediana najemnine {noun} po letih ({unit}): {areas}", { noun: type.genitive, unit, areas: series.map((item) => item.name).join(", ") })} series={series}/>}
     <details className="module-inner">
       <summary>{t("Porazdelitev najemnin")}</summary>
-      <LoadState load={spread}>{(data) => !data.isPublishable ? <p className="muted">{t("Premalo najemov za porazdelitev.")}</p> // i18n-ignore (code, not text)
-        : <Histogram unit={type.perUnit ? "€" : "€/m²"} label={t("Porazdelitev najemnin {noun}, {area}", { noun: type.genitive, area: scope.name })}
+      <LoadState load={spread}>{(data) => !data.isPublishable ? <p className="note muted">{t("Premalo najemov za graf.")}</p> // i18n-ignore (code, not text)
+        : <Histogram unit={type.perUnit ? "€" : "€/m²"} kind="rent" open={{ below: data.belowBoundCount > 0, above: data.aboveBoundCount > 0 }} label={t("Porazdelitev najemnin {noun}, {area}", { noun: type.genitive, area: scope.name })}
           buckets={data.buckets.map((bucket) => ({ lower: bucket.from, upper: bucket.to, count: bucket.count }))}/>}</LoadState>
     </details>
     {rentFrom && rentTo && <SalesList kind="rent" scopeId={scope.id} scopeName={scope.name} segment={segment} window={{ from: rentFrom, to: rentTo }} noun={type.genitive} linkArea={scope.id}/>}
-    <p className="muted">{tx("To so evidentirane najemne pogodbe za {area} (brez obratovalnih stroškov), ne oglasi: oglasne cene so pogosto višje, med pogodbami pa so tudi starejši najemi in najemi med znanci.", { area: areaName(scope) })}
+    <p className="note muted">{tx("To so evidentirane najemne pogodbe za {area} (brez obratovalnih stroškov), ne oglasi: oglasne cene so pogosto višje, med pogodbami pa so tudi starejši najemi in najemi med znanci.", { area: areaName(scope) })}
       {" "}{t("GURS jih evidentira z zamikom do enega leta, zato najnovejši meseci manjkajo.")}</p>
   </section>;
 }

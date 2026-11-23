@@ -1,6 +1,9 @@
 import { Fragment, type ReactNode } from "react";
 import type { searchBuildings } from "../api";
 import { integer, titleCase } from "../format";
+import { addressLabel } from "../address";
+
+export { addressLabel };
 import { count, forms, NOUN_FORMS, type Forms } from "../plural";
 import { LOCALE, proper, t, tx } from "../i18n";
 
@@ -29,14 +32,6 @@ export const areaName = (option: AreaOption) => option.level === "country" ? opt
 export const joined = (parts: ReactNode[], separator: string): ReactNode => parts.every((part) => typeof part === "string" || typeof part === "number")
   ? parts.join(separator) : parts.map((part, index) => <Fragment key={index}>{index ? separator : ""}{part}</Fragment>);
 
-export function addressLabel(item: { street?: string | null; houseNumber?: string | null; houseNumberSuffix?: string | null; settlement?: string | null }) {
-  const number = `${item.houseNumber ?? ""}${item.houseNumberSuffix ?? ""}`.trim();
-  const settlement = titleCase(item.settlement);
-  // Rural addresses have no street: the settlement carries the house number ("Kozje 144").
-  if (!item.street) return [settlement, number].filter(Boolean).join(" ");
-  const street = `${titleCase(item.street)} ${number}`.trim();
-  return [street, settlement && settlement !== street ? settlement : ""].filter(Boolean).join(", ");
-}
 
 /** Lower case without diacritics, so "domzale" finds Domžale. */
 export const fold = (value: string) => value.normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase("sl-SI").trim();
