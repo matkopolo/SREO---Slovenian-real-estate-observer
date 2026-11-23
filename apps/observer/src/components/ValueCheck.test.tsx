@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { ValueCheck } from "./ValueCheck";
+import { groupPackages, ValueCheck } from "./ValueCheck";
 import { stubApi } from "../test/api-stub";
 import { clearApiCache } from "../api";
 
@@ -64,7 +64,7 @@ it("leads with the similar-sales value, explains my purchase with the sale page'
   const updated = screen.getByText("Posodobljen s cenami v občini Ljubljana").closest(".value-row")!;
   await waitFor(() => expect(updated).toHaveTextContent(/130\.000\s€/));
   expect(screen.getByText("Zato je vaša posodobljena nakupna cena nižja od današnje ocene.")).toBeInTheDocument();
-  expect(screen.getByRole("figure", { name: "Vaš nakup in današnja ocena na isti lestvici" })).toHaveTextContent(/vaš nakup 130\.000, posodobljen nakup 130\.000/);
+  expect(screen.getByRole("figure", { name: "Vaš nakup in današnja ocena na isti lestvici" })).toHaveTextContent(/vaš nakup 130\.000\s€, posodobljen nakup 130\.000\s€/);
   expect(screen.queryByRole("button", { name: "Zapri" })).not.toBeInTheDocument();          // the explorer bar's "Nazaj na pregled trga" closes it
   fireEvent.click(screen.getByRole("checkbox", { name: "Stanovanje je v slabšem stanju od povprečnega (ni obnovljeno)" }));
   expect(await screen.findByRole("heading", { level: 2, name: /^Ocena danes: okoli 266\.000\s€\s*\(verjetno\s*266\.000–289\.000\s€\s*\)$/ })).toBeInTheDocument();
@@ -152,7 +152,27 @@ it("offers every property type and says plainly when the building has no sale of
   expect(screen.getByRole("row", { name: /30\.\s6\.\s2021/ })).toBeInTheDocument();
   fireEvent.click(within(types).getByRole("button", { name: "Garaža / parkirišče" }));
   expect(screen.getByText(/V tej stavbi ni evidentirane prodaje te vrste \(garaža \/ parkirišče\)/)).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Izračunaj vrednost" })).toBeDisabled();
+  // The button stays enabled; an empty form says what is missing next to each field and focuses the first one.
+  fireEvent.click(screen.getByRole("button", { name: "Izračunaj vrednost" }));
+  const price = screen.getByRole("textbox", { name: /Nakupna cena/ });
+  expect(price).toHaveFocus();
+  expect(price).toHaveAttribute("aria-invalid", "true");
+  expect(price).toHaveAccessibleDescription("Vpišite nakupno ceno v evrih.");
+  expect(screen.getByLabelText(/Površina/)).toHaveAccessibleDescription("Vpišite površino v m².");
+});
+
+it("groups the parts of a package sale under one date and price", () => {
+  const events = [
+    { transactionId: 1, componentId: 10, contractDate: "2015-03-01", agreementPrice: 150000, area: 61 },
+    { transactionId: 1, componentId: 11, contractDate: "2015-03-01", agreementPrice: 150000, area: 14 },
+    { transactionId: 1, componentId: 11, contractDate: "2015-03-01", agreementPrice: 150000, area: 14 },
+    { transactionId: 2, componentId: 10, contractDate: "2019-05-01", agreementPrice: 210000, area: 61 },
+  ];
+  const sales = groupPackages(events);
+  expect(sales).toHaveLength(2);
+  expect(sales[0]).toMatchObject({ transactionId: 1, contractDate: "2015-03-01", agreementPrice: 150000 });
+  expect(sales[0].parts.map((part) => part.area)).toEqual([61, 14]);
+  expect(sales[1].parts).toHaveLength(1);
 });
 
 it("values a garage per unit from the typical garage in the municipality", async () => {

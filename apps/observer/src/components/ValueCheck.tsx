@@ -1,9 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { focusQuietly, jumpTo } from "../focus";
+import { noEstimate } from "./Missing";
 import {
   loadBuilding, loadInflationBetween, loadPriceIndex, loadRentOverview, loadSaleAreas, loadSaleEvidence, loadSaleOverview, loadSpread, marketWindows, shiftWindow,
   type BuildingStatistics, type Distribution, type Geography, type MarketIndex, type PropertyGroup, type RentalOverview, type RentGroup, type StatisticsOverview,
 } from "../api";
-import { addressLabel, AreaSearch } from "./AreaSearch";
+import { AreaSearch } from "./AreaSearch";
+import { addressLabel } from "../address";
 import { benchmarkPlace, chooseBenchmark } from "./TransactionDetails";
 import { BuildingFacts } from "./BuildingFacts";
 import { RangeBar } from "./charts";
@@ -39,6 +42,22 @@ const CONDITION: Partial<Record<PropertyGroup, string>> = {
 /** Accusative: "Stavba ima 11 enot". */
 const UNITS = forms(["enoto", "enoti", "enote", "enot"], ["unit", "units"]); // i18n-ignore
 const RECORDS = forms(["enak vpis", "enaka vpisa", "enaki vpisi", "enakih vpisov"], ["identical record", "identical records"]); // i18n-ignore
+/** "2 dela" / "2 parts": the parts of one package sale. */
+const PARTS = forms(["del", "dela", "deli", "delov"], ["part", "parts"]); // i18n-ignore
+
+/** One recorded sale of the unit; a package sale arrives once per part (same transaction). */
+interface UnitEvent { transactionId: number; componentId?: number | null; contractDate?: string | null; agreementPrice?: number | null; area?: number | null; share?: string | null }
+/** The unit's other sales with a package's parts grouped under their sale (one date and price each), oldest first. */
+export function groupPackages<T extends UnitEvent>(events: T[]): Array<{ transactionId: number; contractDate?: string | null; agreementPrice?: number | null; parts: T[] }> { // i18n-ignore (code, not text)
+  const sales = new Map<number, { transactionId: number; contractDate?: string | null; agreementPrice?: number | null; parts: T[] }>();
+  for (const event of events) {
+    const sale = sales.get(event.transactionId);
+    if (sale) { if (!sale.parts.some((part) => part.componentId != null && part.componentId === event.componentId)) sale.parts.push(event); }
+    else sales.set(event.transactionId, { transactionId: event.transactionId, contractDate: event.contractDate, agreementPrice: event.agreementPrice, parts: [event] });
+  }
+  return [...sales.values()];
+}
+
 /** "v občini Ljubljana" / "in Ljubljana": where the municipality figures come from. */
 const inMunicipality = (name?: string): ReactNode => name ? tx("v občini {municipality}", { municipality: proper(name) }) : t("v občini");
 /** "v četrtni skupnosti Jarše" / "in the Jarše city district" (names arrive without the register prefix). */
@@ -183,11 +202,23 @@ function bringUp(step: HTMLElement | null | undefined, target: HTMLElement | nul
 /**
  * A euro amount: plain digits while typing, "289.000" once the field is left. The value passed around is digits only.
  */
-function MoneyInput({ value, onChange, required }: { value: string; onChange: (value: string) => void; required?: boolean }) {
+function MoneyInput({ value, onChange, required, invalid, describedBy, inputRef }: {
+  value: string; onChange: (value: string) => void; required?: boolean; invalid?: boolean; describedBy?: string; inputRef?: Ref<HTMLInputElement>; // i18n-ignore (code, not text)
+}) {
   const [editing, setEditing] = useState(false);
   const shown = editing || value === "" || !Number.isFinite(Number(value)) ? value : integer(Number(value));
-  return <input type="text" inputMode="numeric" autoComplete="off" value={shown} required={required}
+  return <input ref={inputRef} type="text" inputMode="numeric" autoComplete="off" value={shown} required={required} aria-invalid={invalid || undefined} aria-describedby={describedBy}
     onFocus={() => setEditing(true)} onBlur={() => setEditing(false)} onChange={(event) => onChange(event.target.value.replace(/\D/g, ""))}/>;
+}
+
+type PurchaseField = "price" | "date" | "area";
+/** Which fields of a typed purchase are not usable, in the form's order. */
+export function invalidFields(form: { price: string; date: string; area: string }): PurchaseField[] {
+  return [
+    ...(Number(form.price) > 0 ? [] : ["price" as const]),
+    ...(/^\d{4}-\d{2}-\d{2}$/.test(form.date) && form.date >= "2007-01-01" ? [] : ["date" as const]),
+    ...(Number(form.area) > 0 ? [] : ["area" as const]),
+  ];
 }
 
 type SaleRow = BuildingStatistics["saleTransactions"][number] & { copies: number; lowPrice: boolean };
@@ -211,7 +242,13 @@ function PickPurchase({ building, onPick, onManual }: { building: BuildingStatis
   // An implausible type for this building: a house among many units, or a flat in a building of one unit.
   const units = building.knownBuildingPartCount;
   const likely: PropertyGroup | null = sales.length ? null : group === "house" && units >= 3 ? "apartment" : group === "apartment" && units === 1 ? "house" : null;
-  const valid = Number(form.price) > 0 && Number(form.area) > 0 && /^\d{4}-\d{2}-\d{2}$/.test(form.date);
+  // Validated on submit (the button is never disabled): each wrong field says why, and focus goes to the first one.
+  const [errors, setErrors] = useState<PurchaseField[]>([]);
+  const formId = useId();
+  const priceField = useRef<HTMLInputElement>(null), dateField = useRef<HTMLInputElement>(null), areaField = useRef<HTMLInputElement>(null); // i18n-ignore (code, not text)
+  const messages: Record<PurchaseField, string> = { price: t("Vpišite nakupno ceno v evrih."), date: t("Vpišite datum nakupa (od leta 2007 naprej)."), area: t("Vpišite površino v m².") };
+  const errorOf = (field: PurchaseField) => errors.includes(field) ? `${formId}-${field}` : undefined;
+  const edit = (patch: Partial<typeof form>) => { setForm({ ...form, ...patch }); setErrors(errors.filter((field) => !(field in patch))); };
   return <div className="pick">
     <div className="value-types" role="group" aria-label={t("Vrsta nepremičnine")}>
       {SUPPORTED.map((item) => <button key={item} type="button" aria-pressed={group === item} onClick={() => setGroup(item)}>{TYPE_LABEL[item]}</button>)}
@@ -221,7 +258,7 @@ function PickPurchase({ building, onPick, onManual }: { building: BuildingStatis
         : t("Stavba ima samo eno enoto – je vaša nepremičnina morda hiša?")}{" "}
       <button type="button" className="link" onClick={() => setGroup(likely)}>{likely === "apartment" ? t("Izberi stanovanje") : t("Izberi hišo")}</button></p>}
     {rows.length ? <>
-      <p className="muted">{t("Izberite svoj nakup med evidentiranimi prodajami {type} v stavbi.", { type: OF_TYPE_LABEL(group) })}</p>
+      <p className="note muted">{t("Izberite svoj nakup med evidentiranimi prodajami {type} v stavbi.", { type: OF_TYPE_LABEL(group) })}</p>
       <div className="table-scroll value-pick-scroll"><table className="compact-table value-pick">
         <caption className="sr-only">{t("Prodaje v stavbi")}</caption>
         <thead><tr><th scope="col">{t("Datum")}</th><th scope="col">{t("Površina")}</th><th scope="col">{t("Cena")}</th><th scope="col"><span className="sr-only">{t("Izbira")}</span></th></tr></thead>
@@ -235,14 +272,25 @@ function PickPurchase({ building, onPick, onManual }: { building: BuildingStatis
           <td className="pick-action"><button type="button" className="ghost" onClick={() => onPick(item.transactionId)}>{t("To je moj nakup")} <span aria-hidden="true">›</span></button></td>
         </tr>)}</tbody>
       </table></div>
-    </> : <p className="muted">{t("V tej stavbi ni evidentirane prodaje te vrste ({type}).", { type: TYPE_NAME[group] })} {t("Vnesite svoj nakup spodaj.")}</p>}
+    </> : <p className="note muted">{t("V tej stavbi ni evidentirane prodaje te vrste ({type}).", { type: TYPE_NAME[group] })} {t("Vnesite svoj nakup spodaj.")}</p>}
     <details key={group} className="module" open={!rows.length}>
       <summary>{rows.length ? t("Mojega nakupa ni na seznamu") : t("Vnesite svoj nakup")}</summary>
-      <form className="calc-inputs" onSubmit={(event) => { event.preventDefault(); if (valid) onManual({ price: Number(form.price), date: form.date, area: Number(form.area), group }); }}>
-        <label>{t("Nakupna cena (€)")}<MoneyInput value={form.price} onChange={(price) => setForm({ ...form, price })} required/></label>
-        <label>{t("Datum nakupa")}<input type="date" min="2007-01-01" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} required/></label>
-        <label>{t("Površina (m²)")}<input type="number" inputMode="decimal" min={1} step={0.1} value={form.area} onChange={(event) => setForm({ ...form, area: event.target.value })} required/></label>
-        <button type="submit" className="value-primary" disabled={!valid}>{t("Izračunaj vrednost")}</button>
+      <form className="calc-inputs" noValidate onSubmit={(event) => {
+        event.preventDefault();
+        const wrong = invalidFields(form);
+        setErrors(wrong);
+        if (wrong.length) { ({ price: priceField, date: dateField, area: areaField })[wrong[0]].current?.focus(); return; }
+        onManual({ price: Number(form.price), date: form.date, area: Number(form.area), group });
+      }}>
+        <label>{t("Nakupna cena (€)")}<MoneyInput inputRef={priceField} value={form.price} onChange={(price) => edit({ price })} required invalid={errors.includes("price")} describedBy={errorOf("price")}/>
+          {errors.includes("price") && <span id={errorOf("price")} className="field-error">{messages.price}</span>}</label>
+        <label>{t("Datum nakupa")}<input ref={dateField} type="date" min="2007-01-01" value={form.date} onChange={(event) => edit({ date: event.target.value })} required
+          aria-invalid={errors.includes("date") || undefined} aria-describedby={errorOf("date")}/>
+          {errors.includes("date") && <span id={errorOf("date")} className="field-error">{messages.date}</span>}</label>
+        <label>{t("Površina (m²)")}<input ref={areaField} type="number" inputMode="decimal" min={1} step={0.1} value={form.area} onChange={(event) => edit({ area: event.target.value })} required
+          aria-invalid={errors.includes("area") || undefined} aria-describedby={errorOf("area")}/>
+          {errors.includes("area") && <span id={errorOf("area")} className="field-error">{messages.area}</span>}</label>
+        <button type="submit" className="value-primary">{t("Izračunaj vrednost")}</button>
       </form>
     </details>
   </div>;
@@ -396,9 +444,9 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
     const heading = answerHeading.current;
     if (!heading || (focusRequest === handled.current && document.activeElement !== document.body)) return;
     handled.current = focusRequest;
-    heading.focus();
+    focusQuietly(heading);
   }, [focusRequest, shownAnswer]);
-  if (!shownAnswer) return <p className="muted" role="status">{items && (sales.data || sales.error || !areaInput) ? t("Za to nepremičnino ni dovolj podatkov za oceno.") : t("Računam ocene …")}</p>;
+  if (!shownAnswer) return <p className="note muted" role="status">{items && (sales.data || sales.error || !areaInput) ? noEstimate() : t("Računam ocene\u00a0…")}</p>;
   // The one value of the page: rent yield and the sale scenario use it too.
   const value = answer?.mid ?? null;
   const change = value != null && purchase.price > 0 ? value / purchase.price - 1 : null;
@@ -420,9 +468,9 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
       {consequence && <p className="value-own">{consequence}</p>}
       {shownComparables && <details className="value-comparables">
         <summary>{trusted ? t("Primerljive prodaje na zemljevidu ({count})", { count: shownComparables.length }) : t("Podobne prodaje v okolici na zemljevidu ({count})", { count: shownComparables.length })}</summary>
-        <p className="muted">{trusted ? t("Pike na zemljevidu so prodaje, na katerih temelji ocena; obroč je vaša nepremičnina. Povezava odpre prodajo.")
+        <p className="note muted">{trusted ? t("Pike na zemljevidu so prodaje, na katerih temelji ocena; obroč je vaša nepremičnina. Povezava odpre prodajo.")
           : t("Ocena ne temelji na njih (premalo ali preveč različne), a kažejo, kaj se je v okolici prodajalo; obroč je vaša nepremičnina. Povezava odpre prodajo.")}
-          {" "}<a href="#explorer-map" className="value-map-jump" onClick={(event) => { event.preventDefault(); document.querySelector(".explorer-map-wrap")?.scrollIntoView({ block: "start" }); }}>{t("Zemljevid je na dnu strani ↓")}</a></p>
+          {" "}<a href="#explorer-map" className="value-map-jump" onClick={(event) => { event.preventDefault(); jumpTo(document.querySelector<HTMLElement>(".explorer-map-wrap")); }}>{t("Zemljevid je na dnu strani")} <span aria-hidden="true">↓</span></a></p>
         <ol className="rows value-comparable-rows">{(allComparables ? shownComparables : shownComparables.slice(0, COMPARABLES_SHOWN)).map((item) => <li key={item.transactionId}
           onMouseEnter={() => onHighlight?.(item.transactionId)} onMouseLeave={() => onHighlight?.(null)}>
           <a href={transactionHref({ kind: "sale", id: item.transactionId })} onFocus={() => onHighlight?.(item.transactionId)} onBlur={() => onHighlight?.(null)}
@@ -438,7 +486,7 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
       {asksCondition && <label className="value-condition">
         <input type="checkbox" checked={poorCondition} onChange={(event) => setPoorCondition(event.target.checked)}/>
         <span>{condition}</span></label>}
-      <p className="muted">{garage ? t("Ocena ne pozna lege garaže (podzemna, zunanja, z vrati).")
+      <p className="note muted">{garage ? t("Ocena ne pozna lege garaže (podzemna, zunanja, z vrati).")
         : asksCondition ? t("Ocene ne poznajo nadstropja, razgleda in opreme vaše nepremičnine; slabše stanje označite zgoraj.")
         : t("Ocene ne poznajo nadstropja, razgleda in opreme vaše nepremičnine.")}</p>
     </section>
@@ -447,9 +495,11 @@ function Estimates({ purchase, evidence, evidenceLoading = false, municipalityId
 
     {events.length > 0 && <section className="module open">
       <h2>{t("Druge evidentirane prodaje te enote")}</h2>
-      <ol className="rows">{events.map((event) => <li key={`${event.transactionId}-${event.componentId}`}>
-        <strong><span className="when">{event.contractDate ? date(event.contractDate) : "—"}</span>: <span className="money">{event.agreementPrice == null ? "—" : euro(event.agreementPrice)}</span></strong>
-        <span>{event.area ? sqm(event.area) : ""}{event.share && event.share !== "1/1" ? `, ${t("delež {share}", { share: event.share })}` : ""}</span></li>)}</ol>
+      {/* A package (a flat with its garage) is one sale with several parts: one date and one price, the parts listed under it. */}
+      <ol className="rows">{groupPackages(events).map((sale) => <li key={sale.transactionId}>
+        <strong><span className="when">{sale.contractDate ? date(sale.contractDate) : "—"}</span>: <span className="money">{sale.agreementPrice == null ? "—" : euro(sale.agreementPrice)}</span>
+          {sale.parts.length > 1 && <span className="muted"> {t("(cena za {parts} skupaj)", { parts: count(sale.parts.length, PARTS) })}</span>}</strong>
+        <span>{sale.parts.map((part) => [part.area ? sqm(part.area) : "", part.share && part.share !== "1/1" ? t("delež {share}", { share: part.share }) : ""].filter(Boolean).join(", ")).filter(Boolean).join(" · ")}</span></li>)}</ol>
     </section>}
 
     <RentEstimate purchase={purchase} area={rents.data} done={!!(rents.data || rents.error)} failed={!!rents.data?.failed || rents.error != null} retry={rents.retry}
@@ -505,7 +555,7 @@ function SaleNow({ purchase, suggested, band }: { purchase: Purchase; suggested:
       <label>{t("Preostanek kredita (€)")}<MoneyInput value={loan} onChange={setLoan}/></label>
       <label className="check"><input type="checkbox" checked={sellerTax} onChange={(event) => setSellerTax(event.target.checked)}/> {t("Davek na promet (2 %) plačam jaz")}</label>
     </form>
-    {ownHome === null && <p className="muted">{t("Odgovorite na vprašanje zgoraj: od tega je odvisen davek na dobiček.")}</p>}
+    {ownHome === null && <p className="note muted">{t("Odgovorite na vprašanje zgoraj: od tega je odvisen davek na dobiček.")}</p>}
     {result && ownHome !== null && <>
       <ol className="waterfall">
         <li><span>{t("Prodajna cena")}</span><strong>{euro(price)}</strong></li>
@@ -523,7 +573,7 @@ function SaleNow({ purchase, suggested, band }: { purchase: Purchase; suggested:
         : t("To je toliko, kot ste plačali za nakup in vlaganja.")}
         {result.nextRate && <> {t("Po {date} bo stopnja davka {rate} %.", { date: date(result.nextRate.date), rate: integer(result.nextRate.rate * 100) })}</>}</p>
     </>}
-    <p className="muted">{t("Izobraževalni scenarij za zasebno prodajo brez DDV, ni davčna napoved.")} {t("Davčna osnova za davek na dobiček je razlika med prodajno in nakupno ceno, zmanjšane za dokazana vlaganja in za stroške, ki jih zakon prizna brez računov (1 % nakupne in 1 % prodajne vrednosti).")} {t("Stopnje: manj kot 5 let 25 %, 5–9 let 20 %, 10–14 let 15 %, od 15 let 0 %; lastni dom z bivanjem vsaj 3 leta je oproščen.")}
+    <p className="note muted">{t("Izobraževalni scenarij za zasebno prodajo brez DDV, ni davčna napoved.")} {t("Davčna osnova za davek na dobiček je razlika med prodajno in nakupno ceno, zmanjšane za dokazana vlaganja in za stroške, ki jih zakon prizna brez računov (1 % nakupne in 1 % prodajne vrednosti).")} {t("Stopnje: manj kot 5 let 25 %, 5–9 let 20 %, 10–14 let 15 %, od 15 let 0 %; lastni dom z bivanjem vsaj 3 leta je oproščen.")}
       {" "}<a href={TAX_RULES.source} target="_blank" rel="noopener noreferrer">{t("FURS: nakup in prodaja nepremičnine")}</a></p>
   </section>;
 }
@@ -542,7 +592,7 @@ function RentEstimate({ purchase, area, done, failed, retry, district, municipal
   const medianRent = rent?.isPublishable ? rent.medianMonthlyRentPerSqm ?? percentiles?.p50 ?? null : percentiles?.p50 ?? null;
   if (medianRent == null) return <section className="module open"><h2>{t("Najemnina")}</h2>
     {failed ? <LoadFailed retry={retry}>{t("Najemnin ni bilo mogoče naložiti.")}</LoadFailed>
-      : <p className="muted">{done ? t("V občini je bilo v letu {year} premalo najemov te vrste za oceno.", { year: year ?? "" }) : t("Nalagam najemnine …")}</p>}</section>;
+      : <p className="note muted">{done ? t("V občini je bilo v letu {year} premalo najemov te vrste za oceno.", { year: year ?? "" }) : t("Nalagam najemnine\u00a0…")}</p>}</section>;
   const round10 = (amount: number) => Math.round(amount / 10) * 10;
   const low = (percentiles?.p25 ?? medianRent) * purchase.area;
   const high = (percentiles?.p75 ?? medianRent) * purchase.area;
@@ -554,7 +604,7 @@ function RentEstimate({ purchase, area, done, failed, retry, district, municipal
       where, area: decimal1(purchase.area), range: <span className="money">{range(round10(low), round10(high))}</span>, median: decimal1(medianRent), year: year ?? "—",
       rentals: count(rent?.rentPerSqmSampleSize ?? spread?.sampleSize ?? 0, NOUN_FORMS.najem) })}</p>
     <p className="value-caveat">{t("To so evidentirane najemne pogodbe (brez obratovalnih stroškov), ne oglasi: oglasne najemnine so običajno višje.")}</p>
-    <p className="muted">{gross != null && value != null && <>{t("Bruto donos glede na oceno vrednosti ({value}): {yield} % na leto, pred stroški, vzdrževanjem, praznimi meseci in davkom na najemnino (25 % od najemnine po odbitku 10 % stroškov, ki jih zakon prizna brez računov).", {
+    <p className="note muted">{gross != null && value != null && <>{t("Bruto donos glede na oceno vrednosti ({value}): {yield} % na leto, pred stroški, vzdrževanjem, praznimi meseci in davkom na najemnino (25 % od najemnine po odbitku 10 % stroškov, ki jih zakon prizna brez računov).", {
       value: euro(round(value)), yield: decimal1(gross * 100) })} </>}{t("Najemne pogodbe GURS evidentira z zamikom, zato uporabljamo zadnje celo leto.")}</p>
   </section>;
 }

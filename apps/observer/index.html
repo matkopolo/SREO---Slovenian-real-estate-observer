@@ -4,10 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="description" content="Slovenian Real Estate Observer: dejansko sklenjeni nepremičninski posli, cene, najemnine in dostopnost v Sloveniji (GURS ETN)." />
+    <meta name="theme-color" content="#f5f1e6" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#14181a" media="(prefers-color-scheme: dark)" />
     <title>Slovenian Real Estate Observer (SREO)</title>
-    <!-- Self-hosted fonts (public/fonts, SIL OFL 1.1); the Latin body and display faces are needed on first paint. -->
+    <!-- Self-hosted fonts (public/fonts, SIL OFL 1.1); the Latin body and display faces are needed on first paint, and the
+         display face's latin-ext subset too (č, š, ž in Slovenian place names and headings). -->
     <link rel="preload" href="/fonts/instrument-sans-latin-wght-5.3.0.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/fraunces-latin-opsz-wght-5.3.0.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/fraunces-latin-ext-opsz-wght-5.3.0.woff2" as="font" type="font/woff2" crossorigin />
   </head>
   <body>
     <div id="root"></div>

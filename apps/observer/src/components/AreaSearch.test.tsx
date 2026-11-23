@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AreaSearch } from "./AreaSearch";
 
@@ -141,7 +141,7 @@ it("'Polje' does not open Dobrepolje, and districts carry their town", async () 
   type("Polje");
   await screen.findByRole("option", { name: /Dobrepolje/ });
   fireEvent.submit(input.closest("form")!);
-  expect(await screen.findByRole("status")).toHaveTextContent("Ni natančnega zadetka – izberite s seznama, npr. Dobrepolje.");
+  await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Ni natančnega zadetka – izberite s seznama, npr. Dobrepolje."));
   expect(onArea).not.toHaveBeenCalled();
   type("siska");
   expect(screen.getByRole("option", { name: /Šiška \(Ljubljana\)/ })).toHaveTextContent("četrtna skupnost, Ljubljana");
@@ -153,7 +153,7 @@ it("says when nothing matches, with useful advice", async () => {
   const { input, type } = setup();
   type("Neobstojeca 12");
   fireEvent.submit(input.closest("form")!);
-  expect(await screen.findByRole("status")).toHaveTextContent("Ni zadetkov. Preverite hišno številko ali vpišite samo ulico in kraj");
+  await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Ni zadetkov. Preverite hišno številko ali vpišite samo ulico in kraj"));
 });
 
 it("an area-only search clicks through to the area and says 'Ni takega območja'", () => {

@@ -7,7 +7,7 @@ export const pages: Record<string, string> = {
   // Masthead and footer
   "Na vsebino": "Skip to content",
   "Dejansko sklenjeni nepremičninski posli v Sloveniji": "Actual completed property transactions in Slovenia",
-  "Vir GURS ETN, {licence}, obdelano": "Source: GURS ETN, {licence}, processed",
+  "Vir: GURS ETN, SURS, Banka Slovenije, DRSV, MOPE ({licence})": "Source: GURS ETN, SURS, Banka Slovenije, DRSV, MOPE ({licence})",
   "podatki do {date}": "data up to {date}",
   "Creative Commons Priznanje avtorstva 4.0": "Creative Commons Attribution 4.0",
   "Metodologija in viri": "Methodology and sources",
@@ -15,15 +15,10 @@ export const pages: Record<string, string> = {
   "Trg po območjih": "Market by area",
   "Trendi": "Trends",
   "O podatkih": "About the data",
-  "Nalagam …": "Loading …",
   "Stanja podatkov trenutno ni bilo mogoče naložiti (povezava ali strežnik).": "The data status could not be loaded right now (connection or server).",
   "Del strani": "Page section",
   "Cene skozi čas": "Prices over time",
   "Porazdelitev in skrajni posli": "Distribution and extremes",
-  "Vir: Geodetska uprava RS (GURS), Evidenca trga nepremičnin, Register prostorskih enot, Kataster nepremičnin in Evidenca vrednotenja (CC BY 4.0); Register energetskih izkaznic (MOPE); DRSV (CC BY 4.0); SURS; Banka Slovenije; ECB; zemljevid OpenFreeMap in sodelavci OpenStreetMap.":
-    "Sources: Surveying and Mapping Authority of the Republic of Slovenia (GURS), Real Estate Market Register, Register of Spatial Units, Real Estate Cadastre and valuation register (CC BY 4.0); Register of energy performance certificates (Ministry of the Environment, Climate and Energy); DRSV (CC BY 4.0); SURS; Bank of Slovenia; ECB; map by OpenFreeMap and OpenStreetMap contributors.",
-  "Podatki so obdelani.": "The data has been processed.",
-  "Prikaz je informativen in ni uradna cenitev ali ponudba kredita.": "This is for information only and is not an official valuation or a loan offer.",
 
   // Data status banner
   "preverjanje in uvoz vira GURS": "checking and importing the GURS source",
@@ -87,7 +82,7 @@ export const pages: Record<string, string> = {
   "Siva črta je Slovenija.": "The grey line is Slovenia.",
   "Leta z manj kot 30 posli so izpuščena; tekoče leto ni zaključeno in ni prikazano.":
     "Years with fewer than 30 transactions are left out; the current year is not complete and is not shown.",
-  "Nalagam regije …": "Loading regions …",
+  "Nalagam regije\u00a0…": "Loading regions…",
   "Slovenija: nominalno in v današnjih cenah": "Slovenia: nominal and in today’s prices",
   "Mediana cene stanovanj; realna vrednost s faktorjem inflacije SURS do januarja {year}.":
     "Median apartment price; real value using the SURS inflation factor to January {year}.",
@@ -102,7 +97,7 @@ export const pages: Record<string, string> = {
   "Za zemljišča indeksa najemnin ni.": "There is no rent index for land.",
   "Za sobe se objavljajo samo najemnine.": "Only rents are published for rooms.",
   "Indeksov za {noun} ni bilo mogoče naložiti.": "The indices for {noun} could not be loaded.",
-  "Nalagam indekse …": "Loading indices …",
+  "Nalagam indekse\u00a0…": "Loading indices…",
   "indeks": "index",
   "{title} v Sloveniji": "{title} in Slovenia",
   "Letna inflacija": "Annual inflation",
@@ -133,6 +128,7 @@ export const pages: Record<string, string> = {
   "{years} leta": "{years} years",
   "{from}–{to} leta": "{from}–{to} years",
   "Samo za Slovenijo ({pairs}); srednja polovica {range}.": "Slovenia only ({pairs}); middle half {range}.",
+  "samo za Slovenijo": "Slovenia only",
   "Porazdelitev cen": "Price distribution",
   "€/m², reprezentativni posli.": "€/m², transactions included in the statistics.",
   "Srednja polovica od {p25} do {p75}, mediana {p50}.": "Middle half from {p25} to {p75}, median {p50}.",
@@ -181,17 +177,40 @@ export const pages: Record<string, string> = {
   "Zato prodaje štejemo do konca zadnjega zaključenega četrtletja, najemnine pa za zadnje celo leto.":
     "So we count sales up to the end of the last completed quarter, and rents for the last full year.",
   "Zadnja četrtletja so začasna.": "The latest quarters are provisional.",
-  "Drugi viri": "Other sources",
-  "SURS: plače, prebivalstvo, selitve, umrli, popis stanovanj in gospodinjstev, inflacija.":
-    "SURS: salaries, population, migration, deaths, census of dwellings and households, inflation.",
-  "Banka Slovenije: obrestne mere in omejitve kreditiranja.": "Bank of Slovenia: interest rates and lending limits.",
-  "ECB: EURIBOR.": "ECB: EURIBOR.",
-  "GURS kataster nepremičnin: nove stavbe, prenove in dvigala.": "GURS real estate cadastre: new buildings, renovations and lifts.",
-  "GURS evidenca vrednotenja: posplošene vrednosti.": "GURS valuation register: generalised values.",
-  "Register energetskih izkaznic (MOPE): energijski razredi.": "Register of energy performance certificates (Ministry of the Environment, Climate and Energy): energy classes.",
-  "DRSV: razredi poplavne nevarnosti.": "DRSV (Slovenian Water Agency): flood hazard classes.",
+  "Viri in pogoji uporabe": "Sources and terms of use",
   "Vrednosti so obdelane in informativne; niso uradna cenitev ali ponudba kredita.":
     "The values are processed and for information only; they are not an official valuation or a loan offer.",
+  "GURS in drugi viri aplikacije ne podpirajo, ne potrjujejo in zanjo ne odgovarjajo.":
+    "GURS and the other sources do not sponsor, endorse or accept responsibility for this application.",
+  "GURS, Evidenca trga nepremičnin (ETN)": "GURS, Real Estate Market Register (ETN)",
+  "{source}: dejansko sklenjene prodaje in najemi, cene, najemnine ter vse tržne statistike in modeli. CC BY 4.0, podatki so obdelani.":
+    "{source}: actual completed sales and rentals, prices, rents and every market statistic and model. CC BY 4.0, the data is processed.",
+  "GURS, Register prostorskih enot (RPE)": "GURS, Register of Spatial Units (RPE)",
+  "{source}: meje statističnih regij, občin, četrtnih skupnosti in naselij. CC BY 4.0.":
+    "{source}: the boundaries of statistical regions, municipalities, city districts and settlements. CC BY 4.0.",
+  "GURS, Kataster nepremičnin (stavbe in deli stavb)": "GURS, Real Estate Cadastre (buildings and units)",
+  "{source}: leto gradnje, etaže, stanovanja, vrsta stavbe, prenove in dvigala; nove stavbe. Lastniški podatki se ne uvažajo. CC BY 4.0.":
+    "{source}: year built, floors, dwellings, building type, renovations and lifts; new buildings. Ownership data is not imported. CC BY 4.0.",
+  "GURS, Evidenca vrednotenja": "GURS, valuation register",
+  "{source}: posplošena vrednost prodane enote, prikazana ob oceni kot upravna vrednost, ne kot cena. Javni podatki po ZMVN-1, CC BY 4.0.":
+    "{source}: the generalised value of the sold unit, shown next to the estimate as an administrative value, never as a price. Public data under ZMVN-1, CC BY 4.0.",
+  "Register energetskih izkaznic (MOPE, Portal Energetika)": "Register of energy performance certificates (Ministry of the Environment, Climate and Energy, Portal Energetika)",
+  "{source}: energijski razred in kazalniki prodane enote ali njene stavbe. Javne informacije, ponovna uporaba po ZDIJZ z navedbo vira.":
+    "{source}: the energy class and indicators of the sold unit or its building. Public-sector information, re-used under ZDIJZ with the source stated.",
+  "DRSV, Integralna karta razredov poplavne nevarnosti": "DRSV (Slovenian Water Agency), integral flood hazard class map",
+  "{source}: razred poplavne nevarnosti stavbe in njegov prikaz na zemljevidu; zunaj preučenih območij razred ni določen. CC BY 4.0 (OPSI), z navedbo vira in datuma.":
+    "{source}: the building's flood hazard class and the map overlay; outside the studied areas no class is set. CC BY 4.0 (OPSI), with the source and date stated.",
+  "SURS, Statistični urad RS": "SURS, Statistical Office of the Republic of Slovenia",
+  "{source}: neto plače, gradbena dovoljenja, prebivalstvo, umrli, selitve, stanovanja in gospodinjstva, inflacija. Prosta uporaba z navedbo vira.":
+    "{source}: net salaries, building permits, population, deaths, migration, dwellings and households, inflation. Free reuse with the source cited.",
+  "Banka Slovenije": "Banka Slovenije",
+  "{source}: obrestne mere stanovanjskih posojil in makrobonitetne omejitve kreditiranja. Prosta uporaba z navedbo vira.":
+    "{source}: housing-loan interest rates and macroprudential lending limits. Free reuse with the source cited.",
+  "Evropska centralna banka (ECB)": "European Central Bank (ECB)",
+  "{source}: šestmesečni EURIBOR. Prosta uporaba z navedbo vira.": "{source}: the six-month EURIBOR. Free reuse with the source cited.",
+  "Sodelavci OpenStreetMap, OpenMapTiles in OpenFreeMap": "OpenStreetMap contributors, OpenMapTiles and OpenFreeMap",
+  "{source}: podlaga zemljevida in slog »liberty«. Podatki ODbL 1.0, shema in slog pod odprtimi licencami; navedba je ob zemljevidu.":
+    "{source}: the base map and the \u201cliberty\u201d style. Data under ODbL 1.0, the schema and style under their open licences; the credit is shown on the map.",
   "Za analitike: opozorila in izločena odstopanja": "For analysts: flags and excluded outliers",
   "Opozorila so signali za človeški pregled, ne dokaz napake ali goljufije.": "Flags are signals for human review, not proof of an error or fraud.",
   "Posel z opozorilom ostane v statistiki, razen če je izločen kot odstopanje.":
@@ -207,13 +226,18 @@ export const pages: Record<string, string> = {
   "Posel #{id}": "Transaction #{id}",
   "{flags}; ocena {score}": "{flags}; score {score}",
   "Izločena statistična odstopanja, {year}": "Excluded statistical outliers, {year}",
-  "Posli zunaj robustnih meja svoje kohorte ; ne vstopajo v mediane.": "Transactions outside the robust bounds of their cohort; they are left out of the medians.",
+  "Posli zunaj robustnih meja svoje kohorte; ne vstopajo v mediane.": "Transactions outside the robust bounds of their cohort; they are left out of the medians.",
   "Prodaje ({count})": "Sales ({count})",
   "Najemi ({count})": "Rentals ({count})",
   "{bounds}; mediana primerljivih {median} (n = {size})": "{bounds}; median of comparable sales {median} (n = {size})",
   "{measure}: {area} in Slovenija": "{measure}: {area} and Slovenia",
   "Demografija in cene": "Demographics and prices",
   "Prikazujemo demografske tokove (stanovanja, ki jih sprostijo starejši lastniki, nastajanje mladih gospodinjstev, selitve) kot kazalnike ponudbe in povpraševanja.": "We show demographic flows (homes released by older owners, young households forming, migration) as supply and demand indicators.",
-  "Napovedi cen iz demografije ne objavljamo: preizkus na podatkih 2010–2025 (206.520 prodaj, vse občine in regije) ni pokazal ponovljivega vpliva — učinki so majhni, med obdobji menjajo predznak in napovedujejo slabše kot predpostavka, da vse občine rastejo kot Slovenija.": "We do not publish price forecasts from demographics: a test on 2010–2025 data (206,520 sales, all municipalities and regions) found no repeatable effect — effects are small, change sign between periods and predict worse than assuming every municipality grows like Slovenia.",
+  "Napovedi cen iz demografije ne objavljamo: preizkus na podatkih 2010–2025 (206.520 prodaj, vse občine in regije) ni pokazal ponovljivega vpliva – učinki so majhni, med obdobji menjajo predznak in napovedujejo slabše kot predpostavka, da vse občine rastejo kot Slovenija.": "We do not publish price forecasts from demographics: a test on 2010–2025 data (206,520 sales, all municipalities and regions) found no repeatable effect — effects are small, change sign between periods and predict worse than assuming every municipality grows like Slovenia.",
   "Preizkus bomo ponovili, ko bodo na voljo podatki za 2027–2030.": "We will repeat the test when data for 2027–2030 are available.",
+  "na mesec": "per month",
+  "Razvrščeno po skupni oceni pregleda.": "Ranked by the combined review score.",
+  "{measure} po regijah": "{measure} by region",
+  "Siva pikčasta črta je Slovenija.": "The grey dotted line is Slovenia.",
+  "Indeks najemnin je mesečen; januarske vrednosti so vsako leto okoli 10 % nižje od drugih mesecev (lastnost izračuna, ki jo preverjamo), zato je krivulja zobčasta.": "The rent index is monthly; every January it reads about 10% below the other months (a property of the calculation we are checking), so the line is saw-toothed.",
 };

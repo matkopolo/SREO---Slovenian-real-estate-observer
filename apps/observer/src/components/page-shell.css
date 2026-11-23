@@ -1,0 +1,55 @@
+/* Page shell additions (App.tsx): stable layout while pages load, focus moved by script, tap targets.
+   Imported by App.tsx after styles.css and the explorer's stylesheet. */
+
+/* A heading, a section or a map reached by a script (tabindex="-1") is not a control: no focus box after focus(). */
+[tabindex="-1"]:focus:not(:focus-visible) { outline: none; }
+:is(h1, h2, h3, section, article, figure, main, .explorer-map-wrap)[tabindex="-1"]:focus { outline: none; }
+
+/* The reading pages reserve the screen under the masthead, so the footer is never painted under it while a page loads. */
+.observer:not(.full) > main.page-main { min-height: calc(100dvh - 150px); }
+.page-loading { min-height: calc(100dvh - 150px); }
+/* The explorer's placeholder takes its final size before the explorer's own stylesheet (a lazy chunk) arrives: on wide
+   screens the split view fills the space under the masthead, on phones the map comes first. */
+.explorer-placeholder { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: calc(100dvh - 150px); }
+.explorer-placeholder .explorer-bar { min-height: 52px; }
+.explorer-placeholder .explorer-body { flex: 1; display: grid; grid-template-columns: minmax(360px, 460px) minmax(0, 1fr); gap: 14px; min-height: 420px; }
+.explorer-placeholder .explorer-map-wrap { border: 1px solid var(--line); border-radius: var(--radius); }
+@media (max-width: 900px) {
+  .explorer-placeholder .explorer-body { grid-template-columns: 1fr; }
+  .explorer-placeholder .explorer-map-wrap { order: -1; min-height: calc(52vh + 40px); }
+}
+
+/* A loading transaction keeps the height of the page it becomes, so the building below does not jump when it arrives. */
+.td-panel[aria-busy="true"] { min-height: 420px; }
+/* Trends: the twelve regional charts keep their place while they load. */
+.multiple.is-placeholder .placeholder-plot { height: 150px; border-radius: var(--radius); background: color-mix(in srgb, var(--muted) 8%, transparent); }
+.multiple.is-placeholder figcaption { visibility: hidden; }
+.chart-placeholder { border-radius: var(--radius); background: color-mix(in srgb, var(--muted) 8%, transparent); }
+
+/* Overview: the ranked municipality links get a 24 px hit area (WCAG 2.5.8) without moving them sideways. */
+.bars .bar-name a { display: block; min-height: 24px; padding-block: 2px; overflow: hidden; text-overflow: ellipsis; white-space: inherit; }
+
+/* The missing-value mark ("—"): muted, never mistaken for a dash in a range. */
+.missing { color: var(--muted); }
+
+/* A table that scrolls sideways is focusable (keyboard scrolling); its focus ring sits inside the card. */
+.table-scroll[tabindex="0"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Pager: a button that cannot go further stays focusable (aria-disabled) and looks unavailable. */
+.pager button[aria-disabled="true"] { opacity: .5; cursor: default; }
+
+/* Map pooled key: the same hatch as the map, full strength (not faded). */
+.ramp-keys i.pooled-key.hatch { opacity: 1; background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.85) 0 1.5px, transparent 1.5px 4.5px); }
+
+/* Inline field errors in forms (value check, affordability calculator). */
+.field-error { display: block; margin-top: 4px; color: var(--danger); font-size: var(--fs-small); font-weight: 400; }
+
+/* A sale page's sections are h2 under its h1 (no skipped level) but keep the look of the h3s they were. */
+.td-panel section > h2, .td-panel h2.td-subtitle { margin: 0 0 8px; font-family: var(--font-body); font-size: var(--fs-h3); font-weight: 600; line-height: var(--lh-h3); color: var(--text); }
+.td-panel h2.td-subtitle { margin: 14px 0 4px; }
+.td-how-body h2.td-subtitle { margin-top: 12px; }
+
+/* Tiles and cost cards: a note or a sparkline is its own <dd> (a <dl> holds only dt/dd groups), sized like the old <small>. */
+dl dd.tile-note, dl dd.tile-spark { margin: 2px 0 0; font-size: var(--fs-caption); font-weight: 400; line-height: var(--lh-caption); }
+.overview-tiles dd.tile-note { grid-area: note; }
+.overview-tiles dd.tile-spark { grid-area: spark; align-self: end; }

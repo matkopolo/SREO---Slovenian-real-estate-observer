@@ -29,7 +29,7 @@ describe("value rows", () => {
   });
   it("says the municipality is still loading or could not be loaded instead of claiming too few sales", () => {
     const pending = buildValueRows({ ...base, anchored: null, waiting: true }, false);
-    expect(text(pending.find((row) => row.key === "updated")?.note)).toBe("Nalagam …");
+    expect(text(pending.find((row) => row.key === "updated")?.note)).toBe("Nalagam\u00a0…");
     const broken = buildValueRows({ ...base, anchored: null, failed: true }, false);
     expect(text(broken.find((row) => row.key === "updated")?.note)).toBe("cen v občini trenutno ni bilo mogoče naložiti");
     const thin = buildValueRows({ ...base, anchored: null }, false);

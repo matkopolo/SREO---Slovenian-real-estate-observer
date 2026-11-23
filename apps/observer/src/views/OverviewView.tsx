@@ -3,7 +3,8 @@ import { api, lastCompleteYear, loadAreaAffordability, loadAreaLists, loadGeogra
 import { AreaSearch } from "../components/AreaSearch";
 import { Bars, Columns, Histogram, LineChart, Sparkline } from "../components/charts";
 import { LoadFailed } from "../components/LoadState";
-import { change, decimal1, euro, integer, percent, upTo1 } from "../format";
+import { change, decimal1, euro, integer, month, percent, upTo1, withUnit } from "../format";
+import { noEstimate } from "../components/Missing";
 import { useLoad } from "../hooks/useLoad";
 import { Name, t, tx } from "../i18n";
 import { NOUNS } from "../nouns";
@@ -117,20 +118,24 @@ export function OverviewView({ cutoff }: { cutoff: string }) {
     : tx("{area} je {rank}. najdražja od {total} občin z objavljeno mediano.", { area: areaName, rank: ranked.length - ownRank, total: ranked.length });
   const bar = (item: AreaValue & { value: number }) => ({
     key: item.geographyId, name: <Name>{byId.get(item.geographyId)?.name ?? ""}</Name>, value: item.value, href: areaHref(item.geographyId),
-    current: item.geographyId === areaId, pooled: !!item.pooled, note: item.pooled ? t("({years} let)", { years: item.pooled }) : undefined,
-    title: `${byId.get(item.geographyId)?.name ?? ""}: ${integer(item.value)} €/m², ${t("{count} prodaj", { count: integer(item.sample) })}`,
+    current: item.geographyId === areaId, pooled: !!item.pooled,
+    // The sample is visible (it was only in a tooltip); a pooled value names its years.
+    note: [`n = ${integer(item.sample)}`, item.pooled ? t("({years} let)", { years: item.pooled }) : ""].filter(Boolean).join(" "),
   });
   const yields = (regional.data ?? []).filter((item): item is AreaValue & { value: number } => item.value != null).sort((a, b) => b.value - a.value).map((item) => ({
     key: item.geographyId, name: <Name>{byId.get(item.geographyId)?.name ?? ""}</Name>, value: item.value, current: item.geographyId === area?.parentId || item.geographyId === areaId,
-    note: item.rent != null ? t("najem {rent} €/m²", { rent: decimal1(item.rent) }) : undefined,
-    title: item.rent != null && item.price != null ? `${byId.get(item.geographyId)?.name ?? ""}: ${t("najemnina {rent} €/m² na mesec, cena {price} €/m²", { rent: decimal1(item.rent), price: integer(item.price) })}` : undefined,
+    note: item.rent != null && item.price != null ? t("najem {rent} · cena {price}", { rent: decimal1(item.rent), price: withUnit(integer(item.price), "€/m²") })
+      : item.rent != null ? t("najem {rent} €/m²", { rent: decimal1(item.rent) }) : undefined,
   }));
 
   const complete = (items: Array<{ period: string; incomplete: boolean; isPublishable: boolean; medianPricePerSqm?: number | null }>) =>
     items.filter((point) => !point.incomplete).map((point) => ({ x: yearOf(point.period), y: point.isPublishable ? point.medianPricePerSqm ?? null : null }));
   const trendSeries = !trend.data ? [] : trend.data.own && trend.data.areaId === areaId && area
-    ? [{ name: t("Slovenija"), className: "ref", points: complete(trend.data.country) }, { name: area.name, className: "accent", points: complete(trend.data.own) }]
-    : [{ name: t("Slovenija"), className: "accent", points: complete(trend.data.country) }];
+    ? [{ name: t("Slovenija"), className: "ref-country", points: complete(trend.data.country) }, { name: area.name, className: "c-price", points: complete(trend.data.own) }]
+    : [{ name: t("Slovenija"), className: "c-price", points: complete(trend.data.country) }];
+  // SURS names a month "2025M10"; the page says "oktober 2025".
+  const wagePeriod = (() => { const found = /^(\d{4})M(\d{2})$/.exec(affordability.data?.wagePeriod ?? ""); return found ? month(`${found[1]}-${found[2]}-01`) : affordability.data?.wagePeriod ?? ""; })();
+  const placeholder = (height: number) => <div className="chart-placeholder" style={{ height }} aria-hidden="true"/>;
 
   const distribution = spread.data;
   const buckets = (distribution?.isPublishable ? distribution.buckets : []).map((bucket) => ({ lower: bucket.from, upper: bucket.to, count: bucket.count }));
@@ -140,7 +145,8 @@ export function OverviewView({ cutoff }: { cutoff: string }) {
   const activity = months.map((point) => ({ period: point.period, value: point.transactionCount, incomplete: point.incomplete }));
 
   return <div className="view overview">
-    <section className="controls" aria-label={t("Območje in vrsta nepremičnine")}>
+    <h1 className="stage-title">{tx("Pregled trga: {area}", { area: areaName })}</h1>
+    <section className="controls page-controls" aria-label={t("Območje in vrsta nepremičnine")}>
       <AreaSearch compact regions={regions} municipalities={municipalities} label={t("Območje: {area}", { area: area?.name ?? (areaId ? "…" : t("Slovenija")) })} placeholder={t("vpišite občino ali regijo")}
         includeAddresses={false} onArea={(option) => { setAreaId(option.id); remember(option.id, group); }}/>
       <div className="segmented" role="group" aria-label={t("Vrsta nepremičnine")}>
@@ -148,59 +154,59 @@ export function OverviewView({ cutoff }: { cutoff: string }) {
         <button type="button" aria-pressed={group === "house"} onClick={() => { setGroup("house"); remember(areaId, "house"); }}>{t("Hiše")}</button>
       </div>
     </section>
-    <h1 className="stage-title">{tx("Pregled trga: {area}", { area: areaName })}</h1>
     <p className="stage-sub">{t("{nouns} {period}. Vsaka številka je iz dejansko sklenjenih poslov (GURS ETN); primerjave so z enako dolgim obdobjem pred tem.", { nouns: nouns.label, period })}
       {" "}{t("Črtici v ploščicah cene in prodaj kažeta zadnjih 12 zaključenih mesecev.")}</p>
 
     {!!headline.error && <LoadFailed retry={headline.retry}>{t("Pregleda trenutno ni bilo mogoče naložiti (povezava ali strežnik).")}</LoadFailed>}
     <dl className={headline.loading ? "tiles overview-tiles dimmed" : "tiles overview-tiles"} aria-busy={headline.loading || undefined}>
-      <div><dt>{t("Mediana cene")}</dt><dd>{price == null ? "—" : `${integer(price)} €/m²`}</dd>
-        <small>{head ? delta(priceChange) : t("Nalagam …")}</small>
-        <Sparkline points={recent.map((point) => point.isPublishable ? point.medianPricePerSqm ?? null : null)} label={t("Mediana cene po mesecih, zadnjih 12 mesecev")}/></div>
-      <div><dt>{t("Mediana najemnine")}</dt><dd>{rentValue == null ? "—" : `${decimal1(rentValue)} €/m²`}</dd>
-        <small>{rentYear ? `${t("na mesec, najemi leta {year}", { year: rentYear })} · ${head ? delta(rentChange) : t("Nalagam …")}` : ""}</small></div>
+      <div><dt>{t("Mediana cene")}</dt><dd>{price == null ? "—" : withUnit(integer(price), "€/m²")}</dd>
+        <dd className="tile-note"><small>{head ? delta(priceChange) : t("Nalagam\u00a0…")}</small></dd>
+        <dd className="tile-spark"><Sparkline points={recent.map((point) => point.isPublishable ? point.medianPricePerSqm ?? null : null)} label={t("Mediana cene po mesecih, zadnjih 12 mesecev")}/></dd></div>
+      <div><dt>{t("Mediana najemnine")}</dt><dd>{rentValue == null ? "—" : withUnit(decimal1(rentValue), "€/m²")}</dd>
+        <dd className="tile-note"><small>{rentYear ? `${t("na mesec, najemi leta {year}", { year: rentYear })} · ${head ? delta(rentChange) : t("Nalagam\u00a0…")}` : ""}</small></dd></div>
       <div><dt>{t("Prodaje v 12 mesecih")}</dt><dd>{sold == null ? "—" : integer(sold)}</dd>
-        <small>{head ? delta(soldChange) : t("Nalagam …")}</small>
-        <Sparkline points={recent.map((point) => point.transactionCount ?? null)} label={t("Prodaje po mesecih, zadnjih 12 mesecev")}/></div>
-      <div><dt>{t("Leta neto plače za {area} m²", { area: TYPICAL_AREA[group] })}</dt><dd>{yearsOfWage == null ? "—" : t("{years} let", { years: upTo1(yearsOfWage) })}</dd>
-        <small>{wage ? t("cela cena ob mediani neto plače {wage} € (SURS, {period})", { wage: integer(wage), period: affordability.data?.wagePeriod ?? "" }) : affordability.error ? t("ni bilo mogoče naložiti") : t("ni dovolj podatkov")}</small></div>
+        <dd className="tile-note"><small>{head ? delta(soldChange) : t("Nalagam\u00a0…")}</small></dd>
+        <dd className="tile-spark"><Sparkline points={recent.map((point) => point.transactionCount ?? null)} label={t("Prodaje po mesecih, zadnjih 12 mesecev")}/></dd></div>
+      <div><dt>{tx("Leta neto plače za {area} {unit}", { area: TYPICAL_AREA[group], unit: <span className="unit">m²</span> })}</dt><dd>{yearsOfWage == null ? "—" : t("{years} let", { years: upTo1(yearsOfWage) })}</dd>
+        <dd className="tile-note"><small>{wage ? t("cela cena ob mediani neto plače {wage} € (SURS, {period})", { wage: integer(wage), period: wagePeriod }) : affordability.error ? "" : affordability.data ? noEstimate() : t("Nalagam\u00a0…")}</small></dd></div>
     </dl>
     {!!affordability.error && <LoadFailed retry={affordability.retry}>{t("Dostopnosti ni bilo mogoče naložiti.")}</LoadFailed>}
 
     <div className="overview-grid">
       <section className="card" aria-labelledby="ov-trend">
         <h2 id="ov-trend">{t("Gibanje cen, zadnjih 10 let")}</h2>
-        <p className="muted">{t("Mediana €/m² po koledarskih letih; tekoče leto ni zaključeno in ni prikazano.")}{area ? ` ${t("Siva črta je Slovenija.")}` : ""}</p>
-        {trend.error ? <LoadFailed retry={trend.retry}/> : <LineChart unit="€/m²" label={t("Mediana cene {nouns} po letih", { nouns: nouns.genitive })} series={trendSeries}/>}
-        <p><a href={trendsHref(areaId)}>{t("Več v Trendih →")}</a></p>
+        <p className="note muted">{t("Mediana €/m² po koledarskih letih; tekoče leto ni zaključeno in ni prikazano.")}{area ? ` ${t("Siva črta je Slovenija.")}` : ""}</p>
+        {trend.error ? <LoadFailed retry={trend.retry}/> : !trend.data ? placeholder(250) : <LineChart unit="€/m²" label={t("Mediana cene {nouns} po letih", { nouns: nouns.genitive })} series={trendSeries}/>}{/* i18n-ignore (code, not text) */}
+        <p><a href={trendsHref(areaId)}>{t("Več v Trendih")} <span aria-hidden="true">→</span></a></p>
       </section>
       <section className="card" aria-labelledby="ov-rank">
         <h2 id="ov-rank">{t("Najcenejše in najdražje občine")}</h2>
-        <p className="muted">{t("Mediana €/m² {period}; občine z manj kot 30 prodajami so združene čez 5 let (svetlejše) ali izpuščene.", { period })} {t("Oba seznama sta na isti lestvici.")}
+        <p className="note muted">{t("Mediana €/m² {period}; občine z manj kot 30 prodajami so združene čez 5 let (šrafirano) ali izpuščene.", { period })} {t("Oba seznama sta na isti lestvici.")}
           {rankText ? <> {rankText}</> : null}</p>
-        {ranking.error ? <LoadFailed retry={ranking.retry}/> : <div className="bars-pair">
-          <div><h3>{t("Najcenejše")}</h3><Bars items={cheapest.map(bar)} label={t("Najcenejše občine")} format={(value) => `${integer(value)} €/m²`} max={rankMax}/></div>
-          <div><h3>{t("Najdražje")}</h3><Bars items={dearest.map(bar)} label={t("Najdražje občine")} format={(value) => `${integer(value)} €/m²`} max={rankMax}/></div>
+        {ranking.error ? <LoadFailed retry={ranking.retry}/> : !ranking.data ? placeholder(260) : <div className="bars-pair">{/* i18n-ignore (code, not text) */}
+          <div><h3>{t("Najcenejše")}</h3><Bars items={cheapest.map(bar)} label={t("Najcenejše občine")} format={(value) => withUnit(integer(value), "€/m²")} max={rankMax}/></div>
+          <div><h3>{t("Najdražje")}</h3><Bars items={dearest.map(bar)} label={t("Najdražje občine")} format={(value) => withUnit(integer(value), "€/m²")} max={rankMax}/></div>
         </div>}
       </section>
       <section className="card" aria-labelledby="ov-yield">
         <h2 id="ov-yield">{t("Najem proti nakupu po regijah")}</h2>
-        <p className="muted">{t("Bruto donos: letna mediana najemnine deljena z mediano cene, brez stroškov in praznih mesecev. {nouns}, najemi leta {year}.", { nouns: nouns.label, year: rentYear ?? "" })} {t("Regije s premalo najemi ali prodajami so izpuščene.")}</p>
-        {regional.error ? <LoadFailed retry={regional.retry}/> : <Bars items={yields} tone="money" label={t("Bruto donos po regijah")} format={(value) => percent(value / 100)}/>}
+        <p className="note muted">{t("Bruto donos: letna mediana najemnine deljena z mediano cene, brez stroškov in praznih mesecev. {nouns}, najemi leta {year}.", { nouns: nouns.label, year: rentYear ?? "" })} {t("Regije s premalo najemi ali prodajami so izpuščene.")}</p>
+        {regional.error ? <LoadFailed retry={regional.retry}/> : !regional.data ? placeholder(260) : <Bars items={yields} tone="money" label={t("Bruto donos po regijah")} format={(value) => percent(value / 100)}/>}{/* i18n-ignore (code, not text) */}
       </section>
       <section className="card" aria-labelledby="ov-spread">
         <h2 id="ov-spread">{t("Za koliko so se prodajali")}</h2>
-        <p className="muted">{percentiles ? t("Skupna cena posla; polovica prodaj med {p25} in {p75}, mediana {p50}.", { p25: euro(percentiles.p25), p75: euro(percentiles.p75), p50: euro(percentiles.p50) })
+        <p className="note muted">{percentiles ? t("Skupna cena posla; polovica prodaj med {p25} in {p75}, mediana {p50}.", { p25: euro(percentiles.p25), p75: euro(percentiles.p75), p50: euro(percentiles.p50) })
           : t("Skupna cena posla, reprezentativne prodaje {period}.", { period })}
           {distribution?.isPublishable && (distribution.belowBoundCount > 0 || distribution.aboveBoundCount > 0)
             ? ` ${t("Prvi in zadnji stolpec zajemata tudi {below} cenejših in {above} dražjih prodaj zunaj prikazanega razpona.", { below: integer(distribution.belowBoundCount), above: integer(distribution.aboveBoundCount) })}` : ""}</p>
-        {spread.error ? <LoadFailed retry={spread.retry}/> : <Histogram unit="€" format={euro} label={t("Porazdelitev cen poslov, {nouns}", { nouns: nouns.label })} buckets={buckets}
+        {spread.error ? <LoadFailed retry={spread.retry}/> : !distribution ? placeholder(200) : <Histogram unit="€" format={euro} label={t("Porazdelitev cen poslov, {nouns}", { nouns: nouns.label })} buckets={buckets} // i18n-ignore (code, not text)
+          open={{ below: distribution.isPublishable && distribution.belowBoundCount > 0, above: distribution.isPublishable && distribution.aboveBoundCount > 0 }}
           marker={percentiles ? { value: percentiles.p50, name: t("mediana {value}", { value: euro(percentiles.p50) }) } : undefined}/>}
       </section>
       <section className="card wide" aria-labelledby="ov-activity">
         <h2 id="ov-activity">{t("Prodaje po mesecih, zadnja 3 leta")}</h2>
-        <p className="muted">{t("Število evidentiranih prodaj na mesec; zadnji meseci se še dopolnjujejo (svetlejši stolpci).")}</p>
-        {monthly.error ? <LoadFailed retry={monthly.retry}/> : <Columns items={activity} unit={t("prodaj")} label={t("Prodaje {nouns} po mesecih", { nouns: nouns.genitive })}/>}
+        <p className="note muted">{t("Število evidentiranih prodaj na mesec; zadnji meseci se še dopolnjujejo (svetlejši stolpci).")}</p>
+        {monthly.error ? <LoadFailed retry={monthly.retry}/> : !monthly.data ? placeholder(150) : <Columns items={activity} unit={t("prodaj")} label={t("Prodaje {nouns} po mesecih", { nouns: nouns.genitive })}/>}{/* i18n-ignore (code, not text) */}
       </section>
     </div>
   </div>;

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import {
   isDwelling, loadAreaAffordability, loadDemographics, loadHousehold, loadMunicipalDemographics, loadRentOverview, loadSaleOverview, loadYearlyPrices,
   periodWindows, widerPeriods, type Affordability, type ConstructionSummary, type DemographicsResponse, type Period, type RentalOverview,
@@ -10,7 +10,8 @@ import { GLOSSARY, Term } from "../components/Term";
 import { LoadFailed } from "./LoadState";
 import { useDebounced } from "../hooks/useDebounced";
 import { retryFailed, useLoad, type Load } from "../hooks/useLoad";
-import { change, date, decimal1, euro, instalment, integer, percent } from "../format";
+import { change, date, decimal1, euro, instalment, integer, percent, withUnit } from "../format";
+import { loadingText, tooFew, withheld } from "./Missing";
 import { MIN_SAMPLE } from "../metrics";
 import { NOUNS, type Band, type NounForms } from "../nouns";
 import { count, NOUN_FORMS } from "../plural";
@@ -113,12 +114,14 @@ export function Calculator({ scope, group, data, noun, columns }: {
   const payment = usedLoan != null && rates?.fixedOver10Years ? instalment(usedLoan, rates.fixedOver10Years.value, term) : undefined;
   const others = columns.map((column) => ({ name: column.scope.name, price: publishedPrice(column.data.sale) })).filter((item) => item.price != null);
 
+  const errorId = useId();
   return <section className="card wide calculator" aria-labelledby="calc-title">
     <h2 id="calc-title">{tx("Koliko si lahko privoščite v območju {area}", { area: areaName(scope) })}</h2>
     <form className="calc-inputs" onSubmit={(event) => event.preventDefault()}>
       <label>{t("Vaša neto plača na mesec (€)")}
         <input type="number" inputMode="numeric" min={1} max={100000} step={10} value={income ?? (own ?? "")} aria-invalid={invalid || undefined}
-          onChange={(event) => setIncome(event.target.value)}/></label>
+          aria-describedby={invalid ? errorId : undefined} onChange={(event) => setIncome(event.target.value)}/>
+        {invalid && <span id={errorId} className="field-error">{t("Vpišite neto mesečno plačo med 1 in 100.000 €.")}</span>}</label>
       <label className="check"><input type="checkbox" checked={second != null} onChange={(event) => setSecond(event.target.checked ? (own ?? 0) : null)}/> {t("Druga plača")}</label>
       {second != null && <label>{t("Druga neto plača (€)")}
         <input type="number" inputMode="numeric" min={0} max={100000} step={10} value={second || ""} onChange={(event) => setSecond(Math.max(0, Number(event.target.value) || 0))}/></label>}
@@ -128,9 +131,11 @@ export function Calculator({ scope, group, data, noun, columns }: {
         {([20, 30] as const).map((value) => <button key={value} type="button" aria-pressed={term === value} onClick={() => setTerm(value)}>{count(value, NOUN_FORMS.leto)}</button>)}
       </div>
     </form>
-    {invalid ? <p className="error" role="alert">{t("Vpišite neto mesečno plačo med 1 in 100.000 €.")}</p> // i18n-ignore (code, not text)
+    {/* The answer is a polite live region: it changes as the reader types. */}
+    <div role="status" className="calc-result">
+    {invalid ? null
       : result.error ? <LoadFailed retry={result.retry}/> // i18n-ignore (code, not text)
-      : !household || maxPrice == null ? <p className="muted">{own ? t("Računam …") : t("Vpišite neto plačo.")}</p> // i18n-ignore (code, not text)
+      : !household || maxPrice == null ? <p className="note muted">{own ? t("Računam\u00a0…") : t("Vpišite neto plačo.")}</p> // i18n-ignore (code, not text)
       : savingsValue <= 0 ? <p className="calc-answer">{t("Brez prihrankov banka praviloma ne odobri stanovanjskega kredita: potrebujete vsaj {share} % cene.", { share: Math.round((1 - ltv) * 100) })}
         {" "}{t("S plačo {salary} bi lahko dobili kredit do {loan}, kar zadostuje za nakup do {price}, če imate {savings} prihrankov.", {
           salary: euro(own!), loan: euro(loan!), price: euro(Math.round(loan! / ltv / 1000) * 1000), savings: euro(Math.round(loan! * (1 - ltv) / ltv / 1000) * 1000) })}</p>
@@ -141,19 +146,23 @@ export function Calculator({ scope, group, data, noun, columns }: {
         return second ? tx("Z dvema plačama ({first} in {second}) in {savings} prihrankov lahko kupite {noun} do {price} ({loan}).", { ...vars, first: euro(own!), second: euro(second) })
           : tx("S plačo {salary} in {savings} prihrankov lahko kupite {noun} do {price} ({loan}).", { ...vars, salary: euro(own!) });
       })()}
-        {price != null && <> {tx("To je okoli {area} po mediani območja {name}", { area: <strong>{integer(maxPrice / price)} m²</strong>, name: areaName(scope) })}</>}
+        {price != null && <> {tx("To je okoli {area} po mediani območja {name}", { area: <strong>{withUnit(integer(maxPrice / price), "m²")}</strong>, name: areaName(scope) })}</>}
         {others.length > 0 && (() => {
           const list = others.map((item, index) => <span key={item.name}>{index ? ", " : ""}{tx("{area} m² v območju {name}", { area: integer(maxPrice / item.price!), name: <Name>{item.name}</Name> })}</span>);
           return price != null ? <>, {list}</> : <> {tx("To je {list}", { list })}</>;
         })()}
         {(price != null || others.length > 0) && "."}</p>
-      <p className="muted">{bySavings < (byLoan ?? Infinity) ? `${t("Omejujejo prihranki: banka praviloma financira največ {max} % cene, zato potrebujete vsaj {min} % lastnih sredstev.", { max: Math.round(ltv * 100), min: Math.round((1 - ltv) * 100) })} ` : ""}
+      <p className="note muted">{bySavings < (byLoan ?? Infinity) ? `${t("Omejujejo prihranki: banka praviloma financira največ {max} % cene, zato potrebujete vsaj {min} % lastnih sredstev.", { max: Math.round(ltv * 100), min: Math.round((1 - ltv) * 100) })} ` : ""}
         {t("Največji obrok po omejitvah Banke Slovenije: {instalment}{note}.", { instalment: euro(household.maxInstalment), note: household.floorBinding ? ` ${t("(omejuje znesek, ki mora ostati za življenje)")}` : "" })}
         {" "}{t("Če obrestna mera zraste za {points} o. t., je največji 30-letni kredit {loan}.", { points: decimal1(data.affordability?.stressMarginPoints ?? 1), loan: euro(household.loan30YearsStress) })}
         {" "}{t("Fiksna obrestna mera {rate} %, brez drugih kreditov in vzdrževanih družinskih članov.", { rate: rates?.fixedOver10Years ? decimal1(rates.fixedOver10Years.value) : "—" })} {t("Ponazoritev, ne ponudba kredita.")}</p>
     </>}
+    </div>
   </section>;
 }
+
+/** A cell still waiting for its data. */
+const LOADING = loadingText();
 
 interface Row {
   key: string; label: ReactNode; source: string; best?: "min" | "max";
@@ -168,31 +177,31 @@ export function CompareTable({ columns, noun, band, removable, onRemove }: {
     { key: "price", label: t("Mediana cene, {noun}", { noun: noun.plural }), source: t("GURS ETN, 12 mesecev do konca četrtletja"), best: "min",
       cell: ({ sale, salePrevious }) => {
         const price = publishedPrice(sale);
-        return price != null ? { value: `${integer(price)} €/m²`, number: price, note: `n = ${integer(sale!.pricePerSqmSampleSize)}`,
+        return price != null ? { value: withUnit(integer(price), "€/m²"), number: price, note: `n = ${integer(sale!.pricePerSqmSampleSize)}`,
           delta: change(price, publishedPrice(salePrevious)) }
-          : { value: !sale ? "…" : sale.transactionCount === 0 ? t("ni prodaj") : t("premalo prodaj ({count})", { count: integer(sale.transactionCount) }) };
+          : { value: !sale ? LOADING : withheld("sale", sale.transactionCount) };
       } },
     { key: "typical", label: t("Tipičen posel"), source: t("mediana cene in površine"), best: "min",
       cell: ({ sale }) => sale?.isPublishable && sale.medianPrice != null
-        ? { value: euro(sale.medianPrice), number: sale.medianPrice, note: sale.medianArea != null ? `${decimal1(sale.medianArea)} m²` : undefined }
-        : { value: sale ? "—" : "…" } },
+        ? { value: euro(sale.medianPrice), number: sale.medianPrice, note: sale.medianArea != null ? withUnit(decimal1(sale.medianArea), "m²") : undefined }
+        : { value: sale ? tooFew("sale", sale.transactionCount) : LOADING } },
     { key: "count", label: t("Število prodaj"), source: t("vsi evidentirani posli, 12 mesecev"),
       cell: ({ sale, salePrevious }) => sale
         ? { value: integer(sale.transactionCount),
           delta: (salePrevious?.transactionCount ?? 0) >= MIN_SAMPLE ? change(sale.transactionCount, salePrevious?.transactionCount) : null }
-        : { value: "…" } },
+        : { value: LOADING } },
     { key: "rent", label: t("Mediana najemnine"), source: t("GURS ETN, zadnje celo leto, na mesec"), best: "min",
       cell: ({ rent, rentPrevious }) => {
         const value = publishedRent(rent);
-        return value != null ? { value: `${decimal1(value)} €/m²`, number: value, note: `n = ${integer(rent!.rentPerSqmSampleSize)}`,
-          delta: change(value, publishedRent(rentPrevious)) } : { value: rent === undefined ? "…" : rent ? t("premalo najemov") : "—" };
+        return value != null ? { value: withUnit(decimal1(value), "€/m²"), number: value, note: `n = ${integer(rent!.rentPerSqmSampleSize)}`,
+          delta: change(value, publishedRent(rentPrevious)) } : { value: rent === undefined ? LOADING : rent ? withheld("rent", rent.transactionCount) : "—" };
       } },
     { key: "rentbuy", label: t("Najem ali nakup"), source: t("tipična površina, kredit 30 let"), cell: ({ sale, rent, affordability }) => {
       const price = publishedPrice(sale);
       const monthly = publishedRent(rent);
       const fixed = affordability?.rates?.fixedOver10Years;
       const ltv = affordability?.rule?.recommendedLtv ?? 0.8;
-      if (price == null || monthly == null || !fixed) return { value: sale && rent !== undefined ? "—" : "…" };
+      if (price == null || monthly == null || !fixed) return { value: sale && rent !== undefined ? "—" : LOADING };
       const size = typical(sale);
       // Same basis as the cost cards: the median deal price when no size band is chosen.
       const total = band.typical ? price * size : sale?.medianPrice ?? price * size;
@@ -202,29 +211,29 @@ export function CompareTable({ columns, noun, band, removable, onRemove }: {
     { key: "afford", label: t("Površina za mediano plačo"), source: t("SURS plače, Banka Slovenije, 30 let"), best: "max", cell: ({ sale, affordability }) => {
       const row = affordability?.rows?.find((item) => item.band.id === "p50");
       const price = publishedPrice(sale);
-      if (!row || price == null) return { value: affordability ? "—" : "…" };
+      if (!row || price == null) return { value: affordability ? "—" : LOADING };
       const sqm = Math.round(row.priceAtRecommendedLtv / price);
-      return { value: `${integer(sqm)} m²`, number: sqm, note: `${t("kredit {loan}", { loan: euro(row.loan30Years) })}${affordability!.wageGeography?.nationalFallback ? `, ${t("plače Slovenije")}` : ""}` };
+      return { value: withUnit(integer(sqm), "m²"), number: sqm, note: `${t("kredit {loan}", { loan: euro(row.loan30Years) })}${affordability!.wageGeography?.nationalFallback ? `, ${t("plače Slovenije")}` : ""}` };
     } },
     { key: "population", label: t("Prebivalci"), source: t("SURS, 1. januar"), cell: ({ demographics }) => demographics?.profile?.population
       ? { value: integer(demographics.profile.population.total), delta: demographics.profile.population.change10Years, note: t("sprememba v 10 letih") }
-      : { value: "…" } },
+      : { value: demographics ? "—" : LOADING } },
     { key: "older", label: t("Delež starih 65 let ali več"), source: t("SURS, 1. januar"), cell: ({ demographics }) => demographics?.profile?.population
-      ? { value: percent(demographics.profile.population.share65Plus) } : { value: "…" } },
+      ? { value: percent(demographics.profile.population.share65Plus) } : { value: demographics ? "—" : LOADING } },
     { key: "migration", label: t("Neto selitve na 1.000 prebivalcev"), source: t("SURS, povprečje 5 let"), cell: ({ demographics }) => {
       const recent = (demographics?.profile?.migration ?? []).slice(-5).flatMap((year) => year.perThousand == null || Math.abs(year.perThousand) > 100 ? [] : [year.perThousand]);
-      return recent.length ? { value: `${decimal1(recent.reduce((a, b) => a + b, 0) / recent.length)} ‰` } : { value: demographics ? "—" : "…" };
+      return recent.length ? { value: withUnit(decimal1(recent.reduce((a, b) => a + b, 0) / recent.length), "‰") } : { value: demographics ? "—" : LOADING };
     } },
     { key: "releases", label: t("Stanovanja, ki jih sprostijo starejši"), source: t("modelna ocena na leto"), cell: ({ demographics }) => {
       const releases = demographics?.profile?.releases;
       return releases ? { value: integer(releases.perYear), note: releases.perThousandDwellings != null
-        ? t("{count} na 1.000 stanovanj", { count: decimal1(releases.perThousandDwellings) }) : undefined } : { value: demographics ? "—" : "…" };
+        ? t("{count} na 1.000 stanovanj", { count: decimal1(releases.perThousandDwellings) }) : undefined } : { value: demographics ? "—" : LOADING };
     } },
     { key: "yield", label: <Term text={GLOSSARY.donos}>{t("Bruto donos najema")}</Term>, source: t("groba ocena pred stroški, davki in praznimi meseci"), best: "max",
       cell: ({ sale, rent }) => {
         const price = publishedPrice(sale);
         const monthly = publishedRent(rent);
-        return price && monthly ? { value: percent((monthly * 12) / price), number: (monthly * 12) / price } : { value: sale && rent !== undefined ? "—" : "…" };
+        return price && monthly ? { value: percent((monthly * 12) / price), number: (monthly * 12) / price } : { value: sale && rent !== undefined ? "—" : LOADING };
       } },
   ];
   // Rent-or-buy and wage-based rows only make sense for homes.
@@ -239,14 +248,14 @@ export function CompareTable({ columns, noun, band, removable, onRemove }: {
     return { ...best, versus: first && best.name !== columns[0].scope.name ? best.price! / first - 1 : null };
   })();
   return <>
-    <div className="table-scroll"><table className="compare">
+    <div className="table-scroll" tabIndex={0} role="region" aria-label={t("Primerjava kazalnikov po območjih")}><table className="compare">
       <caption className="sr-only">{t("Primerjava kazalnikov po območjih")}</caption>
       <thead><tr><th scope="col">{t("Kazalnik")}</th>{columns.map((column, index) => <th scope="col" key={`${column.scope.level}-${column.scope.id ?? 0}-${index}`}>
         {areaName(column.scope)}{removable && index > 0 && column.scope.id && <button type="button" className="remove" aria-label={t("Odstrani {name}", { name: column.scope.name })}
           onClick={() => onRemove(column.scope.id!)}>×</button>}</th>)}</tr></thead>
       <tbody>{shownRows.map((row) => {
-        // A column whose data failed shows "—" instead of waiting ("…") forever; the panel offers the retry.
-        const cells = columns.map((column) => { const cell = row.cell(column.data); return cell.value === "…" && column.data.failed ? { ...cell, value: "—" } : cell; });
+        // A column whose data failed shows "—" instead of waiting forever; the panel offers the retry.
+        const cells = columns.map((column) => { const cell = row.cell(column.data); return cell.value === LOADING && column.data.failed ? { ...cell, value: "—" } : cell; });
         const numbers = cells.map((cell) => cell.number).filter((value): value is number => value != null);
         const target = removable && row.best && numbers.length > 1 ? (row.best === "min" ? Math.min(...numbers) : Math.max(...numbers)) : undefined;
         return <tr key={row.key}>
@@ -289,7 +298,7 @@ export function Cite({ scope, noun, windows, columns }: {
       if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => setStatus(text)); else setStatus(text);
     }}>{t("Citiraj")}</button>
     <button type="button" className="ghost" onClick={csv}>{t("Prenesi CSV")}</button>
-    {status && <span role="status" className="muted">{status}</span>}
+    <span role="status" className="muted">{status ?? ""}</span>
   </span>;
 }
 
@@ -309,7 +318,7 @@ function useRanking(municipalityId?: number) {
 export function Population({ data, name, municipalityId, failed }: { data?: DemographicsResponse; name: string; municipalityId?: number; failed?: () => void }) {
   const ranking = useRanking(municipalityId);
   if (!data?.profile?.population) return <section className="card wide"><h2>{t("Kdo bo kupoval in kdo prodajal")}</h2>
-    {!data && failed ? <LoadFailed retry={failed}/> : <p className="muted">{data ? t("Podatki SURS za to območje niso na voljo.") : t("Nalagam podatke SURS …")}</p>}</section>;
+    {!data && failed ? <LoadFailed retry={failed}/> : <p className="note muted">{data ? t("Podatki SURS za to območje niso na voljo.") : t("Nalagam podatke SURS\u00a0…")}</p>}</section>;
   const { profile } = data;
   // Years above ±100 per 1,000 residents are registry artefacts, not migration.
   const net = profile.migration.slice(-5).filter((year) => year.perThousand == null || Math.abs(year.perThousand) <= 100); // i18n-ignore (code, not text)
@@ -323,7 +332,7 @@ export function Population({ data, name, municipalityId, failed }: { data?: Demo
       <Pyramid groups={profile.pyramid} period={profile.period} earlierPeriod={profile.earlierPeriod}
         label={t("Prebivalstvo območja {name} po starostnih skupinah", { name })}/>
       <div className="flows">
-        <div className="table-scroll"><table className="compact-table flows-table">
+        <div className="table-scroll" tabIndex={0} role="region" aria-label={t("Na leto, {name}", { name })}><table className="compact-table flows-table">
           <caption>{tx("Na leto, {name}", { name: name === SLOVENIA.name ? name : <Name>{name}</Name> })}</caption>
           <tbody>
             <tr><th scope="row">{t("V starost okoli 30 let vstopi")}<span className="cell-note">{t("ko se večina ljudi prvič osamosvoji")}</span></th>
@@ -334,11 +343,11 @@ export function Population({ data, name, municipalityId, failed }: { data?: Demo
               <td>{count(releases.perYear, NOUN_FORMS.stanovanje)}<span className="cell-note">{integer(releases.perYear * 0.75)}–{integer(releases.perYear * 1.25)}</span></td></tr>}
           </tbody>
         </table></div>
-        <p className="muted">{t("Ljudje in stanovanja niso ista enota: vsak, ki dopolni 30 let, ne ustanovi svojega gospodinjstva, in vsako sproščeno stanovanje ne pride na trg.")}</p>
+        <p className="note muted">{t("Ljudje in stanovanja niso ista enota: vsak, ki dopolni 30 let, ne ustanovi svojega gospodinjstva, in vsako sproščeno stanovanje ne pride na trg.")}</p>
         {ranking?.older != null && <p>{tx("Po deležu starejših je {name} na {rank}. mestu od {total} občin (1. mesto = najstarejša), po neto priseljevanju {migration}.", {
           name: <Name>{name}</Name>, rank: ranking.older, total: ranking.total,
-          migration: ranking.migration != null ? t("na {rank}. mestu", { rank: ranking.migration }) : t("ni objavljena") })}</p>}
-        <p className="muted">{data.releasesCaveatCode === "model_estimate_older_owners" ? t("Modelna ocena: starejši (65+), ki živijo sami × starostna stopnja umrljivosti × delež lastniških stanovanj. Ni napoved ponudbe ali cen: dedovanje traja, stanovanja pogosto ostanejo v družini, lokacija in velikost se ne ujemata s povpraševanjem.") : data.releasesCaveat} {t("Umrljivost: {area}, {years};", {
+          migration: ranking.migration != null ? t("na {rank}. mestu", { rank: ranking.migration }) : t("ni podatka") })}</p>}
+        <p className="note muted">{data.releasesCaveatCode === "model_estimate_older_owners" ? t("Modelna ocena: starejši (65+), ki živijo sami × starostna stopnja umrljivosti × delež lastniških stanovanj. Ni napoved ponudbe ali cen: dedovanje traja, stanovanja pogosto ostanejo v družini, lokacija in velikost se ne ujemata s povpraševanjem.") : data.releasesCaveat} {t("Umrljivost: {area}, {years};", {
           area: deathArea, years: releases?.deathYears ?? "—" })}
           {" "}{t("delež samskih po starosti: Slovenija; delež lastniških stanovanj: območje (popis 2021).")} {t("Domovi za starejše lahko oceno zvišajo.")}</p>
         <p className="evidence-note">{t("To so kazalniki ponudbe in povpraševanja, ne napoved cen. Preverili smo obdobje 2010–2025: demografija (staranje, sproščena stanovanja, mladi, selitve) ni imela merljivega vpliva na razlike v rasti cen med občinami in regijami; ravni cen po regijah so ostale stabilne. Morebiten učinek je manjši od približno 0,5 odstotne točke na leto.")}</p>
@@ -356,14 +365,14 @@ export function Construction({ summary, name, cutoff }: { summary?: Construction
   const years = summary?.filter ? `${summary.filter.fromYear}–${summary.filter.toYear}${summary.filter.toYear === current ? "*" : ""}` : "";
   return <section className="card" aria-labelledby="supply-title">
     <h2 id="supply-title">{t("Nova ponudba")}</h2>
-    {!summary?.summary ? <p className="muted">{summary ? t("Podatki katastra niso na voljo.") : t("Nalagam kataster stavb …")}</p> : <dl className="facts">
+    {!summary?.summary ? <p className="note muted">{summary ? t("Podatki katastra niso na voljo.") : t("Nalagam kataster stavb\u00a0…")}</p> : <dl className="facts">
       <div><dt>{t("Nove stavbe v katastru, {years}", { years })}</dt><dd>{integer(built)}</dd></div>
       <div><dt>{t("Stanovanj v njih")}</dt><dd>{integer(dwellings)}</dd></div>
       <div><dt>{t("Gradbena dovoljenja {year}", { year: permit?.year ?? "" })}</dt><dd>{permit?.buildings == null ? "—" : integer(permit.buildings)}</dd></div>
       <div><dt>{t("Stanovanja v dovoljenjih")}</dt><dd>{permit?.dwellings == null ? "—" : integer(permit.dwellings)}</dd></div>
     </dl>}
     {rows.length > 1 && <YearBars rows={rows} current={current}/>}
-    <p className="muted">{years.endsWith("*") ? `${t("* Tekoče leto ni zaključeno.")} ` : ""}{t("Kataster pokaže zgrajene stavbe, ne gradenj v teku.")}
+    <p className="note muted">{years.endsWith("*") ? `${t("* Tekoče leto ni zaključeno.")} ` : ""}{t("Kataster pokaže zgrajene stavbe, ne gradenj v teku.")}
       {" "}{t("Dovoljenja SURS {scope}.", { scope: summary?.summary?.permitsScope === "slovenia" ? t("za Slovenijo") : name })}</p>
   </section>;
 }
@@ -385,7 +394,7 @@ export function Housing({ data, failed }: { data?: DemographicsResponse; failed?
   const housing = data?.profile?.housing;
   return <section className="card wide" aria-labelledby="stock-title">
     <h2 id="stock-title">{t("Stanovanjski fond")}</h2>
-    {!housing ? (!data && failed ? <LoadFailed retry={failed}/> : <p className="muted">{data ? t("Popisni podatki niso objavljeni.") : t("Nalagam …")}</p>) : <dl className="facts wide-facts">
+    {!housing ? (!data && failed ? <LoadFailed retry={failed}/> : <p className="note muted">{data ? t("Popisni podatki niso objavljeni.") : t("Nalagam\u00a0…")}</p>) : <dl className="facts wide-facts">
       <div><dt>{t("Stanovanja, {year}", { year: housing.year })}</dt><dd>{integer(housing.dwellings)}</dd></div>
       <div><dt>{t("Nenaseljena")}</dt><dd>{housing.unoccupied == null ? "—" : `${integer(housing.unoccupied)} (${percent(housing.unoccupied / housing.dwellings)})`}</dd></div>
       <div><dt>{t("Od nenaseljenih prazna (delež iz {year})", { year: housing.splitYear ?? "—" })}</dt><dd>{housing.vacant == null || housing.seasonal == null
@@ -394,7 +403,7 @@ export function Housing({ data, failed }: { data?: DemographicsResponse; failed?
       <div><dt>{t("Enočlanska gospodinjstva")}</dt><dd>{housing.onePersonShare == null ? "—" : percent(housing.onePersonShare)}</dd></div>
       <div><dt>{t("Gospodinjstva, {year}", { year: housing.year })}</dt><dd>{housing.households == null ? "—" : integer(housing.households)}</dd></div>
     </dl>}
-    <p className="muted">{t("Registrski popis SURS.")} {t("Za {year} SURS ne loči počitniških in praznih stanovanj, zato je delitev iz {splitYear}.", { year: housing?.year ?? "2021", splitYear: housing?.splitYear ?? "2018" })}
+    <p className="note muted">{t("Registrski popis SURS.")} {t("Za {year} SURS ne loči počitniških in praznih stanovanj, zato je delitev iz {splitYear}.", { year: housing?.year ?? "2021", splitYear: housing?.splitYear ?? "2018" })}
       {" "}{t("Nenaseljeno ne pomeni naprodaj ali za najem.")}</p>
   </section>;
 }

@@ -2,7 +2,6 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { LANG, loadEnglish, t } from "./i18n";
 import { isChunkLoadError, reloadOnce } from "./reload";
-import { followLegacyHash } from "./url-state";
 import "./styles.css";
 
 /**
@@ -15,6 +14,8 @@ async function start() {
   window.addEventListener("vite:preloadError", (event) => { if (reloadOnce()) event.preventDefault(); });
   try {
     if (LANG === "en") await loadEnglish();
+    // url-state pulls in the metric labels, which translate at import time: load it only once the dictionary is in place.
+    const { followLegacyHash } = await import("./url-state");
     followLegacyHash();
     const { App, BRAND } = await import("./components/App");
     // index.html carries the Slovenian title and description; the chosen language replaces them at startup.

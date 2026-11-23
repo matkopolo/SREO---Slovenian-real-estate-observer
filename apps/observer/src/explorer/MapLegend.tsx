@@ -6,12 +6,13 @@ import { METRICS, type MetricId } from "../metrics";
 import { NOUNS, type Band } from "../nouns";
 import { typedLabel } from "./paint";
 import { FLOOD_COLORS } from "../palette";
+import { tooFew } from "../components/Missing";
 
 /** Legend classes and their colour. */
 export interface Scale { breaks: number[]; ramp: (value: number | null) => string }
 export type MapLevel = "statistical_region" | "municipality" | "fine";
 
-interface Key { color: string; text: string; title?: string; pooled?: boolean }
+interface Key { color: string; text: string; pooled?: boolean }
 interface RampSpec { id: string; caption: ReactNode; label: string; scale: Scale; signed?: boolean; keys: Key[]; secondary?: boolean }
 
 const middle = (scale: Scale) => scale.ramp(scale.breaks[Math.floor(scale.breaks.length / 2)] ?? null);
@@ -26,7 +27,7 @@ function Ramp({ ramp }: { ramp: RampSpec }) {
       {ramp.scale.breaks.map((value) => <li key={value}><i style={{ background: ramp.scale.ramp(value) }}/><span>{ramp.signed ? brief(value, true) : t("do {value}", { value: brief(value) })}</span></li>)}
     </ol>
     {ramp.keys.length > 0 && <ul className="ramp-keys">
-      {ramp.keys.map((key) => <li key={key.text} title={key.title}><i className={key.pooled ? "pooled-key" : undefined} style={{ background: key.color }}/>{key.text}</li>)}
+      {ramp.keys.map((key) => <li key={key.text}><i className={key.pooled ? "pooled-key hatch" : undefined} style={{ backgroundColor: key.color }}/>{key.text}</li>)}
     </ul>}
   </div>;
 }
@@ -71,13 +72,13 @@ function FloodKeys({ floods }: { floods: FloodControl }) {
   if (!floods.available) return <span className="strip-note">{t("približajte do mesta")}</span>;
   if (floods.failed) return <span className="strip-note">{t("ni na voljo")}</span>;
   return <ul className="ramp-keys flood-keys" aria-label={t("Razredi poplavne nevarnosti (DRSV)")}>
-    <li title={t("velika: globina nad 1,5 m ob stoletnih poplavah")}><i className="flood-swatch" style={{ background: FLOOD_COLORS.Pv }}/>{t("Pv velika")}</li>
-    <li title={t("srednja: globina 0,5–1,5 m ob stoletnih poplavah ali poplave vsakih 10 let")}><i className="flood-swatch" style={{ background: FLOOD_COLORS.Ps }}/>{t("Ps srednja")}</li>
-    <li title={t("majhna: globina do 0,5 m ob stoletnih poplavah")}><i className="flood-swatch" style={{ background: FLOOD_COLORS.Pm }}/>{t("Pm majhna")}</li>
-    <li title={t("preostala: med stoletnimi in petstoletnimi poplavami")}><i className="flood-swatch" style={{ background: FLOOD_COLORS.Pp }}/>{t("Pp preostala")}</li>
-    <li title={t("črtkano: območje s poplavno študijo; zunaj njega razredi niso določeni")}><svg className="key-dash" width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18" y2="3" stroke={FLOOD_COLORS.Pv} strokeWidth="2" strokeDasharray="4 3"/></svg>{t("preučeno območje")}</li>
+    <li><i className="flood-swatch" style={{ background: FLOOD_COLORS.Pv }}/>{t("Pv velika")}</li>
+    <li><i className="flood-swatch" style={{ background: FLOOD_COLORS.Ps }}/>{t("Ps srednja")}</li>
+    <li><i className="flood-swatch" style={{ background: FLOOD_COLORS.Pm }}/>{t("Pm majhna")}</li>
+    <li><i className="flood-swatch" style={{ background: FLOOD_COLORS.Pp }}/>{t("Pp preostala")}</li>
+    <li><svg className="key-dash" width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18" y2="3" stroke={FLOOD_COLORS.Pv} strokeWidth="2" strokeDasharray="4 3"/></svg>{t("preučeno območje")}</li>
     {floods.truncated && <li className="strip-note">{t("prikaz je okrnjen, približajte")}</li>}
-    {floods.loading && <li className="strip-note">{t("Nalagam …")}</li>}
+    {floods.loading && <li className="strip-note" role="status">{t("Nalagam\u00a0…")}</li>}
   </ul>;
 }
 
@@ -101,6 +102,20 @@ export function MapLegend({ layer, layers, group, band, windows, level, street, 
   const [help, setHelp] = useState(false);
   const helpId = useId();
   const ref = useStripHeight();
+  const toggle = useRef<HTMLButtonElement>(null);
+  const bubble = useRef<HTMLParagraphElement>(null);
+  // The help bubble closes like a popover: Escape (focus returns to "?") and a click or tap anywhere else.
+  useEffect(() => {
+    if (!help) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") { setHelp(false); toggle.current?.focus(); } };
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && !bubble.current?.contains(target) && !toggle.current?.contains(target)) setHelp(false);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onPointer);
+    return () => { document.removeEventListener("keydown", onKey); document.removeEventListener("pointerdown", onPointer); };
+  }, [help]);
 
   const span = windows && (rent ? windows.rents : windows.sales).current;
   const shown = street ? (land ? t("Prikaz: prodana zemljišča ({period})", { period: buildingSpan }) : rent ? t("Prikaz: stavbe s najemi ({period})", { period: buildingSpan }) : t("Prikaz: stavbe s prodajami ({period})", { period: buildingSpan }))
@@ -110,35 +125,38 @@ export function MapLegend({ layer, layers, group, band, windows, level, street, 
       : t("Stavbe imajo lastno lestvico (stavbe v pogledu); velikost kroga = število prodaj. Kliknite stavbo za posle."))
     : level === "fine" ? t("Kliknite četrtno skupnost ali naselje za podrobnosti; približajte do ulic za stavbe.") : t("Kliknite območje ali približajte za podrobnejša območja.");
   const fineUnit = rent ? METRICS.rentPrice.unit : METRICS.salePrice.unit;
+  // The unit keeps its case inside the small-capital caption (.unit).
+  const sqm = <span className="unit">€/m²</span>;
 
   // What the colours mean at this zoom; a second ramp (own scale) for the selected municipality's districts or settlements.
   const ramps: RampSpec[] = [];
   let note: string | undefined;
   if (street) {
     if (scales.buildings.breaks.length) ramps.push({ id: "buildings", scale: scales.buildings, label: t("Lestvica stavb (mediana €/m² stavb v pogledu)"),
-      caption: land ? t("prodana zemljišča · €/m²") : rent ? t("stavbe z najemi · €/m²") : t("stavbe s prodajami · €/m²"),
-      keys: land ? [] : [{ color: "#ffffff", text: t("1–2 posla"), title: t("bel krog: 1–2 posla, brez mediane") }] });
+      caption: land ? tx("prodana zemljišča · {unit}", { unit: sqm }) : rent ? tx("stavbe z najemi · {unit}", { unit: sqm }) : tx("stavbe s prodajami · {unit}", { unit: sqm }),
+      keys: land ? [] : [{ color: "#ffffff", text: t("1–2 posla") }] });
   } else if (level === "statistical_region") {
-    if (scales.region.breaks.length) ramps.push({ id: "regions", scale: scales.region, label: t("Lestvica regij"), caption: t("regije · {unit}", { unit: definition.unit }), keys: [] });
+    if (scales.region.breaks.length) ramps.push({ id: "regions", scale: scales.region, label: t("Lestvica regij"), caption: tx("regije · {unit}", { unit: <span className="unit">{definition.unit}</span> }), keys: [] });
   } else if (level === "fine") {
     if (scales.fine.breaks.length) ramps.push({ id: "fine", scale: scales.fine, label: t("Lestvica četrtnih skupnosti in naselij (lastna lestvica)"),
-      caption: t("četrtne skupnosti in naselja · {unit}", { unit: fineUnit }),
-      keys: [{ color: scales.fine.ramp(null), text: t("premalo poslov") }, ...(pooled.fine ? [{ color: middle(scales.fine), pooled: true, text: t("združeno"), title: t("svetleje: združeno 5 let") }] : [])] });
+      caption: tx("četrtne skupnosti in naselja · {unit}", { unit: <span className="unit">{fineUnit}</span> }),
+      keys: [{ color: scales.fine.ramp(null), text: tooFew(rent ? "rent" : "sale") }, ...(pooled.fine ? [{ color: middle(scales.fine), pooled: true, text: t("združeno") }] : [])] });
     else if (fineShown) note = t("V tem pogledu je premalo prodaj {noun} za mediano; posamezne prodaje so v plošči in ob približanju.", { noun: NOUNS[group].genitive });
   } else {
     if (scales.municipal.breaks.length) ramps.push({ id: "municipal", scale: scales.municipal, signed: definition.signed, label: t("Lestvica: {unit}", { unit: definition.unit }),
-      caption: t("občine · {unit}", { unit: definition.unit }),
-      keys: [{ color: scales.municipal.ramp(null), text: t("ni objavljeno") }, ...(pooled.municipal ? [{ color: middle(scales.municipal), pooled: true, text: t("združeno"), title: t("svetleje: združeno 3 ali 5 let") }] : [])] });
+      caption: tx("občine · {unit}", { unit: <span className="unit">{definition.unit}</span> }),
+      keys: [{ color: scales.municipal.ramp(null), text: tooFew(rent ? "rent" : "sale") }, ...(pooled.municipal ? [{ color: middle(scales.municipal), pooled: true, text: t("združeno") }] : [])] });
     else note = t("V tem obdobju ni objavljivih vrednosti po občinah ({noun}).", { noun: NOUNS[group].label.toLowerCase() });
   }
+  const pooledShown = ramps.some((ramp) => ramp.keys.some((key) => key.pooled));
   // The selected municipality's districts or settlements: the same ramp on their own scale (the help says so).
   const own = !street && level !== "fine" && sub && sub.scale.breaks.length > 0 ? sub : undefined;
   if (own) ramps.push({ id: "sub", scale: own.scale, label: t("Lestvica četrtnih skupnosti ali naselij"), secondary: true,
-    caption: own.level === "city_district" ? t("četrtne skupnosti · €/m²") : t("naselja · €/m²"), keys: [] });
+    caption: own.level === "city_district" ? tx("četrtne skupnosti · {unit}", { unit: sqm }) : tx("naselja · {unit}", { unit: sqm }), keys: [] });
 
   return <div className="map-strip" ref={ref}>
     <label className="strip-layer"><span className="sr-only">{t("Barva zemljevida")}</span>
-      <select value={layer} onChange={(event) => onLayer(event.target.value as MetricId)} title={t("Barva zemljevida")}>
+      <select value={layer} onChange={(event) => onLayer(event.target.value as MetricId)}>
         {layers.map((id) => <option key={id} value={id}>{typedLabel(id, group)}</option>)}
       </select></label>
     {ramps.map((ramp) => <Ramp key={ramp.id} ramp={ramp}/>)}
@@ -147,8 +165,8 @@ export function MapLegend({ layer, layers, group, band, windows, level, street, 
       <label><input type="checkbox" checked={floods.on} onChange={floods.onToggle}/> {t("Poplavna nevarnost (DRSV)")}</label>
       {floods.on && <FloodKeys floods={floods}/>}
     </div>}
-    <button type="button" className="strip-help-toggle" aria-expanded={help} aria-controls={helpId} aria-label={t("Pojasnilo zemljevida")} title={t("Pojasnilo zemljevida")}
+    <button type="button" ref={toggle} className="strip-help-toggle" aria-expanded={help} aria-controls={helpId} aria-label={t("Pojasnilo zemljevida")}
       onClick={() => setHelp(!help)}>?</button>
-    {help && <p id={helpId} className="strip-help">{shown}{band ? `, ${band.label}` : ""}. {definition.usesYears && span ? `${typedLabel(layer, group)}, ${date(span.from)}–${date(span.to)}. ` : ""}{hint}{own ? <> {tx("{areas} občine {municipality} imajo lastno lestvico.", { areas: own.level === "city_district" ? t("Četrtne skupnosti") : t("Naselja"), municipality: <Name>{own.municipality}</Name> })}</> : null}{floods?.on ? ` ${t("Pv: globina nad 1,5 m ob stoletnih poplavah; Ps: 0,5–1,5 m ali poplave vsakih 10 let; Pm: do 0,5 m; Pp: med stoletnimi in petstoletnimi poplavami. Črtkano: poplavno preučeno območje; zunaj njega razredi niso določeni.")}` : ""}</p>}
+    {help && <p id={helpId} ref={bubble} className="strip-help">{shown}{band ? `, ${band.label}` : ""}. {definition.usesYears && span ? `${typedLabel(layer, group)}, ${date(span.from)}–${date(span.to)}. ` : ""}{hint}{own ? <> {tx("{areas} občine {municipality} imajo lastno lestvico.", { areas: own.level === "city_district" ? t("Četrtne skupnosti") : t("Naselja"), municipality: <Name>{own.municipality}</Name> })}</> : null}{pooledShown ? ` ${t("Šrafirano: vrednost je združena čez 3 ali 5 let, ker je v izbranem obdobju premalo prodaj.")}` : ""}{street && !land ? ` ${t("Bel krog: 1–2 posla, brez mediane.")}` : ""}{floods?.on ? ` ${t("Pv: globina nad 1,5 m ob stoletnih poplavah; Ps: 0,5–1,5 m ali poplave vsakih 10 let; Pm: do 0,5 m; Pp: med stoletnimi in petstoletnimi poplavami. Črtkano: poplavno preučeno območje; zunaj njega razredi niso določeni.")}` : ""}</p>}
   </div>;
 }

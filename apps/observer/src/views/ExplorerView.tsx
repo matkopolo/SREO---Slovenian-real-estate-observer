@@ -2,7 +2,7 @@ import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import { loadBuilding, loadNewBuilding, type MarketComparable, type Segment } from "../api";
 import { AreaPanel } from "../components/AreaPanel";
 import { SLOVENIA, type Scope } from "../components/AreaModules";
-import { addressLabel } from "../components/AreaSearch";
+import { addressLabel } from "../address";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { LoadFailed } from "../components/LoadState";
 import { ValueCheck, type ShownComparables } from "../components/ValueCheck";
@@ -24,6 +24,8 @@ import { sizeBand } from "../nouns";
 import { count, form, NOUN_FORMS } from "../plural";
 import { buildingKey, hasBadArea, parseBuildingKey, type BuildingRef } from "../url-state";
 import { BuildingView } from "./BuildingView";
+import { jumpTo } from "../focus";
+import { areaTitle, TITLE, useDocumentTitle } from "../title";
 import "../explorer/explorer.css";
 
 const ExplorerMap = lazy(() => import("../components/ExplorerMap").then((module) => ({ default: module.ExplorerMap })));
@@ -129,15 +131,19 @@ export function ExplorerView({ cutoff }: { cutoff: string }) {
     : choropleth.failed ? <LoadFailed retry={choropleth.retry}>{t("Vrednosti za zemljevid ni bilo mogoče naložiti.")}</LoadFailed>
     : badArea && !state.g ? <p className="error" role="alert">{t("Povezava ima neveljavno območje. Prikazujemo Slovenijo; poiščite območje zgoraj.")}</p> : null;
   const areaLoading = !!state.g && (area.status === "loading" || (area.status === "none" && !lists.data));
+  // The tab names the area (once it is known) and the value check; a building or a transaction names itself (BuildingView).
+  useDocumentTitle(areaLoading ? null : areaTitle(scope.name), TITLE.area);
+  useDocumentTitle(state.value ? t("Ocena vrednosti · SREO") : null, TITLE.detail);
 
-  return <div className={state.value ? "explorer value-mode" : "explorer"}>
+  // sale-mode: an opened sale or rental (phones put its head above a shorter map, explorer.css).
+  return <div className={state.value ? "explorer value-mode" : state.selected ? "explorer sale-mode" : "explorer"}>
     <ExplorerBar state={state} navigate={navigate} cutoff={cutoff} windows={windows} regions={regions} municipalities={municipalities} districts={districts}/>
 
     <div className="explorer-body">
       {!state.value && !state.building && !state.selected && !areaLoading && <div className="phone-head">
         <strong>{scope.id == null ? scope.name : <Name>{scope.name}</Name>}</strong>
         {scopeValue && <span>{scopeValue}</span>}
-        <a href="#area-title" onClick={(event) => { event.preventDefault(); document.getElementById("area-title")?.scrollIntoView({ block: "start" }); }}>{t("Podrobnosti ↓")}</a>
+        <a href="#area-title" onClick={(event) => { event.preventDefault(); jumpTo(document.getElementById("area-title")); }}>{t("Podrobnosti")} <span aria-hidden="true">↓</span></a>
       </div>}
       <div className="explorer-panel" ref={panelRef}>
         {notice}
@@ -161,7 +167,7 @@ export function ExplorerView({ cutoff }: { cutoff: string }) {
           ? <ErrorBoundary name="building" resetKey={`building-${state.building ? buildingKey(state.building) : ""}-${selectedId ?? ""}`}>
             <BuildingView state={state} navigate={navigate} cutoff={cutoff} scope={scope} parents={parents} building={building}/>
           </ErrorBoundary> // i18n-ignore (code, not text)
-          : areaLoading ? <article className="area-panel" aria-busy="true"><p className="muted" role="status">{t("Nalagam območje …")}</p></article>
+          : areaLoading ? <article className="area-panel" aria-busy="true"><h1 className="area-title"><span className="muted" role="status">{t("Nalagam območje\u00a0…")}</span></h1></article>
           : <ErrorBoundary name="area panel" resetKey={`${scope.id ?? 0}-${state.group}-${state.years}`} fallback={() => <div className="module open">
               <p className="error" role="alert">{t("Tega območja ni bilo mogoče prikazati.")}</p>
               <button type="button" className="ghost" onClick={() => navigate({ g: parents[0]?.id, building: undefined, selected: undefined })}>{parents[0] ? tx("Nazaj na {area}", { area: parents[0].id == null ? parents[0].name : <Name>{parents[0].name}</Name> }) : t("Nazaj na Slovenijo")}</button>
@@ -174,15 +180,15 @@ export function ExplorerView({ cutoff }: { cutoff: string }) {
               onGroup={(group) => navigate({ group, size: undefined })} ranking={ranking} subRanking={subRanking} onSubArea={(id) => navigate({ g: id })}/>
           </ErrorBoundary>}
       </div>
-      <div className="explorer-map-wrap">
+      <div className="explorer-map-wrap" id="explorer-map" tabIndex={-1}>
         <ErrorBoundary name="map" resetKey="map" fallback={() => <p className="fallback" role="status">{t("Zemljevid v tem brskalniku ni na voljo. Območje izberite z iskalnikom zgoraj.")}</p>}>
-          <Suspense fallback={<p className="fallback" role="status">{t("Nalagam zemljevid …")}</p>}><ExplorerMap
+          <Suspense fallback={<p className="fallback" role="status">{t("Nalagam zemljevid\u00a0…")}</p>}><ExplorerMap
             municipalities={mapLevel === "statistical_region" ? regionShapes : municipalShapes} regions={regionShapes}
             paint={mapLevel === "statistical_region" ? scales.regionPaint : scales.paint}
             subAreas={comparablesShown ? NO_SHAPES : fineShown ? fine.shapes : subShapes} subPaint={fineShown ? scales.fineAreaPaint : scales.subPaint}
             buildings={comparablesShown ? NO_SHAPES : scales.buildingDots} agreements={comparablesShown ? NO_SHAPES : scales.agreementDots} selected={municipalityId ?? null}
             selectedSub={scope.level === "city_district" ? scope.id ?? null : (unit?.level === "settlement" ? unit.id : null)} focus={focus} marker={marker}
-            comparables={comparableDots} highlight={highlight} radius={radius} floods={floodsOn && floodBox ? floods.data?.features ?? null : null}
+            comparables={comparableDots} muted={comparablesShown} highlight={highlight} radius={radius} floods={floodsOn && floodBox ? floods.data?.features ?? null : null}
             onComparable={(id) => { const item = comparables?.comparables.find((entry) => entry.transactionId === id); if (item) openComparable(item); }}
             onArea={openArea} onSubArea={openArea}
             onBuilding={(key) => { const ref = parseBuildingKey(key); if (ref) navigate({ building: ref, selected: undefined }); }}
@@ -195,7 +201,7 @@ export function ExplorerView({ cutoff }: { cutoff: string }) {
             onView={setView}/></Suspense>
         </ErrorBoundary>
         {inView && <button type="button" className="map-chip" onClick={() => openArea(inView.id)}>
-          {tx("V pogledu: {area} · {open}", { area: proper(inView.name), open: <strong>{t("Odpri →")}</strong> })}</button>}
+          {tx("V pogledu: {area} · {open}", { area: proper(inView.name), open: <strong>{t("Odpri")} <span aria-hidden="true">→</span></strong> })}</button>}
         {comparables ? <ComparablesLegend count={comparables.comparables.length} radiusMeters={comparables.radiusMeters} trusted={comparables.trusted}/>
         : !(state.value && !state.building) && <MapLegend layer={layer} layers={layers} group={state.group} band={band} windows={windows} level={mapLevel}
           street={streetLevel} land={landPoints} buildingSpan={buildingSpan}

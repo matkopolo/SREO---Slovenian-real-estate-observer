@@ -6,7 +6,8 @@ import { proper, t, tx } from "../i18n";
 import { ALL_RENTED, ALL_SOLD, SIMILAR, TITLE_NOUN, TYPE_NAME } from "../nouns";
 import { count, forms, NOUN_FORMS } from "../plural";
 import type { Selected } from "../url-state";
-import { addressLabel } from "./AreaSearch";
+import { addressLabel } from "../address";
+import { SectionHeading } from "./heading";
 import "./transaction-details.css";
 
 /**
@@ -294,7 +295,7 @@ export function PriceVerdict({ context, detail, kind, partial = [] }: {
   const notCounted = detail?.quality ? !detail.quality.isRepresentative : false;
   const caveat = [pkg && (isRent ? t("Najemnina velja za več delov skupaj (npr. stanovanje z garažo)") : t("Cena velja za več delov skupaj (npr. stanovanje z garažo)")),
     notCounted && (isRent ? t("ta najem ni upoštevan v statistiki") : t("ta prodaja ni upoštevana v statistiki"))].filter(Boolean) as string[];
-  const warning = partial.length > 0 && <p className="td-warning td-partial" role="note"><strong>{t("Verjetno delež ali del paketa — cena ni primerljiva.")}</strong>{" "}
+  const warning = partial.length > 0 && <p className="td-warning td-partial" role="note"><strong>{t("Verjetno delež ali del paketa – cena ni primerljiva.")}</strong>{" "}
     {capitalise(partial.join("; "))}.</p>;
   const skippedNote = skipped && <p className="td-verdict-meta">{isRent
     ? tx("{where} je bilo v letu {year} premalo podobnih najemov ({count}) za zanesljivo primerjavo, zato primerjamo širše območje.",
@@ -425,7 +426,7 @@ export function HowCalculated({ context, valuation, detail, kind }: {
       {benchmarks.length > 0 && <>
         <p>{isRent ? t("Primerjamo najemnino na m² z mediano: polovica najemov je dražjih, polovica cenejših.")
           : t("Primerjamo ceno na m² z mediano: polovica prodaj je dražjih, polovica cenejših.")} {above}</p>
-        <h4 className="td-subtitle">{t("Po območjih")}</h4>
+        <SectionHeading className="td-subtitle">{t("Po območjih")}</SectionHeading>
         <ul className="rows td-benchmarks">{benchmarks.map((item) => {
           const self = comparesWithItself(item);
           const diff = Math.round(item.differencePercent);
@@ -439,19 +440,19 @@ export function HowCalculated({ context, valuation, detail, kind }: {
               {!item.isPublishable && !self ? ` · ${t("premalo za zanesljivo primerjavo")}` : ""}</span></li>;
         })}</ul></>}
       {estimate && <>
-        <h4 className="td-subtitle">{flats ? t("Podobna stanovanja danes") : t("Podobna nepremičnine danes")}</h4>
+        <SectionHeading className="td-subtitle">{flats ? t("Podobna stanovanja danes") : t("Podobna nepremičnine danes")}</SectionHeading>
         {estimate.confidence === "very_low" ? <p>{tooFew}</p> : <p>{isRent
           ? tx("Podobne nepremičnine se danes oddajajo po okoli {price}; srednja polovica podobnih najemov je med {lower} in {upper} {unit} ({count} do {distance} km, preračunano na leto {year}; zanesljivost {reliability}).", estimateVars(estimate))
           : tx("Podobne nepremičnine se danes prodajajo po okoli {price}; srednja polovica podobnih prodaj je med {lower} in {upper} {unit} ({count} do {distance} km, preračunano na leto {year}; zanesljivost {reliability}).", estimateVars(estimate))
         } {t("To so cene podobnih nepremičnin, ne ocena vrednosti te nepremičnine.")}</p>}</>}
       {model && <>
-        <h4 className="td-subtitle">{t("Statistični model")}</h4>
+        <SectionHeading className="td-subtitle">{t("Statistični model")}</SectionHeading>
         {model.reliability === "very_low" ? <p>{tooFew}</p> : <p>{isRent
           ? t("Model, ki upošteva lokacijo, velikost, starost stavbe in čas najema, bi pričakoval okoli {value} {unit} (v 9 od 10 primerov med {lower} in {upper} {unit}); zanesljivost {reliability}.", modelVars(model))
           : t("Model, ki upošteva lokacijo, velikost, starost stavbe in čas prodaje, bi pričakoval okoli {value} {unit} (v 9 od 10 primerov med {lower} in {upper} {unit}); zanesljivost {reliability}.", modelVars(model))
         } {t("To ni uradna cenitev.")}</p>}</>}
       {outlier?.status && <>
-        <h4 className="td-subtitle">{t("Preverjanje odstopanja")}</h4>
+        <SectionHeading className="td-subtitle">{t("Preverjanje odstopanja")}</SectionHeading>
         <p>{capitalise((isRent ? RENT_OUTLIER : OUTLIER)[outlier.status] ?? t("odstopanje ni določeno"))}{cohort}.
           {outlier.status === "outlier" ? ` ${t("Odstopanje ni nujno napaka: lahko gre za posebno nepremičnino ali okoliščine posla.")}` : ""}</p></>}
     </div>
@@ -469,7 +470,7 @@ export function TransactionFacts({ sale, rent }: { sale?: SaleTransaction; rent?
     const area = part?.soldArea ?? part?.buildingPartArea ?? sale.area;
     const largest = [...parcels].sort((a, b) => (b.parcelArea ?? 0) - (a.parcelArea ?? 0))[0];
     const price = finite(sale.price) ? euro(sale.price) : undefined;
-    return <section aria-labelledby="td-details"><h3 id="td-details">{t("Podrobnosti")}</h3>
+    return <section aria-labelledby="td-details"><SectionHeading id="td-details">{t("Podrobnosti")}</SectionHeading>
       {part ? <Fields fields={[
         { label: t("Vrsta"), value: partType(part) },
         { label: t("Površina"), value: finite(area) ? sqm(area) : undefined },
@@ -478,7 +479,7 @@ export function TransactionFacts({ sale, rent }: { sale?: SaleTransaction; rent?
         { label: t("Število sob"), value: finite(part.roomCount) ? integer(part.roomCount) : undefined },
         { label: t("Leto gradnje"), value: part.constructionYear },
         { label: t("Zunanja parkirna mesta"), value: finite(part.outdoorParkingSpaces) ? integer(part.outdoorParkingSpaces) : undefined },
-      ]}/> : parcels.length === 0 && <p className="muted">{t("Vir ne navaja delov stavbe ali parcel.")}</p>}
+      ]}/> : parcels.length === 0 && <p className="note muted">{t("Vir ne navaja delov stavbe ali parcel.")}</p>}
       {parcels.length > 0 && <Fields fields={[
         { label: t("Vrsta zemljišča"), value: part || !largest ? undefined : landType(largest) },
         { label: t("Zemljišče skupaj"), value: parcels.some((item) => finite(item.parcelArea)) ? landArea(parcels.reduce((sum, item) => sum + (item.parcelArea ?? 0), 0)) : undefined },
@@ -504,7 +505,7 @@ export function TransactionFacts({ sale, rent }: { sale?: SaleTransaction; rent?
   const period = rent.rentalStartDate ? `${date(rent.rentalStartDate)}${rent.rentalEndDate ? `–${date(rent.rentalEndDate)}` : ""}` : undefined;
   const area = space?.area ?? rent.area;
   const monthly = finite(rent.monthlyRentExVat) ? euro(rent.monthlyRentExVat) : undefined;
-  return <section aria-labelledby="td-details"><h3 id="td-details">{t("Podrobnosti")}</h3>
+  return <section aria-labelledby="td-details"><SectionHeading id="td-details">{t("Podrobnosti")}</SectionHeading>
     <Fields fields={[
       { label: t("Vrsta oddanega prostora"), value: space ? spaceType(space) : undefined },
       { label: t("Površina"), value: finite(area) ? sqm(area) : undefined },
@@ -589,7 +590,7 @@ export function RegisterDetails({ detail, buildingYear, building }: { detail: De
       { label: t("Upoštevan v statistiki"), value: detail.quality ? detail.quality.isRepresentative ? t("da") : t("ne") : undefined },
       { label: t("Vir"), value: t("GURS, evidenca trga nepremičnin") },
     ]}/>
-    {differ && <p className="muted td-note">{t("Register navaja dve leti gradnje: {unit} za ta del stavbe in {building} za stavbo (npr. zaradi prizidave ali kasnejšega vpisa).",
+    {differ && <p className="note muted td-note">{t("Register navaja dve leti gradnje: {unit} za ta del stavbe in {building} za stavbo (npr. zaradi prizidave ali kasnejšega vpisa).",
       { unit: unitYear, building: buildingYear })} {t("V podrobnostih je leto za ta del stavbe.")}</p>}
   </details>;
 }
@@ -628,12 +629,12 @@ export function TransactionQuality({ detail }: { detail: Detail }) {
   const verdict = quality.isRepresentative ? isRent ? t("Najem je upoštevan v statistiki.") : t("Prodaja je upoštevana v statistiki.")
     : quality.isQualityEligible ? isRent ? t("Najem je popolen, a ni upoštevan v statistiki.") : t("Prodaja je popolna, a ni upoštevana v statistiki.")
       : isRent ? t("Najem ni upoštevan v statistiki.") : t("Prodaja ni upoštevana v statistiki.");
-  return <section aria-labelledby="td-quality"><h3 id="td-quality">{t("Kakovost podatka")}</h3>
+  return <section aria-labelledby="td-quality"><SectionHeading id="td-quality">{t("Kakovost podatka")}</SectionHeading>
     {duplicate && <p className="td-warning" role="note"><strong>{t("Možen podvojen zapis.")}</strong> {isRent
       ? t("V evidenci je zelo podoben najem; morda gre za isto pogodbo, vpisano dvakrat.")
       : t("V evidenci je zelo podoben posel; morda gre za isto prodajo, vpisano dvakrat.")}</p>}
     <p className="td-verdict">{verdict}{status ? ` ${capitalise(status)}.` : ""}</p>
-    {reasons.length > 0 && <><p className="muted">{t("Razlogi:")}</p><ul className="td-reasons">{reasons.map((reason) =>
+    {reasons.length > 0 && <><p className="note muted">{t("Razlogi:")}</p><ul className="td-reasons">{reasons.map((reason) =>
       <li key={reason}>{REASONS[reason] ?? t("podatek ne izpolnjuje enega od pravil kakovosti")}</li>)}</ul></>}
   </section>;
 }
@@ -651,7 +652,7 @@ function InflationChange({ pair }: { pair: Pair }) {
   return <>
     <span>{t("Nominalno: {amount} ({percent})", { amount: euro(pair.price - pair.previousPrice),
       percent: percentPoints(pair.changePercent ?? 100 * (pair.price / pair.previousPrice - 1)) })}</span>
-    {factor === undefined && <span role="status">{t("Nalagam podatke o inflaciji …")}</span>}
+    {factor === undefined && <span role="status">{t("Nalagam podatke o inflaciji\u00a0…")}</span>}
     {factor === null && <span>{t("Sprememba po inflaciji ni na voljo.")}</span>}
     {adjusted != null && <span>{t("Po upoštevanju inflacije: {amount} ({percent}); prejšnja cena v današnjem denarju {previous}.", {
       amount: euro(pair.price - adjusted), percent: percentPoints(100 * (pair.price / adjusted - 1)), previous: euro(adjusted) })}</span>}
@@ -667,10 +668,10 @@ export function TransactionHistory({ history, transactionId, onChoose }: {
     .sort((a, b) => (a.contractDate ?? "").localeCompare(b.contractDate ?? ""));
   const pairs = [...new Map(assets.flatMap((asset) => asset.pairs ?? []).map((pair) => [`${pair.previousId}:${pair.transactionId}`, pair])).values()]
     .sort((a, b) => (a.to ?? "").localeCompare(b.to ?? ""));
-  return <section aria-labelledby="td-history"><h3 id="td-history">{t("Prejšnje prodaje te nepremičnine")}</h3>
-    {events.length <= 1 ? <p className="muted">{assets.length === 0 ? t("Te nepremičnine ne moremo povezati z drugimi zapisi v registru.")
+  return <section aria-labelledby="td-history"><SectionHeading id="td-history">{t("Prejšnje prodaje te nepremičnine")}</SectionHeading>
+    {events.length <= 1 ? <p className="note muted">{assets.length === 0 ? t("Te nepremičnine ne moremo povezati z drugimi zapisi v registru.")
       : t("V evidenci ni drugih prodaj te nepremičnine.")}</p> : <>
-      <p className="muted">{t("Prodaje istega stanovanja oziroma parcele po registru.")} {t("Darila in dedovanja niso zajeta.")}</p>
+      <p className="note muted">{t("Prodaje istega stanovanja oziroma parcele po registru.")} {t("Darila in dedovanja niso zajeta.")}</p>
       <ol className="rows td-events">{events.map((event) => {
         const current = event.transactionId === transactionId;
         const perSqm = event.componentCount <= 1 && finite(event.agreementPrice) && finite(event.area) && event.area > 0 ? event.agreementPrice / event.area : undefined;
@@ -689,7 +690,7 @@ export function TransactionHistory({ history, transactionId, onChoose }: {
             {event.evidence === "building_geolocation_reference" ? ` · ${t("povezano le po lokaciji stavbe")}` : ""}</span>
         </li>;
       })}</ol></>}
-    {pairs.length > 0 && <><h4 className="td-subtitle">{t("Ponovne prodaje")}</h4>
+    {pairs.length > 0 && <><SectionHeading sub className="td-subtitle">{t("Ponovne prodaje")}</SectionHeading>
       <ol className="rows td-pairs">{pairs.map((pair) => <li key={`${pair.previousId}:${pair.transactionId}`}>
         <strong>{pair.from ? date(pair.from) : "?"} → {pair.to ? date(pair.to) : "?"}
           {finite(pair.days) && pair.days > 0 && <span className="muted"> {t("({years} let)", { years: upTo1(pair.days / 365.25) })}</span>}</strong>
@@ -698,8 +699,8 @@ export function TransactionHistory({ history, transactionId, onChoose }: {
           : <span>{t("Spremembe cene ne izračunamo: prodaji nista neposredno primerljivi (npr. skupaj z drugimi deli, delni delež, drugačna površina ali možen dvojnik).")}</span>}
         {pair.landTransition && <span>{t("Zemljišče se je medtem iz kmetijskega spremenilo v zazidljivo.")}</span>}
       </li>)}</ol>
-      <p className="muted">{t("Razlika med cenama ni dobiček: ne vključuje vlaganj, stroškov in davkov.")} {t("Inflacija po indeksu cen življenjskih potrebščin SURS.")}</p></>}
-    {history.truncated && <p className="muted">{t("Prodaja zajema veliko delov; prikazan je le del povezanih zapisov.")}</p>}
+      <p className="note muted">{t("Razlika med cenama ni dobiček: ne vključuje vlaganj, stroškov in davkov.")} {t("Inflacija po indeksu cen življenjskih potrebščin SURS.")}</p></>}
+    {history.truncated && <p className="note muted">{t("Prodaja zajema veliko delov; prikazan je le del povezanih zapisov.")}</p>}
   </section>;
 }
 
@@ -712,9 +713,9 @@ export function BuildingComparables({ context, kind, onChoose }: {
   const perSqmValue = { format: perSqmText };
   const isRent = kind === "rent";
   // Without the building's own list (it could not be loaded): the API's matched subset, named as such.
-  return <section aria-labelledby="td-comparables"><h3 id="td-comparables">{isRent ? t("Podobni najemi v isti stavbi") : t("Podobne prodaje v isti stavbi")}</h3>
-    {items.length === 0 ? <p className="muted">{isRent ? t("V isti stavbi ni podobnih najemov.") : t("V isti stavbi ni podobnih prodaj.")}</p> : <>
-      <p className="muted">{isRent ? t("Najemi istega leta in podobno veliki (±15 %) iz sosednjih let. Razlika v ceni na m² glede na ta najem, brez prilagoditve za čas.")
+  return <section aria-labelledby="td-comparables"><SectionHeading id="td-comparables">{isRent ? t("Podobni najemi v isti stavbi") : t("Podobne prodaje v isti stavbi")}</SectionHeading>
+    {items.length === 0 ? <p className="note muted">{isRent ? t("V isti stavbi ni podobnih najemov.") : t("V isti stavbi ni podobnih prodaj.")}</p> : <>
+      <p className="note muted">{isRent ? t("Najemi istega leta in podobno veliki (±15 %) iz sosednjih let. Razlika v ceni na m² glede na ta najem, brez prilagoditve za čas.")
         : t("Prodaje istega leta in podobno velike (±15 %) iz sosednjih let. Razlika v ceni na m² glede na to prodajo, brez prilagoditve za čas.")}</p>
       <ol className="rows td-comparables">{items.slice(0, 6).map((item) => <li key={item.transactionId}>
         <div className="td-comparable-head">

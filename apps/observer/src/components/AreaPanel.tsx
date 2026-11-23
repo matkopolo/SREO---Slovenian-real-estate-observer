@@ -7,11 +7,14 @@ import { areaName, Calculator, Cite, CompareTable, Construction, Housing, loadPo
 import { AreaSearch } from "./AreaSearch";
 import { RentSection } from "./RentSection";
 import { SalesList } from "./SalesList";
-import { Histogram, LineChart, RangeBar, ScaleStrip } from "./charts";
+import { Histogram, LineChart, RangeBar, ScaleStrip, type SeriesStyle } from "./charts";
 import { LoadFailed, LoadState } from "./LoadState";
+import { Missing } from "./Missing";
 import { GLOSSARY, Term } from "./Term";
 import { retryFailed, useLoad, type Load } from "../hooks/useLoad";
-import { capitalise, change, date, decimal1, euro, instalment, integer, NBSP, percentSigned, perSqm, titleCase } from "../format";
+import { capitalise, change, decimal1, euro, instalment, integer, NBSP, percentSigned, perSqm, titleCase, withUnit } from "../format";
+import { jumpTo } from "../focus";
+import { loadingText, withheld } from "./Missing";
 import { MIN_SAMPLE } from "../metrics";
 import { ALL_SIZES, LAND_GENITIVE, LAND_SCOPES, NOUNS, SIZE_BANDS, sizeBand, type Band } from "../nouns";
 import { count, NOUN_FORMS, type Forms } from "../plural";
@@ -40,7 +43,7 @@ function FewSales({ scopeId, segment, cutoff }: { scopeId?: number; segment: Seg
   }).data;
   if (!summary) return null;
   return <><br/><strong>{t("{sales} v zadnjih 5 letih · {low}–{high}", { sales: count(summary.total, NOUN_FORMS.prodaja), low: euro(summary.low), high: euro(summary.high) })}</strong>
-    {summary.lowSqm != null && summary.highSqm != null ? ` (${perSqm(summary.lowSqm)}–${perSqm(summary.highSqm)} €/m²)` : ""}</>;
+    {summary.lowSqm != null && summary.highSqm != null ? ` (${perSqm(summary.lowSqm)}–${withUnit(perSqm(summary.highSqm), "€/m²")})` : ""}</>;
 }
 
 interface RankItem { id: number; name: string; value: number | null; sample: number; format: (value: number) => string; label: string; pooled?: number; populationSample?: boolean; unit?: Forms }
@@ -144,13 +147,13 @@ export function AreaPanel({ scope, parents: path, group, years, cutoff, onGroup,
     </div>
     {failed && <LoadFailed retry={retryAll}>{t("Nekaterih podatkov za to območje ni bilo mogoče naložiti.")}</LoadFailed>}
     <p className="area-lede">
-      {!current.sale ? (current.failed ? t("Prodaj ni bilo mogoče naložiti.") : t("Nalagam posle …"))
+      {!current.sale ? (current.failed ? null : t("Nalagam posle\u00a0…"))
         : price != null ? <>{tx("Mediana cene {noun}{band} {period}: {price}", { noun: noun.genitive, band: band ? ` (${band.label})` : "", period: periodText,
             price: <strong>{perSqm(price)}{NBSP}€/m²</strong> })}
-          {yoy != null ? <>, {percentSigned(yoy)} {versus}{Math.abs(yoy) > 0.2 && (shown?.pricePerSqmSampleSize ?? 0) < 200 && <span className="muted"> {t("(majhen vzorec, n = {n}: velika sprememba je lahko naključna)", { n: integer(shown?.pricePerSqmSampleSize ?? 0) })}</span>}{real != null && years === 1 && <> {t("(realno {change})", { change: percentSigned(real) })}</>}</> // i18n-ignore (code, not text)
+          {yoy != null ? <>, {percentSigned(yoy)} {versus}{Math.abs(yoy) > 0.2 && shown?.pricePerSqmSampleSize != null && shown.pricePerSqmSampleSize < 200 && <span className="muted"> {t("(majhen vzorec, n = {n}: velika sprememba je lahko naključna)", { n: integer(shown.pricePerSqmSampleSize) })}</span>}{real != null && years === 1 && <> {t("(realno {change})", { change: percentSigned(real) })}</>}</> // i18n-ignore (code, not text)
             : current.pooled ? <> {t("(združeno {years}, ker je v izbranem obdobju premalo prodaj)", { years: count(current.pooled.years, NOUN_FORMS.leto) })}</> : null}.</>
           : current.sale.transactionCount === 0 ? t("{period} ni bilo evidentirane prodaje {noun}.", { period: capitalise(periodText), noun: noun.ofOne })
-            : <>{tx("{period}: {sales} {noun}, premalo za mediano{wide}.", { period: capitalise(periodText), sales: count(current.sale.transactionCount, NOUN_FORMS.prodaja), noun: noun.genitive,
+            : <>{tx("{period}: {sales} {noun} – premalo prodaj za mediano{wide}.", { period: capitalise(periodText), sales: count(current.sale.transactionCount, NOUN_FORMS.prodaja), noun: noun.genitive,
               wide: current.wide && current.wide.transactionCount > current.sale.transactionCount ? <> {t("(v zadnjih 5 letih {sales})", { sales: count(current.wide.transactionCount, NOUN_FORMS.prodaja) })}</> : null })}{/* i18n-ignore (code, not text) */}
               {" "}{t("Posamezne prodaje so spodaj.")}</>}
       {current.sale && price == null && <FewSales scopeId={scope.id} segment={segment} cutoff={cutoff}/>}
@@ -160,7 +163,7 @@ export function AreaPanel({ scope, parents: path, group, years, cutoff, onGroup,
 
     <nav className="jump" aria-label={t("Na tej strani")}>
       {[["sales-sale", t("Prodaje")], ...(group === "land" ? [] : [["rent-title", t("Najemi")]]), ["trend-title", t("Gibanje cen")], ...(isDwelling(group) ? [["afford-title", t("Dostopnost")]] : [])].map(([id, label]) =>
-        <button key={id} type="button" onClick={() => { const target = document.getElementById(id); target?.scrollIntoView({ block: "start", behavior: prefersReducedMotion() ? "auto" : "smooth" }); target?.focus({ preventScroll: true }); }}>{label}</button>)}
+        <button key={id} type="button" onClick={() => jumpTo(document.getElementById(id), !prefersReducedMotion())}>{label}</button>)}
     </nav>
     <div className="type-pair" role="group" aria-label={t("Vrsta nepremičnine (izbira velja tudi za zemljevid)")}>
       {(["apartment", "house"] as const).map((item) => <TypeCard key={item} group={item} figures={figuresOf[item]}
@@ -174,7 +177,7 @@ export function AreaPanel({ scope, parents: path, group, years, cutoff, onGroup,
       <span className="segmented-label">{t("Raba zemljišča:")}</span>
       {LAND_SCOPES.map((item) => <button key={item.id} type="button" aria-pressed={landScope === item.id} onClick={() => onLandScope?.(item.id)}>{item.label}</button>)}
     </div>}
-    {group === "land" && !landChosen && landAuto.data?.best === landScope && <p className="muted">{t("Prikazana {use} zemljišča, ker je v tem območju največ teh prodaj.", { use: LAND_SCOPES.find((item) => item.id === landScope)?.label.toLowerCase() })}</p>}
+    {group === "land" && !landChosen && landAuto.data?.best === landScope && <p className="note muted">{t("Prikazana {use} zemljišča, ker je v tem območju največ teh prodaj.", { use: LAND_SCOPES.find((item) => item.id === landScope)?.label.toLowerCase() })}</p>}
 
     {bands && <div className="segmented small wrap" role="group" aria-label={t("Velikost (velja tudi za zemljevid)")}>
       <span className="segmented-label">{t("Velikost:")}</span>
@@ -227,8 +230,7 @@ export function AreaPanel({ scope, parents: path, group, years, cutoff, onGroup,
 
     {group !== "land" && <NewSupply scope={scope} cutoff={cutoff}/>}
 
-    <p className="panel-source">{t("GURS ETN (CC BY 4.0), SURS, Banka Slovenije; podatki do {date}.", { date: cutoff ? date(cutoff) : "—" })}
-      {" "}{tx("Mediana šteje le {term} in je objavljena od {min} poslov.", { term: <Term text={GLOSSARY.reprezentativni}>{t("reprezentativne posle")}</Term>, min: MIN_SAMPLE })} <a href={`#${ABOUT}`}>{t("O podatkih")}</a></p>{/* i18n-ignore (code, not text) */}
+    <p className="panel-source">{tx("Mediana šteje le {term} in je objavljena od {min} poslov.", { term: <Term text={GLOSSARY.reprezentativni}>{t("reprezentativne posle")}</Term>, min: MIN_SAMPLE })} <a href={`#${ABOUT}`}>{t("O podatkih")}</a></p>{/* i18n-ignore (code, not text) */}
   </article>;
 }
 
@@ -247,7 +249,7 @@ function TypeCard({ group, figures, active, onClick, years, compact = false, lab
   const percentiles = figures.spread?.isPublishable ? figures.spread.percentiles : undefined;
   if (compact) return <button type="button" className={active ? "type-card compact active" : "type-card compact"} aria-pressed={active} onClick={onClick}>
     <span className="type-name">{label ?? noun.label}</span>
-    <span className="type-value small">{!sale ? (figures.failed ? "—" :"…") : price == null ? (sale.transactionCount ? t("premalo prodaj") : t("ni prodaj")) : `${perSqm(price)}${NBSP}€/m²`}</span>
+    <span className="type-value small">{!sale ? (figures.failed ? "—" : loadingText()) : price == null ? withheld("sale", sale.transactionCount) : `${perSqm(price)}${NBSP}€/m²`}</span>
     {sale && price == null ? <span className="type-meta">{thinCounts(sale.transactionCount, figures.wide?.transactionCount)}</span>
     : sale && <span className="type-meta">{figures.pooled ? t("{sales} v {years} letih", { sales: count(figures.pooled.sale.transactionCount, NOUN_FORMS.prodaja), years: figures.pooled.years })
       : count(sale.transactionCount, NOUN_FORMS.prodaja)}{yoy != null ? `, ${percentSigned(yoy)}` : ""}</span>}
@@ -255,16 +257,16 @@ function TypeCard({ group, figures, active, onClick, years, compact = false, lab
   </button>;
   return <button type="button" className={active ? "type-card active" : "type-card"} aria-pressed={active} onClick={onClick}>
     <span className="type-name">{noun.label}</span>
-    {!sale ? <span className="muted">{figures.failed ? "—" : t("Nalagam …")}</span> : price == null ? <>{/* i18n-ignore (code, not text) */}
-      <span className="type-value muted">{sale.transactionCount === 0 ? t("ni prodaj") : t("premalo prodaj")}</span>
+    {!sale ? <span className="muted">{figures.failed ? "—" : t("Nalagam\u00a0…")}</span> : price == null ? <>{/* i18n-ignore (code, not text) */}
+      <span className="type-value muted">{withheld("sale", sale.transactionCount)}</span>
       <span className="type-meta">{thinCounts(sale.transactionCount, figures.wide?.transactionCount)}{sale.transactionCount > 0 && sale.transactionCount < LIST_INSTEAD ? `; ${t("posamezne spodaj")}` : ""}</span>
     </> : <>
       <span className="type-value">{integer(price)}{NBSP}€/m²</span>
-      <span className="type-meta">{t("n = {n} reprezentativnih od {sales}", { n: integer(shown?.pricePerSqmSampleSize ?? 0), sales: count(shown?.transactionCount ?? 0, NOUN_FORMS.prodaja) })}
+      <span className="type-meta">{shown?.pricePerSqmSampleSize != null ? t("iz {n} primerljivih prodaj", { n: integer(shown.pricePerSqmSampleSize) }) : ""}
         {figures.pooled ? `, ${t("združeno {years}", { years: count(figures.pooled.years, NOUN_FORMS.leto) })}` : typeof years === "string" ? `, ${years.replace("-", "–")}` : years > 1 ? `, ${count(years, NOUN_FORMS.leto)}` : ""}{yoy != null && <>, {percentSigned(yoy)}</>}</span>
       {percentiles?.p25 != null && percentiles.p50 != null && percentiles.p75 != null && <RangeBar p25={percentiles.p25} p50={percentiles.p50} p75={percentiles.p75}
         min={percentiles.p05 ?? percentiles.p25 * 0.7} max={percentiles.p95 ?? percentiles.p75 * 1.3} unit="€/m²" label={t("Razpon cen {noun}", { noun: noun.genitive })}/>}
-      {shown?.medianPrice != null && <span className="type-meta">{t("Tipičen posel {price}", { price: euro(shown.medianPrice) })}{shown.medianArea != null ? `, ${decimal1(shown.medianArea)} m²` : ""}</span>}
+      {shown?.medianPrice != null && <span className="type-meta">{t("Tipičen posel {price}", { price: euro(shown.medianPrice) })}{shown.medianArea != null ? `, ${withUnit(decimal1(shown.medianArea), "m²")}` : ""}</span>}
     </>}
   </button>;
 }
@@ -278,8 +280,10 @@ function Trend({ scope, parents, parentData, area, group, compared = 0 }: {
 }) {
   const [span, setSpan] = useState<number>(10);
   const [table, setTable] = useState(false);
-  const series = [{ scope, prices: area, className: "s1" }, ...parents.map((item, index) => ({ scope: item, prices: parentData[index]?.prices,
-    className: index >= parents.length - compared ? (index === parents.length - compared ? "s2" : "s3") : "ref" }))];
+  // The area in the price hue; its region and Slovenia as grey references told apart by their dash; added areas in s2/s3.
+  const reference = (item: Scope): SeriesStyle => item.level === "country" ? "ref-country" : "ref-region";
+  const series = [{ scope, prices: area, className: "c-price" as SeriesStyle }, ...parents.map((item, index) => ({ scope: item, prices: parentData[index]?.prices,
+    className: index >= parents.length - compared ? (index === parents.length - compared ? "s2" : "s3") as SeriesStyle : reference(item) }))];
   const points = (prices?: TimePoint[]) => (Array.isArray(prices) ? prices : []).filter((point) => !point.incomplete)
     .map((point) => ({ x: Number(point.period.slice(0, 4)), y: point.isPublishable ? point.medianPricePerSqm ?? null : null }));
   const last = Math.max(0, ...series.flatMap((item) => points(item.prices).map((point) => point.x)));
@@ -296,14 +300,15 @@ function Trend({ scope, parents, parentData, area, group, compared = 0 }: {
         <button type="button" aria-pressed={table} onClick={() => setTable(!table)}>{t("Tabela")}</button>
       </div>
     </div>
-    {table ? <div className="table-scroll"><table className="compact-table">
+    {table ? <div className="table-scroll" tabIndex={0} role="region" aria-label={t("Mediana €/m² po letih")}><table className="compact-table">
       <caption className="sr-only">{t("Mediana €/m² po letih")}</caption>
       <thead><tr><th scope="col">{t("Leto")}</th>{visible.map((item, index) => <th key={index} scope="col">{item.name}</th>)}</tr></thead>
       <tbody>{[...new Set(visible.flatMap((item) => item.points.map((point) => point.x)))].sort((a, b) => b - a).map((year) => <tr key={year}>
         <th scope="row">{year}</th>{visible.map((item, index) => { const value = item.points.find((point) => point.x === year)?.y; return <td key={index}>{value == null ? "—" : integer(value)}</td>; })}
-      </tr>)}</tbody></table></div>
+      </tr>)}</tbody></table></div> // i18n-ignore (code, not text)
+      : area === undefined ? <div className="chart-placeholder" style={{ height: 230 }} aria-hidden="true"/>
       : <LineChart unit="€/m²" label={t("Mediana €/m² po letih: {areas}", { areas: visible.map((item) => item.name).join(", ") })} series={visible} height={200}/>}
-    <p className="muted">{t("{type}, €/m², nominalno; sivo nadrejena območja.", { type: NOUNS[group].label })} {t("Tekoče leto ni prikazano, ker ni zaključeno.")}</p>
+    <p className="note muted">{t("{type}, €/m², nominalno; sivo nadrejena območja.", { type: NOUNS[group].label })} {t("Tekoče leto ni prikazano, ker ni zaključeno.")}</p>
   </section>;
 }
 
@@ -331,12 +336,12 @@ function Affordability({ scope, parents, area, parentData, group }: {
     {sale?.medianPrice != null && fixed && <dl className="cost-cards">
       <div><dt>{t("Lastna sredstva ({share} %)", { share: Math.round((1 - ltv) * 100) })}</dt><dd>{euro(Math.round(sale.medianPrice * (1 - ltv) / 1000) * 1000)}</dd></div>
       <div><dt>{t("Obrok na mesec, 30 let")}</dt><dd>{euro(Math.round(instalment(sale.medianPrice * ltv, fixed.value, 30) / 10) * 10)}</dd>
-        <small>{t("fiksno {rate} %", { rate: decimal1(fixed.value) })}</small></div>
-      <div><dt>{t("Najem na mesec")}</dt><dd>{rent != null && sale.medianArea != null ? euro(Math.round(rent * sale.medianArea / 10) * 10) : "—"}</dd>
-        <small>{sale.medianArea != null ? `${decimal1(sale.medianArea)} m²` : ""}</small></div>
+        <dd className="tile-note"><small>{t("fiksno {rate} %", { rate: decimal1(fixed.value) })}</small></dd></div>
+      <div><dt>{t("Najem na mesec")}</dt><dd>{rent != null && sale.medianArea != null ? euro(Math.round(rent * sale.medianArea / 10) * 10) : <Missing/>}</dd>
+        {sale.medianArea != null && <dd className="tile-note"><small>{withUnit(decimal1(sale.medianArea), "m²")}</small></dd>}</div>
     </dl>}
-    <p className="muted">{sale?.medianPrice != null ? `${t("Tipičen posel je mediana cene {price}{pooled}.", { price: euro(sale.medianPrice),
-      pooled: area.fallback && !area.sale?.isPublishable ? ` (${t("združeno {years}", { years: count(area.fallback.years, NOUN_FORMS.leto) })})` : "" })} ` : area.sale === undefined || area.fallback === undefined ? (area.failed ? "" : `${t("Nalagam …")} `) : `${t("Za to območje ni objavljive mediane cene.")} `}
+    <p className="note muted">{sale?.medianPrice != null ? `${t("Tipičen posel je mediana cene {price}{pooled}.", { price: euro(sale.medianPrice),
+      pooled: area.fallback && !area.sale?.isPublishable ? ` (${t("združeno {years}", { years: count(area.fallback.years, NOUN_FORMS.leto) })})` : "" })} ` : area.sale === undefined || area.fallback === undefined ? (area.failed ? "" : `${t("Nalagam\u00a0…")} `) : `${t("Za to območje ni objavljive mediane cene.")} `}
       {t("Plača: SURS, neto mediana{scope}.", { scope: area.affordability?.wageGeography?.nationalFallback ? ` ${t("za Slovenijo")}` : "" })}</p>
     <button type="button" className="ghost" aria-expanded={own} onClick={() => setOwn(!own)}>{own ? t("Skrij izračun") : t("Izračunajte za svojo plačo")}</button>
     {own && <Calculator scope={scope} group={group} data={area} noun={noun} columns={parents.map((item, index) => ({ scope: item, data: parentData[index] }))}/>}
@@ -375,8 +380,9 @@ function SpreadModule({ scope, segment, cutoff, years, noun }: { scope: Scope; s
     (input, signal) => loadSpread(input.id, periodWindows(input.cutoff, input.years).sales.current, input.segment, "sale", signal));
   return <details className="module" onToggle={(event) => setOpen((event.target as HTMLDetailsElement).open)}>
     <summary>{t("Porazdelitev cen {noun}", { noun })}</summary>
-    {open && <LoadState load={spread}>{(data) => !data.isPublishable ? <p className="muted">{t("Premalo poslov za porazdelitev.")}</p> // i18n-ignore (code, not text)
-      : <Histogram unit="€/m²" label={t("Porazdelitev cen {noun}, {area}", { noun, area: scope.name })} buckets={data.buckets.map((bucket) => ({ lower: bucket.from, upper: bucket.to, count: bucket.count }))}/>}</LoadState>}
+    {open && <LoadState load={spread}>{(data) => !data.isPublishable ? <p className="note muted">{t("Premalo prodaj za graf.")}</p> // i18n-ignore (code, not text)
+      : <Histogram unit="€/m²" label={t("Porazdelitev cen {noun}, {area}", { noun, area: scope.name })} open={{ below: data.belowBoundCount > 0, above: data.aboveBoundCount > 0 }}
+        buckets={data.buckets.map((bucket) => ({ lower: bucket.from, upper: bucket.to, count: bucket.count }))}/>}</LoadState>}
   </details>;
 }
 
@@ -409,6 +415,6 @@ function ShareLink() {
         <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/>
       </svg>
     </button>
-    <span className="share-toast" role="status" aria-live="polite">{done ? t("Povezava kopirana ✓") : ""}</span>
+    <span className="share-toast" role="status">{done ? <>{t("Povezava kopirana")} <span aria-hidden="true">✓</span></> : ""}</span>
   </span>;
 }

@@ -117,6 +117,6 @@ export function BuildingFacts({ facts, heading = "h3", title, compact = false }:
     <dl className="facts td-facts building-facts-rows">{rows.map((row) => <div key={row.label}>
       <dt>{row.label}</dt><dd>{row.value}{row.note && <small className="muted">{row.note}</small>}</dd>
     </div>)}</dl>
-    {sources && <p className="muted td-note">{tx("Viri: {sources}.", { sources })}</p>}
+    {sources && <p className="note muted td-note">{tx("Viri: {sources}.", { sources })}</p>}
   </section>;
 }

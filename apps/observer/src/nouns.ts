@@ -44,7 +44,7 @@ export const LAND_GENITIVE: Record<LandScope, string> = { strict: t("zazidljivih
 
 /** Register types in the singular, lower case ("stanovanje", "garaža / parkirišče"); also mixed packages and rooms. */
 export const TYPE_NAME: Record<string, string> = { apartment: t("stanovanje"), house: t("hiša"), garage: t("garaža / parkirišče"), commercial: t("poslovni prostor"),
-  land: t("zemljišče"), mixed: t("več vrst"), unknown: t("neznano"), room: t("soba") };
+  land: t("zemljišče"), mixed: t("več vrst"), unknown: t("ni podatka"), room: t("soba") };
 /** The same, capitalised for buttons ("Garaža / parkirišče"). */
 export const TYPE_LABEL: Record<PropertyGroup, string> = { apartment: t("Stanovanje"), house: t("Hiša"), commercial: t("Poslovni prostor"), garage: t("Garaža / parkirišče"), land: t("Zemljišče") };
 /** The noun that opens a sale title ("Stanovanje 61,7 m² · …"). */

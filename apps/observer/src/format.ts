@@ -38,7 +38,15 @@ export const sqm = (value: number): string => `${upTo1(value)}${NBSP}m²`;
 /** A land area: hectares from 1 ha up ("7,47 ha"), else whole m². */
 export const landArea = (value: number): string => value >= 10000 ? `${upTo2(value / 10000)}${NBSP}ha` : `${integer(value)}${NBSP}m²`;
 /** "1,2 km" / "800 m" */
-export const distance = (meters: number): string => meters >= 1000 ? `${upTo1(meters / 1000)} km` : `${integer(meters)} m`;
+export const distance = (meters: number): string => meters >= 1000 ? withUnit(upTo1(meters / 1000), "km") : withUnit(integer(meters), "m");
+/**
+ * A number and its unit joined by a non-breaking space, so "2.965 €/m²" never wraps between them. A missing value is
+ * "—" without a unit (never "0 €/m²").
+ */
+export function withUnit(value: string | number | null | undefined, unit: string): string {
+  if (value == null || value === "" || (typeof value === "number" && !Number.isFinite(value))) return EMPTY;
+  return `${typeof value === "number" ? upTo1(value) : value}${NBSP}${unit}`;
+}
 
 /**
  * A share or change given as a fraction (0.098 → "9,8 %" / "9.8%"). `signed` adds "+" to gains; losses always carry "−",

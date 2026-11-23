@@ -1,14 +1,18 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { loadDataStatus } from "../api";
 import { dateCompact } from "../format";
 import { useLoad } from "../hooks/useLoad";
 import { LANG, setLanguage, t, tx, type Language } from "../i18n";
 import { ABOUT, followLegacyHash, OVERVIEW, overviewHref, pageOf, parseHash, trendsHref, TRENDS, type Page } from "../url-state";
-import { ExplorerView } from "../views/ExplorerView";
+import { arrival, returnFocus, type Arrival } from "../focus";
+import { TITLE, useDocumentTitle } from "../title";
 import { DataStatusBanner } from "./DataStatusBanner";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { LoadFailed } from "./LoadState";
+import "./page-shell.css";
 
+// The explorer is a chunk of its own too: its map, search and stylesheets never block the reading pages.
+const ExplorerView = lazy(() => import("../views/ExplorerView").then((module) => ({ default: module.ExplorerView })));
 const TimeView = lazy(() => import("../views/TimeView").then((module) => ({ default: module.TimeView })));
 const MarketView = lazy(() => import("../views/MarketView").then((module) => ({ default: module.MarketView })));
 const QualityView = lazy(() => import("../views/QualityView").then((module) => ({ default: module.QualityView })));
@@ -40,7 +44,23 @@ function LanguageSwitch() {
   </div>;
 }
 
-const loading = <p className="muted" role="status">{t("Nalagam …")}</p>;
+/** A reading page while its data or code loads: as tall as the screen, so the footer never jumps up under the masthead. */
+const loading = <div className="page-loading" aria-busy="true"><p className="note muted" role="status">{t("Nalagam\u00a0…")}</p></div>;
+/** The explorer while the data status loads: its final layout (bar, panel, map) from the first paint. */
+const explorerLoading = <div className="explorer explorer-placeholder" aria-busy="true">
+  <div className="explorer-bar"/>
+  <div className="explorer-body"><div className="explorer-panel"><p className="note muted" role="status">{t("Nalagam\u00a0…")}</p></div><div className="explorer-map-wrap"/></div>
+</div>;
+
+/** The document title of each page; the explorer offers its own (area, building, sale, value check) on top. */
+function pageTitle(page: Page): string {
+  switch (page) {
+    case TRENDS: return t("Trendi · SREO");
+    case ABOUT: return t("O podatkih · SREO");
+    case OVERVIEW: return t("Pregled trga · SREO");
+    case "explorer": return t("Trg po območjih · SREO");
+  }
+}
 
 export function App() {
   // main.tsx rewrites an old link before the first render; a link typed later is rewritten on the change.
@@ -51,10 +71,14 @@ export function App() {
   // address is remembered when the reader leaves it (oldURL includes the explorer's own pushState navigations).
   const [lastArea, setLastArea] = useState(() => pageOf() === "explorer" && window.location.hash ? window.location.hash : "#");
   const [trendPart, setTrendPart] = useState<"time" | "distribution">("time");
+  useDocumentTitle(pageTitle(page), TITLE.page);
+  /** How the reader reached the current page (a link, Back, Forward), for where focus goes. */
+  const how = useRef<Arrival>("same");
   useEffect(() => {
     const change = (event: Event) => {
       if (event instanceof HashChangeEvent && pageOf(event.oldURL) === "explorer" && pageOf(event.newURL) !== "explorer") setLastArea(new URL(event.oldURL).hash || "#");
       followLegacyHash();
+      how.current = arrival();
       setPage(pageOf());
     };
     window.addEventListener("hashchange", change);
@@ -62,20 +86,31 @@ export function App() {
     return () => { window.removeEventListener("hashchange", change); window.removeEventListener("popstate", change); };
   }, []);
 
+  // Another page (the masthead tabs, a link, Back): focus moves to its heading, or back to the control that left it.
+  const shown = useRef(page);
+  useEffect(() => {
+    if (shown.current === page) return;
+    shown.current = page;
+    return returnFocus(document.getElementById("main"), how.current === "same" ? "new" : how.current);
+  }, [page]);
+
+  const trendTabs = <div className="part-tabs" role="group" aria-label={t("Del strani")}>
+    <button type="button" aria-pressed={trendPart === "time"} onClick={() => setTrendPart("time")}>{t("Cene skozi čas")}</button>
+    <button type="button" aria-pressed={trendPart === "distribution"} onClick={() => setTrendPart("distribution")}>{t("Porazdelitev in skrajni posli")}</button>
+  </div>;
+
   // Every page's figures hang on the data's cutoff: until it is known nothing is asked for (no second round of
   // requests once it arrives), and when it cannot be loaded the page says so once, with a retry, instead of waiting forever.
   const content = status.error ? <LoadFailed retry={status.retry}>{t("Stanja podatkov trenutno ni bilo mogoče naložiti (povezava ali strežnik).")}</LoadFailed> // i18n-ignore (code, not text)
-    : !status.data ? loading
-    : !cutoff ? <p className="muted" role="status">{t("Podatki še niso objavljeni. Analitika GURS ETN se pripravlja.")}</p>
-    : <ErrorBoundary name={`page ${page}`} resetKey={page}><Suspense fallback={loading}>
+    : !status.data ? (page === "explorer" ? explorerLoading : loading)
+    : !cutoff ? <p className="note muted" role="status">{t("Podatki še niso objavljeni. Analitika GURS ETN se pripravlja.")}</p>
+    : <ErrorBoundary name={`page ${page}`} resetKey={page}><Suspense fallback={page === "explorer" ? explorerLoading : loading}>
       {page === "explorer" && <ExplorerView cutoff={cutoff}/>}
       {page === TRENDS && <div className="view">
-        <div className="part-tabs" role="group" aria-label={t("Del strani")}>
-          <button type="button" aria-pressed={trendPart === "time"} onClick={() => setTrendPart("time")}>{t("Cene skozi čas")}</button>
-          <button type="button" aria-pressed={trendPart === "distribution"} onClick={() => setTrendPart("distribution")}>{t("Porazdelitev in skrajni posli")}</button>
-        </div>
+        {/* The page's one h1 comes first; the part tabs sit in the shown part's control row, the visible titles of the parts are h2. */}
+        <h1 className="stage-title">{t("Trendi")}</h1>
         {/* The part's own boundary: the switch stays while a part's chunk loads. */}
-        <Suspense fallback={loading}>{trendPart === "time" ? <TimeView cutoff={cutoff}/> : <MarketView cutoff={cutoff}/>}</Suspense>
+        <Suspense fallback={loading}>{trendPart === "time" ? <TimeView cutoff={cutoff} tabs={trendTabs}/> : <MarketView cutoff={cutoff} tabs={trendTabs}/>}</Suspense>
       </div>}
       {page === OVERVIEW && <OverviewView cutoff={cutoff}/>}
       {page === ABOUT && <QualityView cutoff={cutoff}/>}
@@ -102,13 +137,11 @@ export function App() {
     </header>
     <DataStatusBanner status={status.data}/>
 
-    <main id="main" tabIndex={-1}>{content}</main>
+    <main id="main" className="page-main" tabIndex={-1}>{content}</main>
 
-    {/* The attribution (GURS ETN, CC BY 4.0) and the data date stay visible on every page; the reading pages list every source. */}
+    {/* The sources are named once per page, in this one line; the full list with each licence is on O podatkih. */}
     <footer className={page === "explorer" ? "colophon compact" : "colophon"}>
-      {page !== "explorer" && <p>{t("Vir: Geodetska uprava RS (GURS), Evidenca trga nepremičnin, Register prostorskih enot, Kataster nepremičnin in Evidenca vrednotenja (CC BY 4.0); Register energetskih izkaznic (MOPE); DRSV (CC BY 4.0); SURS; Banka Slovenije; ECB; zemljevid OpenFreeMap in sodelavci OpenStreetMap.")}
-        {" "}{t("Podatki so obdelani.")} {t("Prikaz je informativen in ni uradna cenitev ali ponudba kredita.")}</p>}
-      <p>{tx("Vir GURS ETN, {licence}, obdelano", { licence: <abbr title={t("Creative Commons Priznanje avtorstva 4.0")}>CC BY 4.0</abbr> })}
+      <p>{tx("Vir: GURS ETN, SURS, Banka Slovenije, DRSV, MOPE ({licence})", { licence: <abbr title={t("Creative Commons Priznanje avtorstva 4.0")}>CC BY 4.0</abbr> })}
         {cutoff && <> · {t("podatki do {date}", { date: dateCompact(cutoff) })}</>}
         {" "}· <a href={`#${ABOUT}`}>{t("Metodologija in viri")}</a></p>
     </footer>

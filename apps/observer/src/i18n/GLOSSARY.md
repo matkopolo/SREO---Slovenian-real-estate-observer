@@ -29,7 +29,15 @@ Tone: plain, modern, short (Zillow/Redfin/ONS style). No bureaucratic phrasing. 
 | srednja polovica (P25–P75) | middle half |
 | upoštevan v statistiki / reprezentativen | included in the statistics |
 | ni v statistiki | not in the statistics |
-| premalo prodaj | too few sales |
+| premalo prodaj (12) | too few sales (12) |
+| premalo najemov (12) | too few rentals (12) |
+| ni prodaj / ni najemov | no sales / no rentals |
+| ni podatka (screen readers; on screen "—") | no data |
+| Premalo prodaj za graf. / Premalo najemov za graf. | Too few sales to chart. / Too few rentals to chart. |
+| Premalo podatkov za oceno. | Too little data for an estimate. |
+| primerljive prodaje (iz 1.689 primerljivih prodaj) | comparable sales (from 1,689 comparable sales) |
+| šrafirano (združeno) | hatched (pooled) |
+| še se dopolnjuje | still being reported |
 | združeno 5 let | pooled over 5 years |
 | Slovenija | Slovenia |
 | statistična regija | statistical region |
@@ -73,8 +81,20 @@ Tone: plain, modern, short (Zillow/Redfin/ONS style). No bureaucratic phrasing. 
 | Barva zemljevida | Map colour |
 | V pogledu | In view |
 | Odpri | Open |
-| Nalagam … | Loading … |
+| Nalagam … (non-breaking space before the ellipsis) | Loading… (no space) |
 | Ni zadetkov | No results |
 | Poskusi znova | Try again |
 
 Proper names from the registers (municipalities, districts, settlements, streets, addresses) stay as they are and are wrapped in `<Name>` (lang="sl"). "Slovenija" as a label of the country area is translated ("Slovenia").
+
+## Missing data (one convention everywhere)
+
+- A register field that is not filled in: `<Missing/>` – "—" on screen, "ni podatka" / "no data" for screen readers. Never "0", "neznano" or an empty cell.
+- Below the publication threshold: "premalo prodaj" / "premalo najemov", with "({n})" when the count is known – at every zoom, in tiles, cards, the map legend and tooltips (`tooFew()` in `components/Missing.tsx`).
+- No event at all: "ni prodaj" / "ni najemov" (`withheld()` with a count of 0).
+- A chart with nothing to draw: "Premalo prodaj za graf." / "Too few sales to chart." (rents: "Premalo najemov za graf.").
+- An estimate that cannot be computed: "Premalo podatkov za oceno." / "Too little data for an estimate."
+- A load failure: always `LoadFailed` (message and "Poskusi znova"), never text in a tile.
+- Loading: "Nalagam …" with a non-breaking space / "Loading…", never "…" alone as a value.
+- Retired: "ni objavljeno", "premalo poslov", "premalo za mediano", "(premalo podatkov)", "ni dovolj podatkov", "neznano".
+- A number and its unit are joined by a non-breaking space (`withUnit()` in `format.ts`): "2.965 €/m²".

@@ -143,6 +143,7 @@ export function AreaSearch({ regions, municipalities, districts = [], label, pla
   const empty = query.length >= 2 && !localMatches.length && !exactArea && (!addresses || (!!response && !rows.length && !note));
   const message = notice || (empty ? (addresses ? noResults() : t("Ni takega območja.")) : "");
   let index = -1;
+  const suggestions = groups.reduce((sum, group) => sum + group.rows.length, 0);
 
   return <form className={compact ? "area-search compact" : "area-search"} role="search"
     onSubmit={(event) => { event.preventDefault(); if (query) resolve(response); }}>
@@ -173,6 +174,8 @@ export function AreaSearch({ regions, municipalities, districts = [], label, pla
       </div>
     </div>
     {/* While the list is open its top note shows the message; the status line stays for screen readers. */}
-    {message && <p id={`${id}-message`} className={expanded && notice ? "muted search-empty sr-only" : "muted search-empty"} role="status">{message}</p>}
+    {/* One status region, rendered empty from the start: the message, or how many suggestions the open list holds. */}
+    <p id={`${id}-message`} className={!message || (expanded && notice) ? "muted search-empty sr-only" : "muted search-empty"} role="status">
+      {message || (expanded && suggestions > 0 ? t("Predlogov: {count}", { count: suggestions }) : "")}</p>
   </form>;
 }
